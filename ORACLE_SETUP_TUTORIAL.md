@@ -1,6 +1,6 @@
 # DigiDollar Oracle Setup — Full Tutorial
 
-> Originally written by **shenger** in the DigiDollar Gitter community.  
+> Posted by shenger in the DigiDollar Gitter community.  
 > Reproduced here for reference. All credit to the original author.  
 > Gitter: https://app.gitter.im/#/room/#digidollar:gitter.im
 
