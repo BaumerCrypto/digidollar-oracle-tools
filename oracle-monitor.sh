@@ -1,72 +1,48 @@
 #!/bin/bash
 ###############################################################################
-# oracle-monitor.sh — DGB DigiDollar Oracle Health Monitor with Discord Alerts
-#
+# oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
+# 
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
-# Created by:  digibyte-maxi (Oracle Slot 17)
-# Source:      https://github.com/BaumerCrypto/digidollar-oracle-tools
-# License:     MIT
-#
-# DISCLAIMER:  Community tool, not an official DigiByte product. Provided as-is
-#              with no warranty. Always test on testnet first. You are
-#              responsible for your own oracle wallet, keys, and infrastructure.
-#
-# Tested on:   Ubuntu 24.04 LTS + DigiByte Core v9.26.0-rc43 (testnet25)
-#
+# Oracle: digibyte-maxi (ID 17) — Contabo VPS 20 EU
+# 
 # SETUP:
-#   1. Copy this script to your VPS, e.g.:  ~/oracle-monitor.sh
-#   2. chmod +x ~/oracle-monitor.sh
-#   3. Edit the CONFIGURATION block below — set your Discord webhook,
-#      oracle ID, oracle name, and (for mainnet) remove "-testnet" from CLI.
-#   4. Test the webhook:   ./oracle-monitor.sh --test
-#   5. Test a full check:  ./oracle-monitor.sh --summary
-#   6. Add to cron:        crontab -e
-#        */5 * * * * $HOME/oracle-monitor.sh 2>/dev/null
-#        0 */12 * * * $HOME/oracle-monitor.sh --summary 2>/dev/null
+#   1. Copy this script to your VPS: /home/dgboracle/oracle-monitor.sh
+#   2. chmod +x /home/dgboracle/oracle-monitor.sh
+#   3. Set your Discord webhook URL below
+#   4. Test it manually first: ./oracle-monitor.sh
+#   5. Add to cron: crontab -e
+#      */5 * * * * /home/dgboracle/oracle-monitor.sh 2>/dev/null
+#      0 */12 * * * /home/dgboracle/oracle-monitor.sh --summary 2>/dev/null
 #
-# CRON SCHEDULE EXPLAINED:
-#   */5    = every 5 minutes — health check (alerts only on problems/recovery)
-#   0 */12 = every 12 hours  — full status summary (always sends, blue embed)
+# CRON SCHEDULE:
+#   */5 = every 5 minutes for health checks (alerts only on problems)
+#   0 */12 = every 12 hours for a full status summary (always sends)
 #
-# RPC FIELD NAMES (RC43 — verify on newer releases):
-#   listoracle      → uses "running"   (not "is_running")
-#   listoracle      → uses "price_usd" (not "last_price_usd")
-#   getoracleprice  → uses "price_usd" and "is_stale"
 ###############################################################################
 
 # ============================================================================
-# CONFIGURATION — *** EDIT THESE FOR YOUR ORACLE ***
+# CONFIGURATION — EDIT THESE
 # ============================================================================
 
-# --- Discord webhook URL (REQUIRED) ---
-# Create one in Discord: Server Settings > Integrations > Webhooks > New Webhook
-# Paste the full URL between the quotes. Treat it like a password — never
-# commit a real webhook URL to a public repo.
+# Discord webhook URL — get this from your Discord server settings
+# Server Settings > Integrations > Webhooks > New Webhook > Copy URL
 DISCORD_WEBHOOK=""
 
-# --- Your oracle identity (REQUIRED) ---
-ORACLE_ID=17                       # Your assigned oracle slot number
-ORACLE_NAME="digibyte-maxi"        # Your oracle name as registered with Jared
-
-# --- DigiByte CLI command ---
-# For TESTNET use:  "digibyte-cli -testnet"
-# For MAINNET use:  "digibyte-cli"
+# Oracle settings
+ORACLE_ID=17
+ORACLE_NAME="digibyte-maxi"
 CLI="digibyte-cli -testnet"
-
-# --- Wallet flag ---
-# Change "oracle" if you named your wallet differently
 WALLET_FLAG="-rpcwallet=oracle"
 
-# --- Alert thresholds (tune to taste) ---
-MIN_PEERS=3                        # Yellow alert if peer count drops below this
-MIN_DISK_GB=5                      # Red alert if free disk falls below this (GB)
-STALE_PRICE_MINUTES=30             # Currently informational only
+# Thresholds
+MIN_PEERS=3
+MIN_DISK_GB=5
+STALE_PRICE_MINUTES=30
 
-# --- Where to store alert state files (prevents repeat alerts) ---
-# Uses $HOME so it works for any user. Override if you want it elsewhere.
-STATE_DIR="$HOME/.oracle-monitor"
+# State file to avoid spamming repeat alerts
+STATE_DIR="/home/dgboracle/.oracle-monitor"
 mkdir -p "$STATE_DIR"
 
 # ============================================================================
@@ -81,7 +57,7 @@ send_discord() {
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     if [ -z "$DISCORD_WEBHOOK" ]; then
-        echo "[$(date -u)] ALERT: $title — $message"
+        echo "[$(date)] ALERT: $title — $message"
         return
     fi
 
@@ -250,6 +226,8 @@ check_peers() {
 }
 
 # --- Check 5: Oracle consensus price ---
+# v1.1: Now also detects degraded consensus (status != "ok" with price_usd=0)
+# See: https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/1
 check_price() {
     local price_info
     price_info=$($CLI getoracleprice 2>/dev/null)
@@ -260,19 +238,32 @@ check_price() {
         return
     fi
 
-    local price_usd is_stale
+    local price_usd is_stale status oracle_count
     price_usd=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('price_usd','unknown'))" 2>/dev/null)
     is_stale=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('is_stale', False))" 2>/dev/null)
+    status=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
+    oracle_count=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('oracle_count',0))" 2>/dev/null)
 
+    # Check 5a: Stale price (v1.0)
     if [ "$is_stale" = "True" ]; then
         if should_alert "stale_price"; then
             alert_yellow "⚠️ Stale Price" "Oracle consensus price is stale. Last price: \$$price_usd"
         fi
         DETAILS+="⚠️ Price: STALE — \$$price_usd\n"
         WARNINGS=$((WARNINGS + 1))
+    # Check 5b: Degraded consensus — status != "ok" (v1.1)
+    elif [ "$status" != "ok" ]; then
+        if should_alert "degraded_consensus"; then
+            alert_yellow "⚠️ Degraded Consensus" "Network status: $status | Price: \$$price_usd | Oracles: $oracle_count. Individual oracles may be fine but network aggregation is failing."
+        fi
+        DETAILS+="⚠️ Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
+        WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "stale_price"; then
             alert_green "✅ Price Recovered" "Oracle price is fresh again: \$$price_usd"
+        fi
+        if clear_alert "degraded_consensus"; then
+            alert_green "✅ Consensus Recovered" "Network consensus restored. Price: \$$price_usd"
         fi
         DETAILS+="✅ Price: \$$price_usd (fresh)\n"
     fi
@@ -380,7 +371,7 @@ send_summary() {
 
     if [ -z "$DISCORD_WEBHOOK" ]; then
         echo "======================================="
-        echo " Oracle Health Summary — $(date -u)"
+        echo " Oracle Health Summary — $(date)"
         echo "======================================="
         echo -e "$desc"
         echo "======================================="
@@ -427,7 +418,7 @@ case "${1:-}" in
         ;;
     --test)
         echo "Testing Discord webhook..."
-        alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date -u)"
+        alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;
     *)
