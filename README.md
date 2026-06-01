@@ -15,6 +15,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 
 More tools will be added as the DigiDollar testnet matures toward mainnet activation.
+**Roadmap:** See [open issues](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) for planned features — mainnet migration, quorum tracking, cross-platform support, and more.
 
 ---
 
