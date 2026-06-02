@@ -30,7 +30,8 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 
 **This guide is for Linux VPS servers.** If you're running a DigiDollar oracle on a home Windows PC, I'd strongly recommend migrating to a Linux VPS before worrying about hardening. Oracle nodes need 24/7 uptime for a frozen roster — power outages, ISP instability, Windows Update reboots, no DDoS protection, and residential IP changes make home PCs a poor fit. Most major VPS providers (Contabo, Hetzner, OVH, Vultr, DigitalOcean) offer Ubuntu VPS plans for $5–15/month with built-in DDoS protection and near-perfect uptime.
 
-**Tested on:** Ubuntu 24.04 LTS. Most steps apply to any Debian-based distro. Adjust package manager commands if you're on something else.
+**Tested on:** Ubuntu 24.04 LTS. Compatible with Ubuntu 26.04 LTS and any Debian-based distro. All tools and config files used in this guide (UFW, Fail2Ban, sshd, sysctl, systemd) are identical across Ubuntu LTS versions.
+
 
 **Prerequisites:**
 
