@@ -678,7 +678,7 @@ Here's everything this guide covers, in one table:
 
 My oracle VPS gets hammered daily by automated scanners and brute-force bots. With this setup, they hit a wall at every layer — wrong port, wrong username, no password to guess, banned after 3 tries, and firewall blocking everything else. The oracle keeps running through all of it.
 
-If you follow this guide and verify with Step 11, your oracle node will be properly locked down for mainnet.
+If you follow this guide and verify with Step 11, your oracle node will be properly locked down/hardened for mainnet.
 
 ---
 
