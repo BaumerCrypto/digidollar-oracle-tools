@@ -13,6 +13,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | [`oracle-monitor.sh`](oracle-monitor.sh) | Bash health monitor with Discord webhook alerts. Runs from cron, checks daemon/oracle/sync/peers/disk/memory and sends red/yellow/green embeds to a Discord channel. State files prevent repeat alerts on persistent conditions. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
+| [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide — SSH, UFW, Fail2Ban, kernel hardening, systemd. Step-by-step, based on my live oracle setup. |
 
 More tools will be added as the DigiDollar testnet matures toward mainnet activation.
 **Roadmap:** See [open issues](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) for planned features — mainnet migration, quorum tracking, cross-platform support, and more.
