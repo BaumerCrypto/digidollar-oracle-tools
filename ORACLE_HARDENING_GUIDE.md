@@ -40,7 +40,8 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 - DigiByte Core installed and synced (see [DIGIDOLLAR_ORACLE_SETUP.md](https://github.com/DigiByte-Core/digibyte/blob/feature/digidollar-v1/DIGIDOLLAR_ORACLE_SETUP.md))
 - An SSH client on your local machine (PuTTY on Windows, Terminal on Mac/Linux)
 
-**Important:** Before making SSH changes, always keep your current SSH session open and test the new config in a second session. If you lock yourself out, use your VPS provider's web console/VNC login to fix it.
+> [!CAUTION]
+> Before making ANY SSH changes, keep your current SSH session open and test the new config in a second session. If you lock yourself out and can't SSH back in, your only way in is through your VPS provider's emergency console (Contabo: VNC in Customer Control Panel, Hetzner: Console in Cloud Panel, Vultr: View Console, DigitalOcean: Droplet Console). Every major VPS provider has one — find yours BEFORE you start changing SSH settings. I learned this the hard way. :grimacing:
 
 ---
 
