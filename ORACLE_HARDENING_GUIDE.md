@@ -2,7 +2,7 @@
 
 **A step-by-step security hardening guide for DigiDollar oracle operators running Linux VPS.**
 
-I wrote this guide based on the security setup running on my own DigiDollar oracle node. Every step here is tested, verified, and confirmed to survive reboots. If you're running an oracle on a Linux VPS, this guide will get your server locked down properly.
+I wrote this guide based on the security setup running on my own DigiDollar oracle node. Every step here is tested, verified, and confirmed to survive reboots. If you're running an oracle on a Linux VPS, this guide will get your server locked down properly (server hardening).
 
 ---
 
@@ -28,9 +28,9 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 
 ## Before You Start
 
-**This guide is for Linux VPS servers.** If you're running a DigiDollar oracle on a home Windows PC, I'd strongly recommend migrating to a Linux VPS before worrying about hardening. Oracle nodes need 24/7 uptime for a frozen roster — power outages, ISP instability, Windows Update reboots, no DDoS protection, and residential IP changes make home PCs a poor fit. Most major VPS providers (Contabo, Hetzner, OVH, Vultr, DigitalOcean) offer Ubuntu VPS plans for $5–15/month with built-in DDoS protection and near-perfect uptime.
+**This guide is for Linux VPS servers.** If you're running a DigiDollar oracle on a home Windows PC, I'd strongly recommend migrating to a Linux VPS before worrying about hardening. Oracle nodes need 24/7 uptime for a frozen roster — power outages, ISP instability, Windows Update reboots, no DDoS protection, and residential IP changes make home PCs a poor fit. Most major VPS providers (Vultr, Contabo, Hetzner, OVH, DigitalOcean) offer Ubuntu VPS plans for $5–15/month with built-in DDoS protection and near-perfect uptime.
 
-**Tested on:** Ubuntu 24.04 LTS. Compatible with Ubuntu 26.04 LTS and any Debian-based distro. All tools and config files used in this guide (UFW, Fail2Ban, sshd, sysctl, systemd) are identical across Ubuntu LTS versions.
+**Tested on:** Ubuntu 24.04 LTS. Compatible with Ubuntu 26.04 LTS and other Debian-based distros. Minor differences between versions are noted throughout the guide where they apply.
 
 
 **Prerequisites:**
@@ -40,7 +40,7 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 - DigiByte Core installed and synced (see [DIGIDOLLAR_ORACLE_SETUP.md](https://github.com/DigiByte-Core/digibyte/blob/feature/digidollar-v1/DIGIDOLLAR_ORACLE_SETUP.md))
 - An SSH client on your local machine (PuTTY on Windows, Terminal on Mac/Linux)
 
-**Important:** Before making SSH changes, always keep your current SSH session open and test the new config in a second session. If you lock yourself out, use your VPS provider's web console to fix it.
+**Important:** Before making SSH changes, always keep your current SSH session open and test the new config in a second session. If you lock yourself out, use your VPS provider's web console/VNC login to fix it.
 
 ---
 
@@ -281,11 +281,10 @@ Add this:
 enabled = true
 port = 5520
 filter = sshd
-logpath = /var/log/auth.log
+backend = systemd
 maxretry = 3
 bantime = 86400
 findtime = 600
-```
 
 **What this means:**
 - **maxretry = 3** — 3 failed attempts and you're banned
@@ -641,6 +640,7 @@ Security isn't a one-time setup. Here's what I do regularly:
 
 - Check Fail2Ban status: `sudo fail2ban-client status sshd`
 - Review failed SSH attempts: `sudo grep 'Failed' /var/log/auth.log | tail -20`
+- - If `/var/log/auth.log` doesn't exist (Ubuntu 26.04+ journal-only), use: `journalctl -u ssh --no-pager --since "7 days ago" | grep 'Failed' | tail -20`
 - Verify oracle is running: `digibyte-cli listoracle`
 
 ### Monthly
