@@ -588,6 +588,38 @@ Some guides recommend `MaxSessions 2`. If you ever use SCP/SFTP to transfer file
 ## Optional Extras
 
 These aren't critical for oracle security but are worth knowing about.
+### NTP Time Sync — Verify Your Clock
+
+> 🙏 *Suggested by Aussie Epic — thanks for catching this.*
+
+Oracle price bundles have a 3,600-second freshness limit. If your VPS clock drifts, bundles can be rejected as too old (`bad-oracle-timestamp`) even when everything else is working perfectly. Clock drift is hard to diagnose because the errors look like software or network bugs.
+
+Most VPS providers run `systemd-timesyncd` by default. Verify it's actually working:
+
+```bash
+timedatectl status
+```
+
+Look for both of these:
+If NTP is not active:
+
+```bash
+sudo timedatectl set-ntp on
+timedatectl status
+```
+
+For tighter accuracy, consider switching to `chrony` — it polls more frequently and corrects drift faster than `systemd-timesyncd`:
+
+```bash
+sudo apt install chrony -y
+sudo systemctl enable chrony
+sudo systemctl start chrony
+
+# Check sync status
+chronyc tracking
+```
+
+If you're running [oracle-monitor.sh](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh), NTP is monitored automatically as Check #10 — it fires Discord alerts if sync drops.
 
 ### Lynis — Security Audit Tool
 
