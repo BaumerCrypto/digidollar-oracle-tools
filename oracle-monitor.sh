@@ -336,6 +336,27 @@ check_version() {
 }
 
 # ============================================================================
+
+# --- Check 10: NTP time sync ---
+check_ntp() {
+    local synced
+    synced=$(timedatectl status 2>/dev/null | grep -c "synchronized: yes")
+    
+    if [ "$synced" -eq 0 ]; then
+        if should_alert "ntp_desync"; then
+            alert_yellow "⚠️ NTP Desync" "System clock is NOT synchronized. Oracle timestamps may drift. Run: sudo timedatectl set-ntp on"
+        fi
+        DETAILS+="⚠️ NTP: NOT synchronized\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        if clear_alert "ntp_desync"; then
+            alert_green "✅ NTP Recovered" "System clock is synchronized again."
+        fi
+        DETAILS+="✅ NTP: synchronized\n"
+    fi
+}
+
+# ============================================================================
 # SUMMARY REPORT (--summary flag)
 # ============================================================================
 
@@ -349,6 +370,7 @@ send_summary() {
     check_memory
     check_services
     check_version
+    check_ntp
 
     local color=65280  # green
     local status="✅ All Systems Healthy"
@@ -406,6 +428,7 @@ run_checks() {
     check_price
     check_disk
     check_memory
+    check_ntp
 }
 
 # ============================================================================
