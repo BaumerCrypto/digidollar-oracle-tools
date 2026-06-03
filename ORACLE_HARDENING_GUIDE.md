@@ -107,6 +107,11 @@ AllowUsers dgboperator             # ONLY this user can SSH in — whitelist
 
 ```bash
 sudo systemctl restart ssh
+
+# If you can't connect after restarting, your system may use socket-activated SSH.
+# In that case, run these instead:
+sudo systemctl daemon-reload
+sudo systemctl restart ssh.socket
 ```
 
 Open a **second** terminal/PuTTY window and connect using your new port:
@@ -624,7 +629,7 @@ Then in `/etc/ssh/sshd_config`:
 Banner /etc/issue.net
 ```
 
-Restart SSH to apply.
+Restart SSH to apply (`sudo systemctl restart ssh`, or `sudo systemctl daemon-reload && sudo systemctl restart ssh.socket` on Ubuntu 26.04+).
 
 ---
 
