@@ -286,6 +286,7 @@ backend = systemd
 maxretry = 3
 bantime = 86400
 findtime = 600
+```
 
 **What this means:**
 - **maxretry = 3** — 3 failed attempts and you're banned
@@ -548,6 +549,7 @@ uptime
 | /dev/shm | noexec,nosuid,nodev |
 | UFW | active, deny incoming |
 | Oracle | "running": true |
+
 ### Take a Snapshot
 
 After completing all hardening steps and verifying with a reboot, take a snapshot through your VPS provider's control panel. This gives you a known-good restore point. If a future upgrade or config change breaks something, you can roll back to a fully hardened, working state. Most providers limit the number of snapshots (Contabo allows 2), so delete the oldest before creating a new one. I take a fresh snapshot after every major change — binary upgrades, hardening updates, or config migrations.
@@ -641,7 +643,7 @@ Security isn't a one-time setup. Here's what I do regularly:
 
 - Check Fail2Ban status: `sudo fail2ban-client status sshd`
 - Review failed SSH attempts: `sudo grep 'Failed' /var/log/auth.log | tail -20`
-- - If `/var/log/auth.log` doesn't exist (Ubuntu 26.04+ journal-only), use: `journalctl -u ssh --no-pager --since "7 days ago" | grep 'Failed' | tail -20`
+  - If `/var/log/auth.log` doesn't exist (Ubuntu 26.04+ journal-only), use: `journalctl -u ssh --no-pager --since "7 days ago" | grep 'Failed' | tail -20`
 - Verify oracle is running: `digibyte-cli listoracle`
 
 ### Monthly
