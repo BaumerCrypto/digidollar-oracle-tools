@@ -338,7 +338,7 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8, 
 
 ### Step 4: NTP Time Sync — Keep Your Clock Accurate
 
-> 🙏 **Shoutout to Aussie Epic** for flagging this one. He caught that time sync was missing from my VPS hardening guide and shared his own experience debugging clock drift on his servers. Good catch — this section exists because of him.
+> 🙏 **Shoutout to Aussie Epic** for flagging this one. He caught that time sync was missing from my VPS hardening guide and shared his own experience debugging clock drift on his servers. Good catch :thumbsup:
 
 **This is critically important for oracle nodes.** Oracle price bundles have a 3,600-second (1 hour) freshness limit. If your machine's clock drifts even slightly, you risk:
 
