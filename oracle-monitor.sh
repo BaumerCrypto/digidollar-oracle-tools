@@ -1,29 +1,53 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# 
+# Version: 1.2
+#
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
 # Oracle: digibyte-maxi (ID 17) — Contabo VPS 20 EU
-# 
+#
 # SETUP:
-#   1. Copy this script to your VPS: /home/dgboracle/oracle-monitor.sh
-#   2. chmod +x /home/dgboracle/oracle-monitor.sh
-#   3. Set your Discord webhook URL below
-#   4. Test it manually first: ./oracle-monitor.sh
-#   5. Add to cron: crontab -e
+#   1. Copy this script to your VPS: ~/oracle-monitor.sh
+#   2. chmod +x ~/oracle-monitor.sh
+#   3. Create config: mkdir -p ~/.oracle-monitor && cp config.template ~/.oracle-monitor/config
+#   4. Edit config: Set your Discord webhook URL and oracle settings
+#   5. Test it: ./oracle-monitor.sh --dry-run
+#   6. Test webhook: ./oracle-monitor.sh --test
+#   7. Add to cron: crontab -e
 #      */5 * * * * /home/dgboracle/oracle-monitor.sh 2>/dev/null
 #      0 */12 * * * /home/dgboracle/oracle-monitor.sh --summary 2>/dev/null
+#
+# FLAGS:
+#   (none)     Normal health check — alerts only on problems/recovery
+#   --summary  Full status summary — always sends to Discord
+#   --dry-run  Runs all checks, prints to terminal, skips Discord, no state changes
+#   --test     Sends a test embed to Discord to verify webhook
 #
 # CRON SCHEDULE:
 #   */5 = every 5 minutes for health checks (alerts only on problems)
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
+# CHANGELOG:
+#   v1.2 — External config file, --dry-run flag, python3 → jq migration
+#          (fixes #3, fixes #4, fixes #5)
+#   v1.1 — Degraded consensus detection, NTP time sync check (fixes #1)
+#   v1.0 — Initial release: 9 health checks, Discord webhooks, cron
+#
 ###############################################################################
 
 # ============================================================================
-# CONFIGURATION — EDIT THESE
+# DEPENDENCY CHECK
+# ============================================================================
+
+if ! command -v jq &>/dev/null; then
+    echo "ERROR: jq is required but not installed. Run: sudo apt install jq"
+    exit 1
+fi
+
+# ============================================================================
+# CONFIGURATION — DEFAULTS (override in ~/.oracle-monitor/config)
 # ============================================================================
 
 # Discord webhook URL — get this from your Discord server settings
@@ -40,10 +64,25 @@ WALLET_FLAG="-rpcwallet=oracle"
 MIN_PEERS=3
 MIN_DISK_GB=5
 STALE_PRICE_MINUTES=30
+MEM_THRESHOLD=90
+MAX_CHAIN_BEHIND=10
 
-# State file to avoid spamming repeat alerts
-STATE_DIR="/home/dgboracle/.oracle-monitor"
+# ============================================================================
+# LOAD EXTERNAL CONFIG (overrides defaults above)
+# ============================================================================
+
+STATE_DIR="${HOME}/.oracle-monitor"
+CONFIG_FILE="${STATE_DIR}/config"
+
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
 mkdir -p "$STATE_DIR"
+
+# Runtime flag — set by --dry-run
+DRY_RUN=false
 
 # ============================================================================
 # DISCORD NOTIFICATION FUNCTIONS
@@ -56,7 +95,7 @@ send_discord() {
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    if [ -z "$DISCORD_WEBHOOK" ]; then
+    if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
         echo "[$(date)] ALERT: $title — $message"
         return
     fi
@@ -83,9 +122,13 @@ alert_green()  { send_discord 65280    "$1" "$2"; }
 alert_blue()   { send_discord 3447003  "$1" "$2"; }
 
 # Only alert once per issue until it clears
+# In --dry-run mode: always returns "should alert" but does NOT touch state files
 should_alert() {
     local key="$1"
     local state_file="$STATE_DIR/$key"
+    if [ "$DRY_RUN" = true ]; then
+        return 0  # always "should alert" in dry-run, don't touch state
+    fi
     if [ -f "$state_file" ]; then
         return 1  # already alerted
     fi
@@ -93,9 +136,13 @@ should_alert() {
     return 0
 }
 
+# In --dry-run mode: always returns "nothing was set" and does NOT touch state files
 clear_alert() {
     local key="$1"
     local state_file="$STATE_DIR/$key"
+    if [ "$DRY_RUN" = true ]; then
+        return 1  # pretend nothing was set, don't touch state
+    fi
     if [ -f "$state_file" ]; then
         rm "$state_file"
         return 0  # was set, now cleared = recovery
@@ -133,7 +180,7 @@ check_daemon() {
 check_oracle() {
     local oracle_info
     oracle_info=$($CLI $WALLET_FLAG listoracle 2>/dev/null)
-    
+
     if [ $? -ne 0 ] || [ -z "$oracle_info" ]; then
         if should_alert "oracle_down"; then
             alert_red "🔴 Oracle Not Running" "listoracle returned no data. Oracle may need to be restarted."
@@ -143,11 +190,11 @@ check_oracle() {
         return
     fi
 
-    # Check if oracle is running
+    # Check if oracle is running (jq returns "true"/"false")
     local running
-    running=$(echo "$oracle_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('running', False))" 2>/dev/null)
-    
-    if [ "$running" != "True" ]; then
+    running=$(echo "$oracle_info" | jq -r '.running // false' 2>/dev/null)
+
+    if [ "$running" != "true" ]; then
         if should_alert "oracle_stopped"; then
             alert_red "🔴 Oracle Stopped" "Oracle ID $ORACLE_ID is loaded but not running. Check \`startoracle\`."
         fi
@@ -163,7 +210,7 @@ check_oracle() {
 
         # Get the price being reported
         local price
-        price=$(echo "$oracle_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('price_usd', 'unknown'))" 2>/dev/null)
+        price=$(echo "$oracle_info" | jq -r '.price_usd // "unknown"' 2>/dev/null)
         DETAILS+="✅ Oracle: running — reporting \$$price\n"
     fi
 }
@@ -172,7 +219,7 @@ check_oracle() {
 check_chain() {
     local chain_info
     chain_info=$($CLI getblockchaininfo 2>/dev/null)
-    
+
     if [ $? -ne 0 ]; then
         DETAILS+="⚠️ Chain: could not query\n"
         WARNINGS=$((WARNINGS + 1))
@@ -180,13 +227,13 @@ check_chain() {
     fi
 
     local blocks headers chain
-    blocks=$(echo "$chain_info" | python3 -c "import sys,json; print(json.load(sys.stdin)['blocks'])" 2>/dev/null)
-    headers=$(echo "$chain_info" | python3 -c "import sys,json; print(json.load(sys.stdin)['headers'])" 2>/dev/null)
-    chain=$(echo "$chain_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('chain','unknown'))" 2>/dev/null)
+    blocks=$(echo "$chain_info" | jq -r '.blocks' 2>/dev/null)
+    headers=$(echo "$chain_info" | jq -r '.headers' 2>/dev/null)
+    chain=$(echo "$chain_info" | jq -r '.chain // "unknown"' 2>/dev/null)
 
     local behind=$((headers - blocks))
-    
-    if [ "$behind" -gt 10 ]; then
+
+    if [ "$behind" -gt "$MAX_CHAIN_BEHIND" ]; then
         if should_alert "chain_behind"; then
             alert_yellow "⚠️ Chain Behind" "Node is $behind blocks behind (block $blocks / header $headers)."
         fi
@@ -204,7 +251,7 @@ check_chain() {
 check_peers() {
     local peer_count
     peer_count=$($CLI getconnectioncount 2>/dev/null)
-    
+
     if [ $? -ne 0 ]; then
         DETAILS+="⚠️ Peers: could not query\n"
         WARNINGS=$((WARNINGS + 1))
@@ -226,12 +273,12 @@ check_peers() {
 }
 
 # --- Check 5: Oracle consensus price ---
-# v1.1: Now also detects degraded consensus (status != "ok" with price_usd=0)
+# v1.1: Also detects degraded consensus (status != "ok" with price_usd=0)
 # See: https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/1
 check_price() {
     local price_info
     price_info=$($CLI getoracleprice 2>/dev/null)
-    
+
     if [ $? -ne 0 ]; then
         DETAILS+="⚠️ Price: could not query\n"
         WARNINGS=$((WARNINGS + 1))
@@ -239,13 +286,13 @@ check_price() {
     fi
 
     local price_usd is_stale status oracle_count
-    price_usd=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('price_usd','unknown'))" 2>/dev/null)
-    is_stale=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('is_stale', False))" 2>/dev/null)
-    status=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
-    oracle_count=$(echo "$price_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('oracle_count',0))" 2>/dev/null)
+    price_usd=$(echo "$price_info" | jq -r '.price_usd // "unknown"' 2>/dev/null)
+    is_stale=$(echo "$price_info" | jq -r '.is_stale // false' 2>/dev/null)
+    status=$(echo "$price_info" | jq -r '.status // "unknown"' 2>/dev/null)
+    oracle_count=$(echo "$price_info" | jq -r '.oracle_count // 0' 2>/dev/null)
 
     # Check 5a: Stale price (v1.0)
-    if [ "$is_stale" = "True" ]; then
+    if [ "$is_stale" = "true" ]; then
         if should_alert "stale_price"; then
             alert_yellow "⚠️ Stale Price" "Oracle consensus price is stale. Last price: \$$price_usd"
         fi
@@ -273,7 +320,7 @@ check_price() {
 check_disk() {
     local avail_gb
     avail_gb=$(df -BG /home | tail -1 | awk '{print $4}' | tr -d 'G')
-    
+
     if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
         if should_alert "low_disk"; then
             alert_red "🔴 Low Disk Space" "Only ${avail_gb}GB free. Clean up old testnet dirs or logs."
@@ -292,8 +339,8 @@ check_disk() {
 check_memory() {
     local mem_pct
     mem_pct=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
-    
-    if [ "$mem_pct" -gt 90 ]; then
+
+    if [ "$mem_pct" -gt "$MEM_THRESHOLD" ]; then
         if should_alert "high_memory"; then
             alert_yellow "⚠️ High Memory" "Memory usage at ${mem_pct}%."
         fi
@@ -335,13 +382,11 @@ check_version() {
     fi
 }
 
-# ============================================================================
-
 # --- Check 10: NTP time sync ---
 check_ntp() {
     local synced
     synced=$(timedatectl status 2>/dev/null | grep -c "synchronized: yes")
-    
+
     if [ "$synced" -eq 0 ]; then
         if should_alert "ntp_desync"; then
             alert_yellow "⚠️ NTP Desync" "System clock is NOT synchronized. Oracle timestamps may drift. Run: sudo timedatectl set-ntp on"
@@ -357,7 +402,7 @@ check_ntp() {
 }
 
 # ============================================================================
-# SUMMARY REPORT (--summary flag)
+# SUMMARY REPORT (--summary and --dry-run)
 # ============================================================================
 
 send_summary() {
@@ -374,7 +419,7 @@ send_summary() {
 
     local color=65280  # green
     local status="✅ All Systems Healthy"
-    
+
     if [ $ISSUES -gt 0 ]; then
         color=16711680  # red
         status="🔴 $ISSUES Issues Detected"
@@ -391,7 +436,7 @@ send_summary() {
     local desc
     desc=$(echo -e "$DETAILS\n⏱️ Uptime: $uptime_str")
 
-    if [ -z "$DISCORD_WEBHOOK" ]; then
+    if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
         echo "======================================="
         echo " Oracle Health Summary — $(date)"
         echo "======================================="
@@ -405,7 +450,7 @@ send_summary() {
 {
   "embeds": [{
     "title": "$status — Oracle Health Summary",
-    "description": $(echo "$desc" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))"),
+    "description": $(echo "$desc" | jq -Rs .),
     "color": $color,
     "footer": {"text": "Oracle Monitor — $ORACLE_NAME (ID $ORACLE_ID)"},
     "timestamp": "$timestamp"
@@ -439,8 +484,17 @@ case "${1:-}" in
     --summary)
         send_summary
         ;;
+    --dry-run)
+        DRY_RUN=true
+        send_summary
+        ;;
     --test)
         echo "Testing Discord webhook..."
+        if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "ERROR: DISCORD_WEBHOOK is not set."
+            echo "Configure it in: $CONFIG_FILE"
+            exit 1
+        fi
         alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;

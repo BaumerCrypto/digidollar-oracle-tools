@@ -1,0 +1,30 @@
+# ~/.oracle-monitor/config — Oracle Monitor Configuration
+#
+# This file is sourced by oracle-monitor.sh at startup.
+# Edit values below to override the built-in defaults.
+# Lines starting with # are ignored.
+#
+# After editing, verify with: ./oracle-monitor.sh --dry-run
+#
+# Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
+
+# ---- Discord Webhook (required for alerts) ----
+# Get from: Server Settings > Integrations > Webhooks > Copy URL
+DISCORD_WEBHOOK=""
+
+# ---- Oracle Identity ----
+ORACLE_ID=17
+ORACLE_NAME="digibyte-maxi"
+
+# ---- RPC Settings ----
+# Testnet:  CLI="digibyte-cli -testnet"
+# Mainnet:  CLI="digibyte-cli"
+CLI="digibyte-cli -testnet"
+WALLET_FLAG="-rpcwallet=oracle"
+
+# ---- Alert Thresholds ----
+MIN_PEERS=3              # Minimum peer count before alerting
+MIN_DISK_GB=5            # Minimum free disk space (GB) before alerting
+STALE_PRICE_MINUTES=30   # Reserved for future use — staleness currently from RPC
+MEM_THRESHOLD=90         # Memory usage % above which to alert
+MAX_CHAIN_BEHIND=10      # Blocks behind before alerting
