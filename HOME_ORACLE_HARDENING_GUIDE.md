@@ -86,6 +86,8 @@ This guide is organized into three tiers. Do Tier 1 first. It takes 30 minutes a
 
 ## Tier 1 — Essential Hardening
 
+> 📊 **[View Tier 1 Network Diagram](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html)** — see what a basic home oracle network looks like
+
 These are the minimum steps every home oracle operator should complete. If you do nothing else, do these.
 
 ---
@@ -739,6 +741,8 @@ After completing Tier 1:
 
 ## Tier 2 — Recommended Hardening
 
+> 📊 **[View Tier 2 Network Diagram](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html)** — same network, now hardened
+
 These steps add meaningful additional protection. They take more time but significantly improve your security posture.
 
 ---
@@ -1060,6 +1064,8 @@ After completing Tier 2 (in addition to Tier 1):
 ---
 
 ## Tier 3 — Advanced Hardening
+
+> 📊 **[View Tier 3 Network Diagram](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html)** — full VLAN isolation with WireGuard VPN
 
 These steps are for operators who want to go further. They require more networking knowledge but provide significant additional protection.
 
