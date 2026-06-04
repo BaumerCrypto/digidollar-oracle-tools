@@ -1,6 +1,7 @@
 # Oracle Node Hardening Guide
 
 **A step-by-step security hardening guide for DigiDollar oracle operators running Linux VPS.**
+> **Running from home instead of a VPS?** See the [Home Oracle Hardening Guide](HOME_ORACLE_HARDENING_GUIDE.md) — covers Linux, Windows, macOS with router hardening, port forwarding, VLANs, and more.
 
 I wrote this guide based on the security setup running on my own DigiDollar oracle node. Every step here is tested, verified, and confirmed to survive reboots. If you're running an oracle on a Linux VPS, this guide will get your server locked down properly (server hardening).
 
