@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tier 1 — Essential Home Oracle Network</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0e17; color: #c8d6e5; font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+  h1 { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; color: #fff; text-align: center; margin-bottom: 4px; }
+  .subtitle { text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #546e8a; margin-bottom: 6px; letter-spacing: 2px; text-transform: uppercase; }
+  .tier-badge { text-align: center; margin-bottom: 30px; }
+  .tier-badge span { display: inline-block; background: #22c55e22; color: #22c55e; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; padding: 4px 14px; border-radius: 6px; letter-spacing: 1px; }
+  .tier-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: #3a4a5c; margin-bottom: 10px; padding-left: 8px; border-left: 3px solid #1a2738; }
+  .tier { margin-bottom: 12px; }
+  .connector { display: flex; justify-content: center; padding: 4px 0; }
+  .connector .line { width: 3px; height: 28px; background: linear-gradient(180deg, #1e90ff, #1e90ff88); border-radius: 2px; }
+  .node { background: #111827; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; transition: border-color 0.2s; }
+  .node:hover { border-color: #334155; }
+  .node-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .node-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .node-name { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 14px; color: #fff; }
+  .node-model { font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+  .node-detail { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8892a4; padding: 3px 0; display: flex; justify-content: space-between; }
+  .node-detail .label { color: #546e8a; }
+  .node-detail .value { color: #a0b4cc; }
+  .ip { color: #38bdf8 !important; font-weight: 600; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .status-dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  .center-row { display: flex; justify-content: center; }
+  .center-row .node { max-width: 600px; width: 100%; }
+  .port-table { width: 100%; margin-top: 10px; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+  .port-table th { text-align: left; color: #546e8a; padding: 4px 8px; border-bottom: 1px solid #1a2738; font-weight: 600; }
+  .port-table td { padding: 4px 8px; color: #8892a4; border-bottom: 1px solid #0d1320; }
+  .port-table .yes { color: #22c55e; font-weight: 700; }
+  .port-table .no { color: #ef4444; font-weight: 700; }
+  .devices-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+  .device-card { background: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; }
+  .dev-name { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
+  .dev-ip { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #38bdf8; }
+  .dev-detail { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #546e8a; margin-top: 2px; }
+  .hardening-badge { display: inline-block; background: #22c55e18; color: #22c55e; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin: 2px 2px 2px 0; }
+  .warning-badge { display: inline-block; background: #ef444418; color: #ef4444; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin: 2px 2px 2px 0; }
+  .callout { background: #0d1320; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 18px; margin-top: 16px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8892a4; }
+  .callout-title { font-weight: 700; color: #38bdf8; margin-bottom: 6px; font-size: 12px; }
+  .legend { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 30px; padding: 14px; background: #0d1320; border-radius: 8px; border: 1px solid #1e293b; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #546e8a; }
+  .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+  .footer { text-align: center; margin-top: 24px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #2d3748; }
+  .ups-badge { display: inline-flex; align-items: center; gap: 4px; background: #f0a03018; color: #f0a030; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>🏠 Home Oracle Network — Tier 1</h1>
+  <p class="subtitle">Essential Hardening &bull; ~30 Minutes</p>
+  <div class="tier-badge"><span>✅ DO THIS TODAY</span></div>
+
+  <!-- WAN -->
+  <div class="tier">
+    <div class="tier-label">WAN</div>
+    <div class="center-row">
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon" style="background:#1a2738;color:#38bdf8;">🌐</div>
+          <div>
+            <div class="node-name">Home ISP</div>
+            <div class="node-model">Dynamic IP &bull; No DDoS Protection</div>
+          </div>
+        </div>
+        <div class="node-detail"><span class="label">Public IP</span><span class="value ip">203.0.113.42 (changes)</span></div>
+        <div class="node-detail"><span class="label">Type</span><span class="value">Residential &bull; Dynamic &bull; No SLA</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ROUTER -->
+  <div class="tier">
+    <div class="tier-label">Consumer Router</div>
+    <div class="center-row">
+      <div class="node" style="border-color:#1e3a5f; background:linear-gradient(135deg, #111827, #0f1b2e);">
+        <div class="node-header">
+          <div class="node-icon" style="background:#1e3a5f;color:#38bdf8;">📡</div>
+          <div>
+            <div class="node-name">Home Router <span class="status-dot green"></span></div>
+            <div class="node-model">NAT + DHCP + Firewall</div>
+          </div>
+        </div>
+        <div class="node-detail"><span class="label">LAN IP</span><span class="value ip">192.168.1.1</span></div>
+        <div class="node-detail"><span class="label">DHCP Pool</span><span class="value">192.168.1.2 – 192.168.1.254</span></div>
+
+        <div style="margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#546e8a;font-weight:600;">⚡ PORT FORWARDING RULES</div>
+        <table class="port-table">
+          <tr><th>Port</th><th>Service</th><th>Forward?</th><th>Destination</th></tr>
+          <tr><td>12024/tcp</td><td>DGB Mainnet P2P</td><td class="yes">✅ YES</td><td class="ip">192.168.1.100</td></tr>
+          <tr><td>12033/tcp</td><td>DGB Testnet P2P</td><td class="yes">✅ YES</td><td class="ip">192.168.1.100</td></tr>
+          <tr><td>3389/tcp</td><td>RDP/xRDP</td><td class="no">❌ NEVER</td><td>—</td></tr>
+          <tr><td>22/tcp</td><td>SSH</td><td class="no">❌ NEVER</td><td>—</td></tr>
+          <tr><td>14022/tcp</td><td>RPC</td><td class="no">❌ NEVER</td><td>—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- LOCAL NETWORK -->
+  <div class="tier">
+    <div class="tier-label">Local Network (Flat — 192.168.1.0/24)</div>
+    <div class="devices-grid">
+
+      <!-- ORACLE MACHINE -->
+      <div class="device-card" style="border-color:#22c55e44; grid-column: span 2;">
+        <div class="dev-name">🖥️ Oracle Server (Linux/Windows/macOS)</div>
+        <div class="dev-ip">192.168.1.100 (static)</div>
+        <div class="dev-detail" style="margin-top:8px;">
+          <span class="hardening-badge">🔥 Host Firewall — P2P only</span>
+          <span class="hardening-badge">🕐 NTP Synchronized</span>
+          <span class="hardening-badge">🔄 Auto-Updates</span>
+        </div>
+        <div class="dev-detail" style="margin-top:4px;">
+          <span class="hardening-badge">⚙️ Service Auto-Restart</span>
+          <span class="hardening-badge">🔒 Wallet Permissions</span>
+          <span class="hardening-badge">👤 Dedicated User</span>
+        </div>
+        <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#8892a4;">
+          <div style="padding:2px 0;">digibyted — running <span class="status-dot green"></span></div>
+          <div style="padding:2px 0;">Oracle ID — active, signing bundles</div>
+          <div style="padding:2px 0;">P2P Port 12024 — open (mainnet)</div>
+          <div style="padding:2px 0;">P2P Port 12033 — open (testnet)</div>
+          <div style="padding:2px 0;">RDP/SSH — local access only, NOT forwarded</div>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="ups-badge">🔋 UPS Battery Backup</span>
+        </div>
+      </div>
+
+      <!-- OTHER DEVICES -->
+      <div class="device-card">
+        <div class="dev-name">💻 Laptop</div>
+        <div class="dev-ip">192.168.1.133 (DHCP)</div>
+        <div class="dev-detail">Management access via xRDP or SSH locally</div>
+      </div>
+      <div class="device-card">
+        <div class="dev-name">📱 Phone</div>
+        <div class="dev-ip">192.168.1.45 (DHCP)</div>
+        <div class="dev-detail">WiFi connected</div>
+      </div>
+      <div class="device-card">
+        <div class="dev-name">📺 Smart TV</div>
+        <div class="dev-ip">192.168.1.80 (DHCP)</div>
+        <div class="dev-detail">WiFi connected</div>
+      </div>
+      <div class="device-card">
+        <div class="dev-name">🎮 Gaming Console</div>
+        <div class="dev-ip">192.168.1.92 (DHCP)</div>
+        <div class="dev-detail">WiFi connected</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CALLOUT -->
+  <div class="callout">
+    <div class="callout-title">⚠️ Tier 1 Reality Check</div>
+    All devices share the same flat network — your oracle, your phone, your kid's tablet, your smart TV. If any device is compromised, it can see and potentially reach your oracle on the local network. This is why Tier 3 introduces VLAN isolation.<br><br>
+    <strong>What Tier 1 protects against:</strong> internet-facing attacks (port scanning, brute force). The host firewall and port forwarding rules ensure only P2P traffic reaches your oracle from outside.<br><br>
+    <strong>What Tier 1 does NOT protect against:</strong> local network attacks from compromised devices on your WiFi.
+  </div>
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#22c55e;"></div> Hardened / Protected</div>
+    <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div> Blocked / Never Forward</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Static IP</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f0a030;"></div> UPS Protected</div>
+  </div>
+
+  <div class="footer">Home Oracle Hardening Guide — Tier 1 Essential &mdash; digibyte-maxi (Oracle Slot 17)</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tier 2 — Recommended Home Oracle Network</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0e17; color: #c8d6e5; font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+  h1 { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; color: #fff; text-align: center; margin-bottom: 4px; }
+  .subtitle { text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #546e8a; margin-bottom: 6px; letter-spacing: 2px; text-transform: uppercase; }
+  .tier-badge { text-align: center; margin-bottom: 30px; }
+  .tier-badge span { display: inline-block; background: #f0a03022; color: #f0a030; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; padding: 4px 14px; border-radius: 6px; letter-spacing: 1px; }
+  .tier-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: #3a4a5c; margin-bottom: 10px; padding-left: 8px; border-left: 3px solid #1a2738; }
+  .tier { margin-bottom: 12px; }
+  .connector { display: flex; justify-content: center; padding: 4px 0; }
+  .connector .line { width: 3px; height: 28px; background: linear-gradient(180deg, #1e90ff, #1e90ff88); border-radius: 2px; }
+  .node { background: #111827; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; transition: border-color 0.2s; }
+  .node:hover { border-color: #334155; }
+  .node-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .node-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .node-name { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 14px; color: #fff; }
+  .node-model { font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+  .node-detail { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8892a4; padding: 3px 0; display: flex; justify-content: space-between; }
+  .node-detail .label { color: #546e8a; }
+  .node-detail .value { color: #a0b4cc; }
+  .ip { color: #38bdf8 !important; font-weight: 600; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .status-dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  .center-row { display: flex; justify-content: center; }
+  .center-row .node { max-width: 700px; width: 100%; }
+  .devices-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+  .device-card { background: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; }
+  .dev-name { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
+  .dev-ip { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #38bdf8; }
+  .dev-detail { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #546e8a; margin-top: 2px; }
+  .hardening-badge { display: inline-block; background: #22c55e18; color: #22c55e; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin: 2px 2px 2px 0; }
+  .router-badge { display: inline-block; background: #38bdf818; color: #38bdf8; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin: 2px 2px 2px 0; }
+  .ssh-badge { display: inline-block; background: #a855f718; color: #a855f7; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin: 2px 2px 2px 0; }
+  .ups-badge { display: inline-flex; align-items: center; gap: 4px; background: #f0a03018; color: #f0a030; font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+  .callout { background: #0d1320; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 18px; margin-top: 16px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8892a4; }
+  .callout-title { font-weight: 700; color: #f0a030; margin-bottom: 6px; font-size: 12px; }
+  .ssh-arrow { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 0; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #a855f7; }
+  .legend { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 30px; padding: 14px; background: #0d1320; border-radius: 8px; border: 1px solid #1e293b; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #546e8a; }
+  .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+  .footer { text-align: center; margin-top: 24px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #2d3748; }
+  .port-table { width: 100%; margin-top: 10px; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+  .port-table th { text-align: left; color: #546e8a; padding: 4px 8px; border-bottom: 1px solid #1a2738; font-weight: 600; }
+  .port-table td { padding: 4px 8px; color: #8892a4; border-bottom: 1px solid #0d1320; }
+  .port-table .yes { color: #22c55e; font-weight: 700; }
+  .port-table .no { color: #ef4444; font-weight: 700; }
+  hr.divider { border: 0; height: 1px; background: linear-gradient(90deg, transparent, #1e293b, transparent); margin: 10px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>🏠 Home Oracle Network — Tier 2</h1>
+  <p class="subtitle">Recommended Hardening &bull; ~1 Hour</p>
+  <div class="tier-badge"><span>🔶 DO THIS WEEK</span></div>
+
+  <!-- WAN -->
+  <div class="tier">
+    <div class="tier-label">WAN</div>
+    <div class="center-row">
+      <div class="node">
+        <div class="node-header">
+          <div class="node-icon" style="background:#1a2738;color:#38bdf8;">🌐</div>
+          <div>
+            <div class="node-name">Home ISP</div>
+            <div class="node-model">Dynamic IP &bull; No DDoS Protection</div>
+          </div>
+        </div>
+        <div class="node-detail"><span class="label">Public IP</span><span class="value ip">203.0.113.42 (changes)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- ROUTER — HARDENED -->
+  <div class="tier">
+    <div class="tier-label">Consumer Router — Hardened</div>
+    <div class="center-row">
+      <div class="node" style="border-color:#1e3a5f; background:linear-gradient(135deg, #111827, #0f1b2e);">
+        <div class="node-header">
+          <div class="node-icon" style="background:#1e3a5f;color:#38bdf8;">📡</div>
+          <div>
+            <div class="node-name">Home Router <span class="status-dot green"></span></div>
+            <div class="node-model">NAT + DHCP + Firewall — Hardened</div>
+          </div>
+        </div>
+        <div class="node-detail"><span class="label">LAN IP</span><span class="value ip">192.168.1.1</span></div>
+
+        <div style="margin-top:10px;">
+          <span class="router-badge">🔑 Admin Password Changed</span>
+          <span class="router-badge">📦 Firmware Updated</span>
+          <span class="router-badge">🚫 UPnP Disabled</span>
+          <span class="router-badge">🚫 WPS Disabled</span>
+          <span class="router-badge">🚫 Remote Mgmt Off</span>
+          <span class="router-badge">🔒 WPA3/WPA2-AES</span>
+        </div>
+
+        <div style="margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#546e8a;font-weight:600;">⚡ PORT FORWARDING</div>
+        <table class="port-table">
+          <tr><th>Port</th><th>Service</th><th>Forward?</th><th>Destination</th></tr>
+          <tr><td>12024/tcp</td><td>DGB Mainnet P2P</td><td class="yes">✅ YES</td><td class="ip">192.168.1.100</td></tr>
+          <tr><td>12033/tcp</td><td>DGB Testnet P2P</td><td class="yes">✅ YES</td><td class="ip">192.168.1.100</td></tr>
+          <tr><td>3389/tcp</td><td>RDP/xRDP</td><td class="no">❌ NEVER</td><td>—</td></tr>
+          <tr><td>22 or 5520</td><td>SSH</td><td class="no">❌ NEVER</td><td>—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="connector"><div class="line"></div></div>
+
+  <!-- LOCAL NETWORK -->
+  <div class="tier">
+    <div class="tier-label">Local Network (Flat — 192.168.1.0/24)</div>
+    <div class="devices-grid">
+
+      <!-- ORACLE MACHINE — HARDENED -->
+      <div class="device-card" style="border-color:#22c55e44; grid-column: span 2;">
+        <div class="dev-name">🖥️ Oracle Server (Linux/Windows/macOS)</div>
+        <div class="dev-ip">192.168.1.100 (static)</div>
+        <div style="margin-top:8px;">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#546e8a;font-weight:600;margin-bottom:4px;">TIER 1 — Essential</div>
+          <span class="hardening-badge">🔥 Host Firewall</span>
+          <span class="hardening-badge">🕐 NTP Sync</span>
+          <span class="hardening-badge">🔄 Auto-Updates</span>
+          <span class="hardening-badge">⚙️ Service Restart</span>
+          <span class="hardening-badge">🔒 Wallet Perms</span>
+          <span class="hardening-badge">👤 Dedicated User</span>
+        </div>
+        <div style="margin-top:8px;">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#f0a030;font-weight:600;margin-bottom:4px;">TIER 2 — Added</div>
+          <span class="ssh-badge">🔑 SSH Key-Only (port 5520)</span>
+          <span class="ssh-badge">🛡️ Fail2Ban (86400s ban)</span>
+          <span class="ssh-badge">🧠 Kernel Hardening (sysctl)</span>
+          <span class="ssh-badge">💾 /dev/shm noexec</span>
+          <span class="ssh-badge">🚫 Apport Disabled</span>
+        </div>
+        <div style="margin-top:10px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#8892a4;">
+          <div style="padding:2px 0;">digibyted — running <span class="status-dot green"></span></div>
+          <div style="padding:2px 0;">Oracle — active, signing bundles</div>
+          <div style="padding:2px 0;">SSH — port 5520, key-only, local subnet only</div>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="ups-badge">🔋 UPS + Graceful Shutdown (NUT/apcupsd)</span>
+        </div>
+      </div>
+
+      <!-- SSH CONNECTION -->
+      <div class="device-card" style="border-color:#a855f744;">
+        <div class="dev-name">💻 Laptop (Management)</div>
+        <div class="dev-ip">192.168.1.133 (DHCP)</div>
+        <div class="dev-detail" style="margin-top:4px;">
+          <span class="ssh-badge">🔑 SSH key pair</span>
+        </div>
+        <div class="dev-detail">PuTTY / Terminal → oracle:5520</div>
+        <div class="dev-detail">Key-only auth, no password</div>
+      </div>
+
+      <div class="device-card">
+        <div class="dev-name">📱 Phone</div>
+        <div class="dev-ip">192.168.1.45 (DHCP)</div>
+        <div class="dev-detail">WiFi &bull; Same flat network</div>
+      </div>
+      <div class="device-card">
+        <div class="dev-name">📺 Smart TV</div>
+        <div class="dev-ip">192.168.1.80 (DHCP)</div>
+        <div class="dev-detail">WiFi &bull; Same flat network</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SSH Arrow -->
+  <div class="ssh-arrow">
+    💻 Laptop ——🔑 SSH (key-only, port 5520) ——→ 🖥️ Oracle Server
+  </div>
+
+  <!-- CALLOUT -->
+  <div class="callout">
+    <div class="callout-title">🔶 Tier 2 Improvements Over Tier 1</div>
+    <strong>Router:</strong> Admin password changed from default, firmware updated, UPnP/WPS/remote management disabled. The router is no longer using factory defaults.<br><br>
+    <strong>Oracle:</strong> SSH key-only replaces xRDP for management — lighter, more secure, scriptable. Fail2Ban blocks brute force. Kernel hardening via sysctl reduces attack surface. UPS with NUT/apcupsd triggers graceful shutdown before battery dies.<br><br>
+    <strong>Still flat network:</strong> All devices still share the same subnet. Tier 3 introduces VLAN isolation.
+  </div>
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color" style="background:#22c55e;"></div> Tier 1 Hardening</div>
+    <div class="legend-item"><div class="legend-color" style="background:#a855f7;"></div> Tier 2 Hardening (new)</div>
+    <div class="legend-item"><div class="legend-color" style="background:#38bdf8;"></div> Router Hardening</div>
+    <div class="legend-item"><div class="legend-color" style="background:#f0a030;"></div> UPS Protected</div>
+  </div>
+
+  <div class="footer">Home Oracle Hardening Guide — Tier 2 Recommended &mdash; digibyte-maxi (Oracle Slot 17)</div>
+</div>
+</body>
+</html>
