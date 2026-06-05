@@ -155,8 +155,11 @@ sudo apt install ufw -y
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 
-# Allow DigiByte P2P (mainnet — use 12033 for testnet26)
+# Allow DigiByte P2P (mainnet)
 sudo ufw allow 12024/tcp comment "DigiByte MainNet P2P"
+
+# Allow DigiByte P2P (testnet — keep running alongside mainnet for future testing)
+sudo ufw allow 12033/tcp comment "DigiByte TestNet P2P"
 
 # Enable
 sudo ufw enable
@@ -165,7 +168,7 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-Your output should show only the P2P port allowed inbound. If you also use SSH locally (see Tier 2), you'll add that port too — but only from your local subnet.
+Your output should show only the P2P ports allowed inbound. If you also use SSH locally (see Tier 2), you'll add that port too — but only from your local subnet.
 
 > **xRDP users (Aussie Epic's setup):** Do NOT add a UFW rule for port 3389. xRDP should only be accessible on your local network, and since you're not port-forwarding it through your router (right?), the host firewall doesn't need to allow it from the internet. If you DO want UFW to allow xRDP from your local network only:
 > ```bash
@@ -181,13 +184,22 @@ Windows Firewall is enabled by default on modern Windows. Verify and configure:
 2. Confirm the firewall is **On** for all profiles (Domain, Private, Public)
 3. Click **Advanced settings** to open Windows Firewall with Advanced Security
 
-Create an inbound rule for DigiByte P2P:
+Create inbound rules for DigiByte P2P (create one rule for each port):
 
+**Mainnet rule:**
 1. Click **Inbound Rules → New Rule**
-2. Select **Port → TCP → Specific local ports: 12024** (or 12033 for testnet)
+2. Select **Port → TCP → Specific local ports: 12024**
 3. Select **Allow the connection**
 4. Check all profiles (Domain, Private, Public)
 5. Name it: **DigiByte MainNet P2P**
+6. Click Finish
+
+**Testnet rule (repeat the steps above):**
+1. Click **Inbound Rules → New Rule**
+2. Select **Port → TCP → Specific local ports: 12033**
+3. Select **Allow the connection**
+4. Check all profiles (Domain, Private, Public)
+5. Name it: **DigiByte TestNet P2P**
 6. Click Finish
 
 Or via PowerShell (run as Administrator):
@@ -195,6 +207,9 @@ Or via PowerShell (run as Administrator):
 ```powershell
 # Allow DigiByte P2P (mainnet)
 New-NetFirewallRule -DisplayName "DigiByte MainNet P2P" -Direction Inbound -Protocol TCP -LocalPort 12024 -Action Allow
+
+# Allow DigiByte P2P (testnet)
+New-NetFirewallRule -DisplayName "DigiByte TestNet P2P" -Direction Inbound -Protocol TCP -LocalPort 12033 -Action Allow
 
 # Verify
 Get-NetFirewallRule -DisplayName "DigiByte*" | Format-Table Name, DisplayName, Enabled, Direction, Action
@@ -218,6 +233,7 @@ sudo nano /etc/pf.conf
 
 # Add at the end (before any final block rules):
 pass in on en0 proto tcp from any to any port 12024
+pass in on en0 proto tcp from any to any port 12033
 
 # Reload
 sudo pfctl -f /etc/pf.conf
@@ -225,6 +241,8 @@ sudo pfctl -e
 ```
 
 > **macOS note:** `pf` rules don't persist across reboots by default. You'd need a launchd plist to reload them on startup. For most home operators, the Application Firewall is sufficient.
+
+> **Why are we opening both mainnet and testnet ports?** Testnet is where all future DigiByte releases get tested before mainnet deployment. If oracle operators shut down their testnet nodes after mainnet launches, there's nobody to test with. Keep both ports open so you can run testnet and mainnet side by side. If you decide not to participate in testnet, remove the 12033 rules from your firewall and router.
 
 ---
 
@@ -1173,7 +1191,7 @@ CLI="digibyte-cli -testnet"
 The health checks (oracle status, chain sync, consensus price, disk space, memory) all work the same. The Discord webhook alerts work from home as long as you have internet access.
 
 **What changes for home:**
-- The `ss -tlnp | grep 12024` port check works the same
+- The `ss -tlnp | grep 12024` port check works the same (use `grep 12033` for testnet)
 - Systemd service checks work the same
 - Disk and memory checks work the same
 - You may want to add a check for your UPS battery level (if using NUT: `upsc myups battery.charge`)
@@ -1260,4 +1278,4 @@ I want to be honest about the limitations of home oracle operation:
 
 ---
 
-*Built from years of hardening VPS and home lab infrastructure across blockchain projects — Bitcoin, TOR, DigiByte, PIVX, Session, Helium MCC governance, solo mining and more.....   Community-requested by Aussie Epic. If something's wrong, open an issue or find me on Gitter (digibyte-maxi in #digidollar:gitter.im).*
+*Built from years of hardening VPS and home lab infrastructure across blockchain projects — Bitcoin, TOR, DigiByte, PIVX, Session, Helium MCC governance, solo mining and much more.....   Community-requested by Aussie Epic. If something's wrong, open an issue or find me on Gitter (digibyte-maxi in #digidollar:gitter.im).*
