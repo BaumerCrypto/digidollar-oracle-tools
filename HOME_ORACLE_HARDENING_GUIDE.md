@@ -1280,4 +1280,4 @@ I want to be honest about the limitations of home oracle operation:
 
 ---
 
-*Built from years of hardening VPS and home lab infrastructure across blockchain projects — Bitcoin, TOR, DigiByte, PIVX, Session, Helium MCC governance, solo mining and much more.....   Community-requested by Aussie Epic. If something's wrong, open an issue or find me on Gitter (digibyte-maxi in #digidollar:gitter.im).*
+*Built from years of hardening VPS and home lab infrastructure across blockchain projects — Bitcoin, TOR, DigiByte, PIVX, Session, Helium MCC governance, solo mining and more.....   Community-requested by Aussie Epic. If something's wrong, open an issue or find me on Gitter (digibyte-maxi in #digidollar:gitter.im).*
