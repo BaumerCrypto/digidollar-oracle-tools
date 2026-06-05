@@ -234,11 +234,16 @@ sudo ufw allow 5520/tcp comment 'SSH custom port'
 # Allow DigiByte MainNet P2P
 sudo ufw allow 12024/tcp comment 'DGB MainNet P2P'
 
+# Allow DigiByte TestNet P2P (keep testnet running alongside mainnet for future testing)
+sudo ufw allow 12033/tcp comment 'DGB TestNet P2P'
+
 # Enable the firewall
 sudo ufw enable
 ```
 
 **Warning:** If you enable UFW without allowing your SSH port first, you will lock yourself out. Always allow SSH before enabling.
+
+> **Why include the testnet port?** Oracle operators can keep testnet running alongside mainnet. Testnet is where all future releases get tested before mainnet deployment — if operators shut down their testnet nodes, there's nobody to test with. Keep both ports open. If you decide not to participate in testnet, you can remove the 12033 rule: `sudo ufw delete allow 12033/tcp`
 
 ### Verify
 
@@ -257,6 +262,7 @@ To                         Action      From
 --                         ------      ----
 5520/tcp                   ALLOW IN    Anywhere        # SSH custom port
 12024/tcp                  ALLOW IN    Anywhere        # DGB MainNet P2P
+12033/tcp                  ALLOW IN    Anywhere        # DGB TestNet P2P
 ```
 
 ### What About RPC?
@@ -585,7 +591,7 @@ Unless you deeply understand AppArmor, a restrictive profile can silently block 
 
 ### Don't Rate-Limit or Restrict the P2P Port
 
-Your oracle needs to accept inbound peer connections on the DigiByte P2P port (12024 for mainnet). Don't add connection limits, geo-blocking, or rate limiting to this port. Other oracle nodes and network peers need to reach you.
+Your oracle needs to accept inbound peer connections on the DigiByte P2P ports (12024 for mainnet, 12033 for testnet). Don't add connection limits, geo-blocking, or rate limiting to these ports. Other oracle nodes and network peers need to reach you.
 
 ### Don't Set Fail2Ban to Permanent Bans
 
@@ -737,7 +743,7 @@ Here's everything this guide covers, in one table:
 
 My oracle VPS gets hammered daily by automated scanners and brute-force bots. With this setup, they hit a wall at every layer — wrong port, wrong username, no password to guess, banned after 3 tries, and firewall blocking everything else. The oracle keeps running through all of it.
 
-If you follow this guide and verify with Step 11, your oracle node will be properly locked down/hardened for mainnet.
+If you follow this guide and verify with Step 11, your oracle node will be properly locked down/hardened for mainnet and testnet. 😊
 
 ---
 
