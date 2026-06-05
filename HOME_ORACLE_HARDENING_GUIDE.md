@@ -82,6 +82,8 @@ This guide is organized into three tiers. Do Tier 1 first. It takes 30 minutes a
 | **Tier 2 — Recommended** | SSH access, router hardening, UPS graceful shutdown, kernel hardening | ~1 hour | Do this week |
 | **Tier 3 — Advanced** | VLAN isolation, DDNS, VPN, monitoring | Varies | When you're ready |
 
+📊 **Network diagrams:** [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html)
+
 ---
 
 ## Tier 1 — Essential Hardening
