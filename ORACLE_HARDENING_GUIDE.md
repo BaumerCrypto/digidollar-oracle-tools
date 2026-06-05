@@ -3,27 +3,42 @@
 **A step-by-step security hardening guide for DigiDollar oracle operators running Linux VPS.**
 > **Running from home instead of a VPS?** See the [Home Oracle Hardening Guide](HOME_ORACLE_HARDENING_GUIDE.md) — covers Linux, Windows, macOS with router hardening, port forwarding, VLANs, and more.
 
+### 🔥 Ports Your Oracle Needs — Don't Block These — Read This First!
+
+Before configuring your firewall, know what your oracle needs to function:
+
+| Port | Direction | Required | Purpose |
+|------|-----------|----------|---------|
+| 12024/tcp | Inbound | Yes (mainnet) | P2P node discovery + oracle bundle relay |
+| 12033/tcp | Inbound | Yes (testnet26) | P2P testnet connections |
+| Your SSH port | Inbound | Yes | SSH admin access (default 22, or custom port like 5520 — see SSH Hardening section in this Guide) |
+| ALL | Outbound | **Allow ALL — do not restrict** | Price feeds (exchange APIs), peer connections, NTP time sync, DNS, system updates |
+
+> ⚠️ **Do NOT set `ufw default deny outgoing`.** Your oracle needs outbound access for exchange price feeds, NTP sync, peer discovery, and system updates. Blocking outbound traffic is the #1 over-hardening mistake — your node looks fine but silently stops reporting prices. See [Over-Hardening Warnings](#over-hardening-warnings) for more.
+
 I wrote this guide based on the security setup running on my own DigiDollar oracle node. Every step here is tested, verified, and confirmed to survive reboots. If you're running an oracle on a Linux VPS, this guide will get your server locked down properly (server hardening).
 
 ---
 
 ## Table of Contents
 
-1. [Before You Start](#before-you-start)
-2. [Create a Dedicated User](#step-1--create-a-dedicated-user)
-3. [SSH Hardening](#step-2--ssh-hardening)
-4. [Generate SSH Keys](#step-3--generate-ssh-keys)
-5. [Firewall (UFW)](#step-4--firewall-ufw)
-6. [Fail2Ban](#step-5--fail2ban)
-7. [Kernel Hardening (sysctl)](#step-6--kernel-hardening-sysctl)
-8. [Shared Memory Hardening](#step-7--shared-memory-hardening)
-9. [Disable Unnecessary Services](#step-8--disable-unnecessary-services)
-10. [Automatic Security Updates](#step-9--automatic-security-updates)
-11. [DigiByte-Specific Hardening](#step-10--digibyte-specific-hardening)
-12. [Verify Everything](#step-11--verify-everything)
-13. [Over-Hardening Warnings](#over-hardening-warnings)
-14. [Optional Extras](#optional-extras)
-15. [Maintenance](#maintenance)
+- [Before You Start](#before-you-start)
+
+1. [Create a Dedicated User](#step-1--create-a-dedicated-user)
+2. [SSH Hardening](#step-2--ssh-hardening)
+3. [Generate SSH Keys](#step-3--generate-ssh-keys)
+4. [Firewall (UFW)](#step-4--firewall-ufw)
+5. [Fail2Ban](#step-5--fail2ban)
+6. [Kernel Hardening (sysctl)](#step-6--kernel-hardening-sysctl)
+7. [Shared Memory Hardening](#step-7--shared-memory-hardening)
+8. [Disable Unnecessary Services](#step-8--disable-unnecessary-services)
+9. [Automatic Security Updates](#step-9--automatic-security-updates)
+10. [DigiByte-Specific Hardening](#step-10--digibyte-specific-hardening)
+11. [Verify Everything](#step-11--verify-everything)
+
+- [Over-Hardening Warnings](#over-hardening-warnings)
+- [Optional Extras](#optional-extras)
+- [Maintenance](#maintenance)
 
 ---
 
@@ -730,3 +745,4 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
 Version: v1.2
+
