@@ -40,7 +40,34 @@ Typos, unclear instructions, missing steps — if you spot something in the guid
 
 - Shell scripts: Bash, `#!/bin/bash`, descriptive variable names, comments where intent isn't obvious
 - Guides/docs: Markdown, first-person voice, step-by-step with verification commands
+- UTF-8 encoding, Unix (LF) line endings — not CRLF
+- `bash -n <file>` clean before commit
 - No real webhook URLs, IP addresses, or credentials in committed code
+
+## Sanitization Rule — Two Copies By Design
+
+Every script in this repo exists in two places with different contents **by design**:
+
+- **Private (deployed)** — on your oracle server. Real Discord webhook URL, real `ORACLE_ID`, real paths.
+- **Public (this repo + your local fork)** — sanitized. Placeholders, no webhooks, no operator-specific values. The webhook and operator settings live in `~/.oracle-monitor/config` on your server — a separate file the script reads at startup. Only [`config.template`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config.template) lives in the repo.
+
+These two copies must stay diverged. The cardinal sin is blind-copying one to the other — pasting public over deployed breaks your monitor (placeholders don't resolve), and pasting deployed over public leaks your secrets to anyone who clones the repo.
+
+Before any push to a public repo (this one or your fork), run leak sweeps:
+
+```bash
+# Webhook leak — must return ZERO:
+grep -nE 'discord\.com/api/webhooks/[0-9]' <your_changed_files>
+
+# Real config file — must not be staged (only config.template belongs):
+git status | grep -E 'config$' | grep -v 'config\.template'
+```
+
+If either returns a hit, fix before committing. See [`SECURITY.md`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/SECURITY.md) for the full list of things that must never be committed and what to do if you accidentally leak one.
+
+## Attribution — MMFP Solutions
+
+GSS (GoSlimStratum) and GSSM (GoSlimStratum Miners Manager) are Scott's software from [MMFP Solutions](https://mmfpsolutions.com/). The cron + bash + Discord-webhook monitoring pattern in this repo is influenced by his work. If you add docs that reference GSS or GSSM, link the first mention to https://mmfpsolutions.com/.
 
 ## What I'm Not Looking For
 
