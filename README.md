@@ -22,16 +22,67 @@ More tools will be added as the DigiDollar testnet matures toward mainnet activa
 
 ---
 
-## Setup
+## `oracle-monitor.sh`
 
-1. Copy `oracle-monitor.sh` to your VPS:
+### What it checks (every 5 minutes by default)
+
+- `digibyted` daemon process alive
+- Oracle is `running` in `listoracle`
+- Chain sync (`verificationprogress`)
+- Peer count (default min: 3)
+- Price freshness (`is_stale` flag on `getoracleprice`)
+- Degraded consensus detection (`status` != `ok` on `getoracleprice`)
+- Disk space (default min: 5GB free)
+- Memory usage
+- `digibyted.service` and oracle process status via `listoracle` RPC
+- Binary version drift detection
+- NTP time synchronization
+- **Quorum margin tracking** — counts active oracles via `getoracles true`, compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health (v2.0)
+
+### What it sends
+
+Discord embeds — color-coded:
+
+- 🔴 **Red** — critical (daemon down, oracle stopped, chain stuck, quorum at edge or lost)
+- 🟡 **Yellow** — warnings (low peers, low disk, stale price, degraded consensus, NTP desync, quorum getting thin)
+- 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
+- 🔵 **Blue** — 12-hour status summary
+
+State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers.
+
+All timestamps inside alerts are in UTC for unambiguous reading across timezones. Discord's footer time auto-converts to each viewer's local time.
+
+### Discord alert examples
+
+**Health summary with quorum tracking and MuSig2 session status:**
+
+![Oracle Health Summary](Discord_alert-Quorum1.jpg)
+
+**Quorum state transition alerts — red/yellow/green as oracle count changes:**
+
+![Quorum Alerts](Discord_alert-Quorum2.jpg)
+
+### Requirements
+
+- Linux (tested on Ubuntu 24.04 LTS)
+- DigiByte Core **v9.26.0-rc44** or later (uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
+- `jq` (for JSON parsing — install with `sudo apt install jq`)
+- `curl`
+- A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
+
+### Setup
+
+1. Download the script and config template to your oracle VPS:
 ```bash
-   chmod +x ~/oracle-monitor.sh
+   wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.sh
+   wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/config.template
+   chmod +x oracle-monitor.sh
 ```
 
-2. Create the config directory:
+2. Create your config file from the template:
 ```bash
-   mkdir -p ~/.oracle-monitor && cp config.template ~/.oracle-monitor/config
+   mkdir -p ~/.oracle-monitor
+   cp config.template ~/.oracle-monitor/config
 ```
 
 3. Edit the config file with your settings:
