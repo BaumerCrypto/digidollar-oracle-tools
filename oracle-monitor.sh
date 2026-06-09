@@ -1,12 +1,12 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 1.5
+# Version: 2.0
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
-# Oracle: digibyte-maxi (ID 17) — Contabo VPS 20 EU
+# Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - June 2026
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -30,6 +30,14 @@
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.0 — Quorum margin tracking via getdigidollardeploymentinfo +
+#          getoracles true. Configurable alert thresholds. MuSig2
+#          session health in summary. (closes #6)
+#   v1.5 — Replace dgb-oracle.service systemd check with listoracle
+#          RPC (fixes Type=oneshot false positive, fixes #22)
+#   v1.4 — RC44 warning/error differentiation per status enum
+#          (active/warning/error) (fixes #21)
+#   v1.3 — RC44 getoracleprice status enum fix (active not ok)
 #   v1.2 — External config file, --dry-run flag, python3 → jq migration
 #          (fixes #3, fixes #4, fixes #5)
 #   v1.1 — Degraded consensus detection, NTP time sync check (fixes #1)
@@ -60,12 +68,24 @@ ORACLE_NAME="digibyte-maxi"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
-# Thresholds
+# Thresholds — basic health
 MIN_PEERS=3
 MIN_DISK_GB=5
 STALE_PRICE_MINUTES=30
 MEM_THRESHOLD=90
 MAX_CHAIN_BEHIND=10
+
+# Thresholds — quorum margin (v2.0)
+# These define the alert bands for network-wide oracle liveness.
+# Quorum threshold (oracle_consensus_required) comes from the chain via
+# getdigidollardeploymentinfo — not hardcoded here.
+#
+# QUORUM_GREEN: at or above this count = comfortable, no alerts
+# QUORUM_YELLOW: at or above this but below green = "getting thin" warning
+# Below QUORUM_YELLOW but at/above consensus_required = red, at quorum edge
+# Below consensus_required = CRITICAL — DD bundle signing may halt
+QUORUM_GREEN=20
+QUORUM_YELLOW=12
 
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
@@ -408,6 +428,145 @@ check_ntp() {
     fi
 }
 
+# --- Check 11: Quorum margin tracking (v2.0, closes #6) ---
+# Counts how many oracles are actively reporting prices across the network.
+# Compares against the on-chain quorum threshold from getdigidollardeploymentinfo.
+# Also reports MuSig2 session health in the summary line.
+#
+# Alert bands (configurable via QUORUM_GREEN and QUORUM_YELLOW in config):
+#   >= QUORUM_GREEN ............ Green — comfortable
+#   >= QUORUM_YELLOW ........... Yellow — getting thin
+#   >= consensus_required ...... Red — at quorum edge
+#   < consensus_required ....... CRITICAL — DD may halt
+#
+# RPC FIELD NAMES (confirmed on RC44 testnet26 2026-06-09):
+#   getdigidollardeploymentinfo → oracle_consensus_required, oracle_total_slots,
+#     musig2_session.epoch, musig2_session.state ("complete"/other),
+#     musig2_session.nonce_count, musig2_session.partial_sig_count,
+#     musig2_session.creation_height
+#   getoracles true → array of objects, each with last_price_usd field
+#     "reporting" = last_price_usd exists and > 0
+#
+# Debug commands (if something looks wrong):
+#   digibyte-cli -testnet getdigidollardeploymentinfo | jq .
+#   digibyte-cli -testnet getoracles true | jq '.[0]'
+#
+check_quorum() {
+    # --- Step 1: Get deployment info (quorum threshold + MuSig2 session) ---
+    local deploy_info
+    deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
+
+    if [ $? -ne 0 ] || [ -z "$deploy_info" ]; then
+        DETAILS+="⚠️ Quorum: could not query deployment info\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
+
+    local consensus_required total_slots
+    consensus_required=$(echo "$deploy_info" | jq -r '.oracle_consensus_required // 7' 2>/dev/null)
+    total_slots=$(echo "$deploy_info" | jq -r '.oracle_total_slots // 35' 2>/dev/null)
+
+    # MuSig2 session health — included in summary line
+    # Field names confirmed against RC44 testnet26 output (2026-06-09):
+    #   .musig2_session.epoch             = signing epoch number
+    #   .musig2_session.state             = "complete" / other (string, not boolean)
+    #   .musig2_session.nonce_count       = nonces collected
+    #   .musig2_session.partial_sig_count = partial sigs collected
+    #   .musig2_session.creation_height   = block height when session was created
+    local musig_epoch musig_state musig_nonces musig_sigs musig_detail
+    musig_epoch=$(echo "$deploy_info" | jq -r '.musig2_session.epoch // "?"' 2>/dev/null)
+    musig_state=$(echo "$deploy_info" | jq -r '.musig2_session.state // "?"' 2>/dev/null)
+    musig_nonces=$(echo "$deploy_info" | jq -r '.musig2_session.nonce_count // "?"' 2>/dev/null)
+    musig_sigs=$(echo "$deploy_info" | jq -r '.musig2_session.partial_sig_count // "?"' 2>/dev/null)
+
+    if [ "$musig_state" = "complete" ]; then
+        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ✓"
+    elif [ "$musig_epoch" != "?" ]; then
+        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ($musig_state)"
+    else
+        musig_detail="could not parse session"
+    fi
+
+    # --- Step 2: Count reporting oracles ---
+    local oracles
+    oracles=$($CLI getoracles true 2>/dev/null)
+
+    if [ $? -ne 0 ] || [ -z "$oracles" ]; then
+        DETAILS+="⚠️ Quorum: could not query oracles\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
+
+    # Total oracles returned by getoracles true (active roster)
+    local roster_count reporting
+    roster_count=$(echo "$oracles" | jq 'length' 2>/dev/null)
+
+    # Count oracles with a non-null, non-zero last_price_usd as "reporting"
+    # This filters out oracles that are in the roster but not online/producing prices
+    reporting=$(echo "$oracles" | jq '[.[] | select(.last_price_usd != null and (.last_price_usd | tonumber) > 0)] | length' 2>/dev/null)
+
+    # Fallback: if jq filter fails (field name mismatch), use roster count
+    if [ -z "$reporting" ] || [ "$reporting" = "null" ]; then
+        reporting="$roster_count"
+        DETAILS+="⚠️ Quorum: could not count reporting oracles (field name mismatch?) — using roster count\n"
+        WARNINGS=$((WARNINGS + 1))
+    fi
+
+    # --- Step 3: Alert based on quorum margin ---
+    if [ "$reporting" -lt "$consensus_required" ]; then
+        # CRITICAL — below quorum threshold, DD bundle signing may halt
+        if should_alert "quorum_critical"; then
+            alert_red "🔴 QUORUM LOST" "Only $reporting/$total_slots oracles reporting. Need $consensus_required for consensus. DigiDollar signing may be halted!"
+        fi
+        DETAILS+="🔴 Quorum: $reporting/$total_slots reporting (need $consensus_required) — CRITICAL\n"
+        DETAILS+="   MuSig2: $musig_detail\n"
+        ISSUES=$((ISSUES + 1))
+
+    elif [ "$reporting" -lt "$QUORUM_YELLOW" ]; then
+        # RED — above quorum but uncomfortably thin
+        if should_alert "quorum_red"; then
+            alert_red "🔴 Quorum At Edge" "Only $reporting/$total_slots oracles reporting (need $consensus_required). Network at risk if more drop."
+        fi
+        # Clear critical if recovering upward
+        if clear_alert "quorum_critical"; then
+            alert_green "✅ Quorum Recovering" "Quorum restored: $reporting/$total_slots oracles reporting (need $consensus_required)."
+        fi
+        DETAILS+="🔴 Quorum: $reporting/$total_slots reporting (need $consensus_required) — at edge\n"
+        DETAILS+="   MuSig2: $musig_detail\n"
+        ISSUES=$((ISSUES + 1))
+
+    elif [ "$reporting" -lt "$QUORUM_GREEN" ]; then
+        # YELLOW — above red threshold but below comfortable
+        if should_alert "quorum_yellow"; then
+            alert_yellow "⚠️ Quorum Getting Thin" "$reporting/$total_slots oracles reporting (need $consensus_required). Comfortable is ${QUORUM_GREEN}+."
+        fi
+        # Clear worse states if recovering upward
+        if clear_alert "quorum_critical"; then
+            alert_green "✅ Quorum Recovering" "Quorum restored: $reporting/$total_slots reporting."
+        fi
+        if clear_alert "quorum_red"; then
+            alert_green "✅ Quorum Margin Improving" "$reporting/$total_slots reporting — no longer at edge."
+        fi
+        DETAILS+="⚠️ Quorum: $reporting/$total_slots reporting (need $consensus_required) — getting thin\n"
+        DETAILS+="   MuSig2: $musig_detail\n"
+        WARNINGS=$((WARNINGS + 1))
+
+    else
+        # GREEN — comfortable margin
+        if clear_alert "quorum_critical"; then
+            alert_green "✅ Quorum Restored" "Quorum fully recovered: $reporting/$total_slots reporting."
+        fi
+        if clear_alert "quorum_red"; then
+            alert_green "✅ Quorum Margin Recovered" "$reporting/$total_slots reporting — comfortable margin."
+        fi
+        if clear_alert "quorum_yellow"; then
+            alert_green "✅ Quorum Healthy" "$reporting/$total_slots reporting — back to comfortable."
+        fi
+        DETAILS+="✅ Quorum: $reporting/$total_slots reporting (need $consensus_required) — healthy\n"
+        DETAILS+="   MuSig2: $musig_detail\n"
+    fi
+}
+
 # ============================================================================
 # SUMMARY REPORT (--summary and --dry-run)
 # ============================================================================
@@ -423,6 +582,7 @@ send_summary() {
     check_services
     check_version
     check_ntp
+    check_quorum
 
     local color=65280  # green
     local status="✅ All Systems Healthy"
@@ -481,6 +641,7 @@ run_checks() {
     check_disk
     check_memory
     check_ntp
+    check_quorum
 }
 
 # ============================================================================
