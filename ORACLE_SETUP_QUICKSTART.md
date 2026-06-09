@@ -8,7 +8,7 @@
 
 ## Requirements
 
-- DigiByte Core v9.26.0-rc43 or later
+- DigiByte Core v9.26.0-rc44 or later
 - A VPS or machine you can keep online reliably for 1–2 years
 - An assigned oracle ID (request one in the Gitter dev chat — do not guess)
 
@@ -16,15 +16,15 @@
 
 ## Download
 
-**DigiByte Core v9.26.0-rc43:**  
-https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.0-rc43
+**DigiByte Core v9.26.0-rc44:**  
+https://github.com/DigiByte-Core/digibyte/releases/tag/v9.26.0-rc44
 
 | Platform | File |
 |----------|------|
-| Windows | `digibyte-9.26.0-rc43-win64-setup-unsigned.exe` |
-| macOS | `digibyte-9.26.0-rc43-x86_64-apple-darwin-unsigned.zip` |
-| Linux x86_64 | `digibyte-9.26.0-rc43-x86_64-linux-gnu.tar.gz` |
-| Linux ARM64 | `digibyte-9.26.0-rc43-aarch64-linux-gnu.tar.gz` |
+| Windows | `digibyte-9.26.0-rc44-win64-setup-unsigned.exe` |
+| macOS | `digibyte-9.26.0-rc44-x86_64-apple-darwin-unsigned.zip` |
+| Linux x86_64 | `digibyte-9.26.0-rc44-x86_64-linux-gnu.tar.gz` |
+| Linux ARM64 | `digibyte-9.26.0-rc44-aarch64-linux-gnu.tar.gz` |
 
 ---
 

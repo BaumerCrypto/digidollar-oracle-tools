@@ -10,7 +10,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v1.2 — 11 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP). Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v1.4 — 11 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP). Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, and alert thresholds. Script works without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
@@ -54,7 +54,7 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.0-rc43** or later (uses `listoracle`, `getoracleprice` RPCs)
+- DigiByte Core **v9.26.0-rc44** or later (uses `listoracle`, `getoracleprice` RPCs)
 - `jq` (for JSON parsing — install with `sudo apt install jq`)
 - `curl`
 - A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
@@ -111,7 +111,7 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 | `--dry-run` | Runs all checks, prints to terminal, skips Discord, no state changes |
 | `--test` | Sends a test embed to Discord to verify webhook |
 
-### RPC field-name notes (RC43)
+### RPC field-name notes (RC44)
 
 If you adapt this for a different release, double-check these field names — they have changed between RCs:
 
@@ -128,10 +128,10 @@ If you adapt this for a different release, double-check these field names — th
 | Component | Version |
 |-----------|---------|
 | OS | Ubuntu 24.04 LTS |
-| DigiByte Core | v9.26.0-rc43 |
-| Chain | testnet25 |
+| DigiByte Core | v9.26.0-rc44 |
+| Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v1.2 |
+| oracle-monitor.sh | v1.4 |
 
 If you're running a different release and something breaks, please open an issue.
 
