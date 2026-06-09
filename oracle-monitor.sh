@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 1.2
+# Version: 1.4
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -274,6 +274,8 @@ check_peers() {
 
 # --- Check 5: Oracle consensus price ---
 # v1.1: Also detects degraded consensus (status != "ok" with price_usd=0)
+# v1.3: RC44 - handle "active" status enum in consensus check (RC43 returned "ok", RC44 returns "active")
+# v1.4: RC44 - differentiate warning (notice) from error (alert) per RC44 enum (active/warning/error)
 # See: https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/1
 check_price() {
     local price_info
@@ -298,11 +300,15 @@ check_price() {
         fi
         DETAILS+="⚠️ Price: STALE — \$$price_usd\n"
         WARNINGS=$((WARNINGS + 1))
-    # Check 5b: Degraded consensus — status != "ok" (v1.1)
-    elif [ "$status" != "ok" ]; then
+    # Check 5b: Error status — real problem, alert operator (v1.4)
+    elif [ "$status" = "error" ]; then
         if should_alert "degraded_consensus"; then
-            alert_yellow "⚠️ Degraded Consensus" "Network status: $status | Price: \$$price_usd | Oracles: $oracle_count. Individual oracles may be fine but network aggregation is failing."
+            alert_yellow "⚠️ Degraded Consensus" "Network status: $status | Price: \$$price_usd | Oracles: $oracle_count. Network aggregation is failing."
         fi
+        DETAILS+="⚠️ Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
+        WARNINGS=$((WARNINGS + 1))
+    # Check 5c: Warning status — network notice, no Discord alert (v1.4)
+    elif [ "$status" = "warning" ]; then
         DETAILS+="⚠️ Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
         WARNINGS=$((WARNINGS + 1))
     else
