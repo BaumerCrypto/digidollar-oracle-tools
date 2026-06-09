@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 1.4
+# Version: 1.5
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -276,6 +276,7 @@ check_peers() {
 # v1.1: Also detects degraded consensus (status != "ok" with price_usd=0)
 # v1.3: RC44 - handle "active" status enum in consensus check (RC43 returned "ok", RC44 returns "active")
 # v1.4: RC44 - differentiate warning (notice) from error (alert) per RC44 enum (active/warning/error)
+# v1.5: Replace dgb-oracle.service systemd check with listoracle RPC (fixes Type=oneshot false positive, closes #22)
 # See: https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/1
 check_price() {
     local price_info
@@ -362,7 +363,7 @@ check_memory() {
 check_services() {
     local dgb_status oracle_status
     dgb_status=$(systemctl is-active digibyted.service 2>/dev/null)
-    oracle_status=$(systemctl is-active dgb-oracle.service 2>/dev/null)
+    oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
     if [ "$dgb_status" = "active" ]; then
         DETAILS+="✅ digibyted.service: active\n"
@@ -371,10 +372,10 @@ check_services() {
         ISSUES=$((ISSUES + 1))
     fi
 
-    if [ "$oracle_status" = "active" ]; then
-        DETAILS+="✅ dgb-oracle.service: active\n"
+    if [ "$oracle_status" = "true" ]; then
+        DETAILS+="✅ Oracle process: running\n"
     else
-        DETAILS+="⚠️ dgb-oracle.service: $oracle_status\n"
+        DETAILS+="⚠️ Oracle process: $oracle_status\n"
         WARNINGS=$((WARNINGS + 1))
     fi
 }
