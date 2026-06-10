@@ -10,8 +10,8 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.0 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, and quorum margin thresholds. Script works without it using built-in defaults. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.1 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, and anti-flap settings (cooldown + hysteresis). Script works without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide — SSH, UFW, Fail2Ban, kernel hardening, systemd. Step-by-step, based on my live oracle setup. |
@@ -37,7 +37,7 @@ More tools will be added as the DigiDollar testnet matures toward mainnet activa
 - `digibyted.service` and oracle process status via `listoracle` RPC
 - Binary version drift detection
 - NTP time synchronization
-- **Quorum margin tracking** — counts active oracles via `getoracles true`, compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health (v2.0)
+- **Quorum margin tracking** — counts active oracles via `getoracles true`, compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries (v2.1)
 
 ### What it sends
 
@@ -48,7 +48,7 @@ Discord embeds — color-coded:
 - 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
 - 🔵 **Blue** — 12-hour status summary
 
-State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers.
+State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers. Quorum tracking uses a single `quorum_state` file that stores the current band and timestamp, with cooldown and hysteresis to prevent alert flapping during network volatility.
 
 All timestamps inside alerts are in UTC for unambiguous reading across timezones. Discord's footer time auto-converts to each viewer's local time.
 
@@ -139,6 +139,10 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | `MAX_CHAIN_BEHIND` | `10` | Blocks behind before alerting |
 | `QUORUM_GREEN` | `20` | Oracles reporting at/above this = healthy (no alert) |
 | `QUORUM_YELLOW` | `12` | Below green but at/above this = "getting thin" warning |
+| `QUORUM_COOLDOWN` | `15` | Minutes between quorum recovery alerts. Escalation (worse) always fires immediately. Set to `0` to disable (v2.1) |
+| `QUORUM_HYSTERESIS` | `3` | Recovery buffer — must exceed threshold by this many oracles to recover. Prevents flapping at boundaries. Set to `0` to disable (v2.1) |
+
+The quorum minimum (`oracle_consensus_required`, currently 7) comes from the chain itself via `getdigidollardeploymentinfo` — it's not configurable. Below that threshold, DigiDollar signing halts regardless of your config settings.
 
 ### Quorum alert bands
 
@@ -149,7 +153,19 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | 🔴 7–11 | At quorum edge | Red alert |
 | 💀 Below 7 | DD signing halted | Critical alert |
 
-`QUORUM_GREEN` (20) and `QUORUM_YELLOW` (12) are configurable in your config file. The quorum minimum (`oracle_consensus_required`, currently 7) comes from the chain itself via `getdigidollardeploymentinfo` — it's not configurable. Below that threshold, DigiDollar signing halts regardless of your config settings.
+`QUORUM_GREEN` (20) and `QUORUM_YELLOW` (12) are configurable in your config file.
+
+### Anti-flap behavior (v2.1)
+
+During network volatility (e.g. RC44 launch with operators upgrading), the active oracle count can oscillate rapidly around threshold boundaries. Without protection, this causes a flood of Discord alerts every 5 minutes as the count crosses back and forth.
+
+v2.1 adds two configurable anti-flap features:
+
+**Cooldown timer** (`QUORUM_COOLDOWN`, default 15 min) — after any quorum alert fires, recovery alerts are suppressed for this many minutes. Escalation alerts (things getting worse) always fire immediately regardless of cooldown.
+
+**Hysteresis buffer** (`QUORUM_HYSTERESIS`, default 3) — recovery requires exceeding the threshold by this buffer. For example, with `QUORUM_GREEN=20` and `QUORUM_HYSTERESIS=3`, the count must reach 23 before recovering from yellow to green. This creates a dead zone that absorbs oscillation at boundaries.
+
+Both can be set to `0` to disable (reverts to v2.0 behavior).
 
 ### RPC field-name notes (RC44)
 
@@ -173,7 +189,7 @@ If you adapt this for a different release, double-check these field names — th
 | DigiByte Core | v9.26.0-rc44 |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.0 |
+| oracle-monitor.sh | v2.1 |
 
 If you're running a different release and something breaks, please open an issue.
 
