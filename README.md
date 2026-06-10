@@ -140,7 +140,16 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | `QUORUM_GREEN` | `20` | Oracles reporting at/above this = healthy (no alert) |
 | `QUORUM_YELLOW` | `12` | Below green but at/above this = "getting thin" warning |
 
-The quorum minimum (`oracle_consensus_required`, currently 7) comes from the chain itself via `getdigidollardeploymentinfo` — it's not configurable. Below that threshold, DigiDollar signing halts regardless of your config settings.
+### Quorum alert bands
+
+| Active oracles | Status | Alert |
+|----------------|--------|-------|
+| 🟢 20+ | Comfortable | No alert |
+| 🟡 12–19 | Getting thin | Yellow warning |
+| 🔴 7–11 | At quorum edge | Red alert |
+| 💀 Below 7 | DD signing halted | Critical alert |
+
+`QUORUM_GREEN` (20) and `QUORUM_YELLOW` (12) are configurable in your config file. The quorum minimum (`oracle_consensus_required`, currently 7) comes from the chain itself via `getdigidollardeploymentinfo` — it's not configurable. Below that threshold, DigiDollar signing halts regardless of your config settings.
 
 ### RPC field-name notes (RC44)
 
