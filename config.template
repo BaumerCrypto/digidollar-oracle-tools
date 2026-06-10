@@ -22,24 +22,28 @@ ORACLE_NAME="my-oracle"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
-# ---- Alert Thresholds — Basic Health ----
+# ---- Alert Thresholds ----
 MIN_PEERS=3             # Minimum peer count before alerting
 MIN_DISK_GB=5           # Minimum free disk space (GB) before alerting
 STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from RPC
 MEM_THRESHOLD=90        # Memory usage % above which to alert
 MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 
-# ---- Alert Thresholds — Quorum Margin (v2.0) ----
-# These define the alert bands for network-wide oracle liveness.
-# The actual quorum minimum (oracle_consensus_required) comes from the chain
-# via getdigidollardeploymentinfo — not configured here.
-#
-# Alert logic:
-#   >= QUORUM_GREEN ................. Green — comfortable, no alerts
-#   >= QUORUM_YELLOW (< green) ...... Yellow — getting thin, warning alert
-#   >= consensus_required (< yellow)  Red — at quorum edge, red alert
-#   < consensus_required ............ CRITICAL — DD signing may halt
-#
-# Adjust these if the roster size changes. Current roster: 35 slots.
-QUORUM_GREEN=20         # At or above = comfortable
-QUORUM_YELLOW=12        # At or above (but below green) = getting thin
+# ---- Quorum Alert Bands (v2.0) ----
+# Band thresholds for network-wide oracle liveness.
+# The on-chain minimum (oracle_consensus_required) comes from the chain
+# via getdigidollardeploymentinfo — not configurable here.
+QUORUM_GREEN=20         # At or above = comfortable (no alerts)
+QUORUM_YELLOW=12        # At or above but below green = "getting thin"
+
+# ---- Anti-Flap (v2.1) ----
+# Cooldown: minimum minutes between quorum RECOVERY alerts.
+# Escalation (getting worse) always fires immediately.
+# Set to 0 to disable (v2.0 behavior = alert every state change).
+QUORUM_COOLDOWN=15
+
+# Hysteresis: recovery requires exceeding the threshold by this buffer.
+# Example: GREEN=20, HYSTERESIS=3 → must hit 23 to recover to green.
+# Prevents rapid green/yellow flapping when count hovers near boundary.
+# Set to 0 to disable (v2.0 behavior = recover at exact threshold).
+QUORUM_HYSTERESIS=3
