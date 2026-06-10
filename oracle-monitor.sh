@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.0
+# Version: 2.1
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -30,6 +30,11 @@
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.1 — Anti-flap: cooldown timer + hysteresis buffer for quorum
+#          alerts. Escalation (worse) fires immediately; recovery
+#          (better) is throttled. Single quorum_state file replaces
+#          three separate state files. Configurable via
+#          QUORUM_COOLDOWN and QUORUM_HYSTERESIS in config.
 #   v2.0 — Quorum margin tracking via getdigidollardeploymentinfo +
 #          getoracles true. Configurable alert thresholds. MuSig2
 #          session health in summary. (closes #6)
@@ -86,6 +91,19 @@ MAX_CHAIN_BEHIND=10
 # Below consensus_required = CRITICAL — DD bundle signing may halt
 QUORUM_GREEN=20
 QUORUM_YELLOW=12
+
+# Anti-flap — quorum alert throttling (v2.1)
+# QUORUM_COOLDOWN: minimum minutes between quorum recovery alerts.
+#   Escalation (getting worse) ALWAYS fires immediately regardless.
+#   Only recovery (getting better) is throttled by this timer.
+#   Set to 0 to disable cooldown (v2.0 behavior).
+QUORUM_COOLDOWN=15
+
+# QUORUM_HYSTERESIS: buffer above threshold required for recovery.
+#   Prevents oscillation when the count hovers right at a boundary.
+#   Example: GREEN=20, HYSTERESIS=3 → recovery to green needs 23+.
+#   Set to 0 to disable hysteresis (v2.0 behavior).
+QUORUM_HYSTERESIS=3
 
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
@@ -428,6 +446,19 @@ check_ntp() {
     fi
 }
 
+# --- Quorum state machine helpers (v2.1) ---
+# Maps quorum band names to numeric severity for comparison.
+# Higher number = worse condition.
+band_severity() {
+    case "$1" in
+        green)    echo 0 ;;
+        yellow)   echo 1 ;;
+        red)      echo 2 ;;
+        critical) echo 3 ;;
+        *)        echo 0 ;;
+    esac
+}
+
 # --- Check 11: Quorum margin tracking (v2.0, closes #6) ---
 # Counts how many oracles are actively reporting prices across the network.
 # Compares against the on-chain quorum threshold from getdigidollardeploymentinfo.
@@ -452,6 +483,9 @@ check_ntp() {
 #   digibyte-cli -testnet getoracles true | jq '.[0]'
 #
 check_quorum() {
+    # --- Migration: clean up v2.0 state files (runs once, harmless after) ---
+    rm -f "$STATE_DIR/quorum_yellow" "$STATE_DIR/quorum_red" "$STATE_DIR/quorum_critical"
+
     # --- Step 1: Get deployment info (quorum threshold + MuSig2 session) ---
     local deploy_info
     deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
@@ -512,59 +546,140 @@ check_quorum() {
         WARNINGS=$((WARNINGS + 1))
     fi
 
-    # --- Step 3: Alert based on quorum margin ---
+    # --- Step 3: Determine raw quorum band ---
+    local raw_band
     if [ "$reporting" -lt "$consensus_required" ]; then
-        # CRITICAL — below quorum threshold, DD bundle signing may halt
-        if should_alert "quorum_critical"; then
-            alert_red "🔴 QUORUM LOST" "Only $reporting/$total_slots oracles reporting. Need $consensus_required for consensus. DigiDollar signing may be halted!"
-        fi
-        DETAILS+="🔴 Quorum: $reporting/$total_slots reporting (need $consensus_required) — CRITICAL\n"
-        DETAILS+="   MuSig2: $musig_detail\n"
-        ISSUES=$((ISSUES + 1))
-
+        raw_band="critical"
     elif [ "$reporting" -lt "$QUORUM_YELLOW" ]; then
-        # RED — above quorum but uncomfortably thin
-        if should_alert "quorum_red"; then
-            alert_red "🔴 Quorum At Edge" "Only $reporting/$total_slots oracles reporting (need $consensus_required). Network at risk if more drop."
-        fi
-        # Clear critical if recovering upward
-        if clear_alert "quorum_critical"; then
-            alert_green "✅ Quorum Recovering" "Quorum restored: $reporting/$total_slots oracles reporting (need $consensus_required)."
-        fi
-        DETAILS+="🔴 Quorum: $reporting/$total_slots reporting (need $consensus_required) — at edge\n"
-        DETAILS+="   MuSig2: $musig_detail\n"
-        ISSUES=$((ISSUES + 1))
-
+        raw_band="red"
     elif [ "$reporting" -lt "$QUORUM_GREEN" ]; then
-        # YELLOW — above red threshold but below comfortable
-        if should_alert "quorum_yellow"; then
-            alert_yellow "⚠️ Quorum Getting Thin" "$reporting/$total_slots oracles reporting (need $consensus_required). Comfortable is ${QUORUM_GREEN}+."
-        fi
-        # Clear worse states if recovering upward
-        if clear_alert "quorum_critical"; then
-            alert_green "✅ Quorum Recovering" "Quorum restored: $reporting/$total_slots reporting."
-        fi
-        if clear_alert "quorum_red"; then
-            alert_green "✅ Quorum Margin Improving" "$reporting/$total_slots reporting — no longer at edge."
-        fi
-        DETAILS+="⚠️ Quorum: $reporting/$total_slots reporting (need $consensus_required) — getting thin\n"
-        DETAILS+="   MuSig2: $musig_detail\n"
-        WARNINGS=$((WARNINGS + 1))
-
+        raw_band="yellow"
     else
-        # GREEN — comfortable margin
-        if clear_alert "quorum_critical"; then
-            alert_green "✅ Quorum Restored" "Quorum fully recovered: $reporting/$total_slots reporting."
-        fi
-        if clear_alert "quorum_red"; then
-            alert_green "✅ Quorum Margin Recovered" "$reporting/$total_slots reporting — comfortable margin."
-        fi
-        if clear_alert "quorum_yellow"; then
-            alert_green "✅ Quorum Healthy" "$reporting/$total_slots reporting — back to comfortable."
-        fi
-        DETAILS+="✅ Quorum: $reporting/$total_slots reporting (need $consensus_required) — healthy\n"
-        DETAILS+="   MuSig2: $musig_detail\n"
+        raw_band="green"
     fi
+
+    # --- Step 4: Read previous state ---
+    local state_file="$STATE_DIR/quorum_state"
+    local prev_band="green" prev_time=0
+    if [ -f "$state_file" ] && [ "$DRY_RUN" != true ]; then
+        prev_band=$(awk '{print $1}' "$state_file" 2>/dev/null)
+        prev_time=$(awk '{print $2}' "$state_file" 2>/dev/null)
+        # Validate — default to green/0 if file is corrupt
+        case "$prev_band" in green|yellow|red|critical) ;; *) prev_band="green" ;; esac
+        [[ "$prev_time" =~ ^[0-9]+$ ]] || prev_time=0
+    fi
+
+    local raw_sev prev_sev now
+    raw_sev=$(band_severity "$raw_band")
+    prev_sev=$(band_severity "$prev_band")
+    now=$(date +%s)
+
+    # --- Step 5: Apply hysteresis to recovery ---
+    # When recovering (raw is better than previous), require the count
+    # to exceed the threshold by QUORUM_HYSTERESIS to actually transition.
+    # This creates a dead zone that absorbs oscillation at boundaries.
+    local effective_band="$raw_band"
+
+    if [ "$raw_sev" -lt "$prev_sev" ] && [ "${QUORUM_HYSTERESIS:-0}" -gt 0 ] && [ "$DRY_RUN" != true ]; then
+        local green_recover=$(( QUORUM_GREEN + QUORUM_HYSTERESIS ))
+        local yellow_recover=$(( QUORUM_YELLOW + QUORUM_HYSTERESIS ))
+        local red_recover=$(( consensus_required + QUORUM_HYSTERESIS ))
+
+        # Check if count clears the hysteresis-adjusted recovery threshold
+        # Work from the worst state upward — stop at the first band we can't clear
+        if [ "$prev_band" = "critical" ] && [ "$reporting" -lt "$red_recover" ]; then
+            effective_band="critical"
+        elif [ "$prev_band" = "red" ] && [ "$reporting" -lt "$yellow_recover" ]; then
+            effective_band="red"
+        elif [ "$prev_band" = "yellow" ] && [ "$reporting" -lt "$green_recover" ]; then
+            effective_band="yellow"
+        fi
+        # Otherwise effective_band stays at raw_band (full recovery)
+    fi
+
+    local eff_sev
+    eff_sev=$(band_severity "$effective_band")
+
+    # --- Step 6: Decide whether to notify ---
+    local should_notify=false update_state=false
+
+    if [ "$DRY_RUN" = true ]; then
+        # Dry-run: always "notify" (prints to terminal), never update state
+        should_notify=true
+    elif [ "$effective_band" != "$prev_band" ]; then
+        if [ "$eff_sev" -gt "$prev_sev" ]; then
+            # ESCALATION — always notify immediately, no cooldown
+            should_notify=true
+            update_state=true
+        else
+            # RECOVERY — check cooldown timer
+            local elapsed=$(( now - prev_time ))
+            local cooldown_secs=$(( ${QUORUM_COOLDOWN:-15} * 60 ))
+
+            if [ "${QUORUM_COOLDOWN:-15}" -le 0 ] || [ "$prev_time" -eq 0 ] || [ "$elapsed" -ge "$cooldown_secs" ]; then
+                should_notify=true
+                update_state=true
+            fi
+            # If in cooldown: don't notify, don't update state.
+            # Keeps "last notified" band so system doesn't silently oscillate.
+        fi
+    fi
+
+    # --- Step 7: Fire alerts ---
+    if [ "$should_notify" = true ] && [ "$effective_band" != "$prev_band" ]; then
+        if [ "$eff_sev" -gt "$prev_sev" ]; then
+            # Escalation alerts (getting worse)
+            case "$effective_band" in
+                critical)
+                    alert_red "💀 QUORUM LOST" "Only $reporting/$total_slots oracles reporting. Need $consensus_required for consensus. DigiDollar signing may be halted!"
+                    ;;
+                red)
+                    alert_red "🔴 Quorum At Edge" "Only $reporting/$total_slots oracles reporting (need $consensus_required). Network at risk if more drop."
+                    ;;
+                yellow)
+                    alert_yellow "⚠️ Quorum Getting Thin" "$reporting/$total_slots oracles reporting (need $consensus_required). Comfortable is ${QUORUM_GREEN}+."
+                    ;;
+            esac
+        else
+            # Recovery alerts (getting better)
+            case "$effective_band" in
+                green)
+                    alert_green "✅ Quorum Healthy" "$reporting/$total_slots reporting — comfortable margin."
+                    ;;
+                yellow)
+                    alert_green "✅ Quorum Margin Improving" "$reporting/$total_slots reporting — no longer at edge."
+                    ;;
+                red)
+                    alert_green "✅ Quorum Recovering" "Up to $reporting/$total_slots reporting (need $consensus_required). Still at edge, but improving."
+                    ;;
+            esac
+        fi
+    fi
+
+    # --- Step 8: Update state file ---
+    if [ "$update_state" = true ]; then
+        echo "$effective_band $now" > "$state_file"
+    fi
+
+    # --- Step 9: Update DETAILS for summary ---
+    case "$effective_band" in
+        critical)
+            DETAILS+="💀 Quorum: $reporting/$total_slots reporting (need $consensus_required) — CRITICAL\n"
+            ISSUES=$((ISSUES + 1))
+            ;;
+        red)
+            DETAILS+="🔴 Quorum: $reporting/$total_slots reporting (need $consensus_required) — at edge\n"
+            ISSUES=$((ISSUES + 1))
+            ;;
+        yellow)
+            DETAILS+="⚠️ Quorum: $reporting/$total_slots reporting (need $consensus_required) — getting thin\n"
+            WARNINGS=$((WARNINGS + 1))
+            ;;
+        green)
+            DETAILS+="✅ Quorum: $reporting/$total_slots reporting (need $consensus_required) — healthy\n"
+            ;;
+    esac
+    DETAILS+="   MuSig2: $musig_detail\n"
 }
 
 # ============================================================================
