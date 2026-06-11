@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.1.1
+# Version: 2.2
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -30,6 +30,11 @@
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.2 — Switch quorum counting from last_price_usd (volatile —
+#          resets during MuSig2 round transitions) to heartbeat_status
+#          ("fresh" = online within 30 min). Matches the dashboard's
+#          "Online Heartbeats" metric. Dramatically reduces false
+#          alert volume during normal round cycling.
 #   v2.1.1 — Fix: hysteresis now evaluates recovery band directly
 #            against thresholds instead of cascading from prev_band
 #            (22/35 from critical now lands on yellow, not green).
@@ -540,14 +545,16 @@ check_quorum() {
     local roster_count reporting
     roster_count=$(echo "$oracles" | jq 'length' 2>/dev/null)
 
-    # Count oracles with a non-null, non-zero last_price_usd as "reporting"
-    # This filters out oracles that are in the roster but not online/producing prices
-    reporting=$(echo "$oracles" | jq '[.[] | select(.last_price_usd != null and (.last_price_usd | tonumber) > 0)] | length' 2>/dev/null)
+    # Count oracles with fresh heartbeats as "reporting" (v2.2)
+    # heartbeat_status "fresh" = online + signed heartbeat within 30 min.
+    # This matches the dashboard's "Online Heartbeats" count and is stable
+    # across MuSig2 round transitions (unlike last_price_usd which resets).
+    reporting=$(echo "$oracles" | jq '[.[] | select(.heartbeat_status == "fresh")] | length' 2>/dev/null)
 
     # Fallback: if jq filter fails (field name mismatch), use roster count
     if [ -z "$reporting" ] || [ "$reporting" = "null" ]; then
         reporting="$roster_count"
-        DETAILS+="⚠️ Quorum: could not count reporting oracles (field name mismatch?) — using roster count\n"
+        DETAILS+="⚠️ Quorum: could not count reporting oracles (heartbeat_status field missing?) — using roster count\n"
         WARNINGS=$((WARNINGS + 1))
     fi
 

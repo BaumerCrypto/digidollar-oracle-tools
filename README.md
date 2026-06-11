@@ -10,7 +10,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.1.1 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.2 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, and anti-flap settings (cooldown + hysteresis). Script works without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
@@ -37,7 +37,7 @@ More tools will be added as the DigiDollar testnet matures toward mainnet activa
 - `digibyted.service` and oracle process status via `listoracle` RPC
 - Binary version drift detection
 - NTP time synchronization
-- **Quorum margin tracking** — counts active oracles via `getoracles true`, compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries (v2.1)
+- **Quorum margin tracking** — counts online oracles via `getoracles true` using `heartbeat_status` (stable across MuSig2 round transitions, matches dashboard's "Online Heartbeats" metric), compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries (v2.2)
 
 ### What it sends
 
@@ -185,7 +185,7 @@ If you adapt this for a different release, double-check these field names — th
 | `listoracle` | `price_usd` *(not `last_price_usd`)* |
 | `getoracleprice` | `price_usd`, `is_stale`, `status`, `oracle_count` |
 | `getdigidollardeploymentinfo` | `oracle_consensus_required`, `oracle_total_slots`, `musig2_session.state`, `musig2_session.epoch`, `musig2_session.nonce_count`, `musig2_session.partial_sig_count` |
-| `getoracles true` | `last_price_usd`, `status` |
+| `getoracles true` | `last_price_usd`, `status`, `heartbeat_status` *(v2.2: "fresh" = online within 30 min)*, `heartbeat_age_seconds`, `heartbeat_timestamp` |
 
 ---
 
@@ -197,7 +197,7 @@ If you adapt this for a different release, double-check these field names — th
 | DigiByte Core | v9.26.0-rc44 |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.1.1 |
+| oracle-monitor.sh | v2.2 |
 
 If you're running a different release and something breaks, please open an issue.
 
