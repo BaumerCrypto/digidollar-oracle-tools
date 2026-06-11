@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.1
+# Version: 2.1.1
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -30,6 +30,11 @@
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.1.1 — Fix: hysteresis now evaluates recovery band directly
+#            against thresholds instead of cascading from prev_band
+#            (22/35 from critical now lands on yellow, not green).
+#            Default QUORUM_COOLDOWN raised 15→30 to match ~20-min
+#            oracle oscillation cycle during testnet bootstrapping.
 #   v2.1 — Anti-flap: cooldown timer + hysteresis buffer for quorum
 #          alerts. Escalation (worse) fires immediately; recovery
 #          (better) is throttled. Single quorum_state file replaces
@@ -97,7 +102,7 @@ QUORUM_YELLOW=12
 #   Escalation (getting worse) ALWAYS fires immediately regardless.
 #   Only recovery (getting better) is throttled by this timer.
 #   Set to 0 to disable cooldown (v2.0 behavior).
-QUORUM_COOLDOWN=15
+QUORUM_COOLDOWN=30
 
 # QUORUM_HYSTERESIS: buffer above threshold required for recovery.
 #   Prevents oscillation when the count hovers right at a boundary.
@@ -585,16 +590,18 @@ check_quorum() {
         local yellow_recover=$(( QUORUM_YELLOW + QUORUM_HYSTERESIS ))
         local red_recover=$(( consensus_required + QUORUM_HYSTERESIS ))
 
-        # Check if count clears the hysteresis-adjusted recovery threshold
-        # Work from the worst state upward — stop at the first band we can't clear
-        if [ "$prev_band" = "critical" ] && [ "$reporting" -lt "$red_recover" ]; then
-            effective_band="critical"
-        elif [ "$prev_band" = "red" ] && [ "$reporting" -lt "$yellow_recover" ]; then
-            effective_band="red"
-        elif [ "$prev_band" = "yellow" ] && [ "$reporting" -lt "$green_recover" ]; then
+        # Evaluate what band the count actually clears with hysteresis applied.
+        # Work from best to worst — first threshold met determines the band.
+        # This correctly handles multi-band recovery (e.g. critical→green at 25/35).
+        if [ "$reporting" -ge "$green_recover" ]; then
+            effective_band="green"
+        elif [ "$reporting" -ge "$yellow_recover" ]; then
             effective_band="yellow"
+        elif [ "$reporting" -ge "$red_recover" ]; then
+            effective_band="red"
+        else
+            effective_band="critical"
         fi
-        # Otherwise effective_band stays at raw_band (full recovery)
     fi
 
     local eff_sev
@@ -614,9 +621,9 @@ check_quorum() {
         else
             # RECOVERY — check cooldown timer
             local elapsed=$(( now - prev_time ))
-            local cooldown_secs=$(( ${QUORUM_COOLDOWN:-15} * 60 ))
+            local cooldown_secs=$(( ${QUORUM_COOLDOWN:-30} * 60 ))
 
-            if [ "${QUORUM_COOLDOWN:-15}" -le 0 ] || [ "$prev_time" -eq 0 ] || [ "$elapsed" -ge "$cooldown_secs" ]; then
+            if [ "${QUORUM_COOLDOWN:-30}" -le 0 ] || [ "$prev_time" -eq 0 ] || [ "$elapsed" -ge "$cooldown_secs" ]; then
                 should_notify=true
                 update_state=true
             fi

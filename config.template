@@ -40,7 +40,7 @@ QUORUM_YELLOW=12        # At or above but below green = "getting thin"
 # Cooldown: minimum minutes between quorum RECOVERY alerts.
 # Escalation (getting worse) always fires immediately.
 # Set to 0 to disable (v2.0 behavior = alert every state change).
-QUORUM_COOLDOWN=15
+QUORUM_COOLDOWN=30
 
 # Hysteresis: recovery requires exceeding the threshold by this buffer.
 # Example: GREEN=20, HYSTERESIS=3 → must hit 23 to recover to green.
