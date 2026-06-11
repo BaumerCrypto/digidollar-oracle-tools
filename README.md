@@ -175,6 +175,12 @@ Two configurable anti-flap features:
 
 Both can be set to `0` to disable (reverts to v2.0 behavior).
 
+### Heartbeat-based counting (v2.2)
+
+Prior to v2.2, the monitor counted oracles with `last_price_usd > 0` from `getoracles true`. This metric is volatile — it resets during MuSig2 round transitions (~every 10 minutes), causing the count to temporarily drop to 3–9 even when 24 oracles are online. This triggered false escalation alerts.
+
+v2.2 counts oracles with `heartbeat_status == "fresh"` instead — a signed operator heartbeat that stays valid for 30 minutes. This matches the dashboard's "Online Heartbeats" metric and remains stable across round transitions.
+
 ### RPC field-name notes (RC44)
 
 If you adapt this for a different release, double-check these field names — they have changed between RCs:
