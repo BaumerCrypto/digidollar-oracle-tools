@@ -38,7 +38,7 @@
 #   getoracles true              — per-oracle heartbeat status (active/offline list)
 #   getoracleprice               — consensus price, status, oracle count
 #   getdigidollardeploymentinfo  — BIP9 status, quorum config, MuSig2 session
-#   getoraclesigners 10          — recent bundle signer participation
+#   getoraclesigners 50          — recent bundle signer participation
 #
 # CHANGELOG:
 #   v1.2 — Rename "Active" → "Fresh Heartbeats" to match dashboard language.
@@ -207,8 +207,8 @@ PRICE_OK=$?
 DEPLOY_JSON=$($CLI getdigidollardeploymentinfo 2>&1)
 DEPLOY_OK=$?
 
-# --- 4. getoraclesigners 10 — recent bundle signers ---
-SIGNERS_JSON=$($CLI getoraclesigners 10 2>&1)
+# --- 4. getoraclesigners 50 — recent bundle signers ---
+SIGNERS_JSON=$($CLI getoraclesigners 50 2>&1)
 SIGNERS_OK=$?
 
 # ============================================================================
