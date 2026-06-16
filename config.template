@@ -47,3 +47,18 @@ QUORUM_COOLDOWN=30
 # Prevents rapid green/yellow flapping when count hovers near boundary.
 # Set to 0 to disable (v2.0 behavior = recover at exact threshold).
 QUORUM_HYSTERESIS=3
+
+# ---- Gitter Bot — Matrix API (used by oracle-network-status.sh) ----
+# Bot account: @digidollar-oracle-bot:matrix.org (or your bot username)
+# See oracle-network-status.sh header for setup instructions.
+#
+# Generate token on VPS:
+#   curl -s -X POST "https://matrix.org/_matrix/client/v3/login" \
+#     -H "Content-Type: application/json" \
+#     -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"YOUR_BOT_USERNAME"},"password":"YOUR_PASSWORD"}' \
+#     | jq -r '.access_token'
+#
+# Get room ID from Element: Room Settings → Advanced → Internal room ID
+MATRIX_HOMESERVER="https://matrix.org"
+MATRIX_ACCESS_TOKEN="YOUR_MATRIX_ACCESS_TOKEN"
+MATRIX_ROOM_ID="YOUR_MATRIX_ROOM_ID"
