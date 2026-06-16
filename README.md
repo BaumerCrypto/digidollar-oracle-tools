@@ -11,7 +11,8 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | File | Purpose |
 |------|---------|
 | [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.2 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, and anti-flap settings (cooldown + hysteresis). Script works without it using built-in defaults. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.2 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/offline oracle list. Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide — SSH, UFW, Fail2Ban, kernel hardening, systemd. Step-by-step, based on my live oracle setup. |
@@ -65,7 +66,7 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.0-rc44** or later (uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
+- DigiByte Core **v9.26.0-rc44** or later (RC45 recommended — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
 - `jq` (for JSON parsing — install with `sudo apt install jq`)
 - `curl`
 - A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
@@ -181,7 +182,7 @@ Prior to v2.2, the monitor counted oracles with `last_price_usd > 0` from `getor
 
 v2.2 counts oracles with `heartbeat_status == "fresh"` instead — a signed operator heartbeat that stays valid for 30 minutes. This matches the dashboard's "Online Heartbeats" metric and remains stable across round transitions.
 
-### RPC field-name notes (RC44)
+### RPC field-name notes (RC44/RC45)
 
 If you adapt this for a different release, double-check these field names — they have changed between RCs:
 
@@ -191,7 +192,103 @@ If you adapt this for a different release, double-check these field names — th
 | `listoracle` | `price_usd` *(not `last_price_usd`)* |
 | `getoracleprice` | `price_usd`, `is_stale`, `status`, `oracle_count` |
 | `getdigidollardeploymentinfo` | `oracle_consensus_required`, `oracle_total_slots`, `musig2_session.state`, `musig2_session.epoch`, `musig2_session.nonce_count`, `musig2_session.partial_sig_count` |
-| `getoracles true` | `last_price_usd`, `status`, `heartbeat_status` *(v2.2: "fresh" = online within 30 min)*, `heartbeat_age_seconds`, `heartbeat_timestamp` |
+| `getoracles true` | `last_price_usd`, `status`, `heartbeat_status` *(v2.2: "fresh" = online within 30 min)*, `heartbeat_age_seconds`, `heartbeat_timestamp`, `software_version` *(used by oracle-network-status.sh)* |
+| `getoraclesigners` | `bundle_count`, `bundles[].height`, `bundles[].signer_count`, `bundles[].signer_ids` *(used by oracle-network-status.sh)* |
+
+**RC45 new RPCs** (not used by these scripts yet but available):
+| RPC | Purpose |
+|-----|---------|
+| `exportoracleprivkey` | Export oracle signing key from wallet (wallet-context, usable before activation) |
+| `importoracleprivkey` | Import oracle signing key into wallet (wallet-context, usable before activation) |
+
+---
+
+## `oracle-network-status.sh`
+
+Community-facing Gitter bot that posts oracle network health summaries to the [DigiDollar Gitter channel](https://app.gitter.im/#/room/#digidollar:gitter.im) every 12 hours. Unlike `oracle-monitor.sh` (which watches your own node and alerts you privately via Discord), this script monitors the entire oracle network and reports publicly.
+
+### What it reports
+
+- **Fresh Heartbeats** — active oracle count vs roster size, quorum health status (healthy / thin / critical / lost)
+- **Consensus price** — current DGB/USD price and oracle price feed status
+- **MuSig2 session** — current epoch, signing state, nonce and signature counts
+- **BIP9 activation** — deployment status and signaling bit
+- **Last bundle** — most recent on-chain price bundle block height and signer count
+- **Software versions** — dominant version among active operators (✅ current vs 🔄 outdated during upgrades)
+- **Stale oracles** (⚠️) — were running, went down (liveness concern)
+- **Not connected oracles** (❌) — never set up or lost oracle key on this testnet
+
+### Example output
+
+```
+🟢 Oracle Network Status — 2026-06-16 03:55 UTC
+
+Fresh Heartbeats: 29/35 (quorum healthy — threshold: 7)
+Consensus price: $0.00268 (status: active)
+MuSig2: epoch 475, complete, 7/7 nonces, 7/7 sigs
+BIP9: active (bit 23)
+Last bundle: block 19014, signed by 7 oracles
+Software: v9.26.0rc45-gabf5633876d1b78f008ca6b35cc9e891664b0609 — 27 operators
+
+⚠️ Stale (2):
+  — ID 15 DigiSwarm
+  — ID 23 ChozenOne43
+
+❌ Not connected (4):
+  — ID 28 DigiHash Mining Pool
+  — ID 29 medgboracle3452
+  — ID 31 Peer2Peer
+  — ID 34 Manu_DGB_oracle
+```
+
+### Data sources
+
+| RPC | What it provides |
+|-----|-----------------|
+| `getoracles true` | Per-oracle heartbeat status — active, stale, and offline lists |
+| `getoracleprice` | Consensus price, feed status, oracle count |
+| `getdigidollardeploymentinfo` | BIP9 activation, quorum config, MuSig2 session state |
+| `getoraclesigners 50` | Recent bundle signer participation (50-block window covers at least one full 40-block round) |
+
+### Requirements
+
+- Linux (tested on Ubuntu 24.04 LTS)
+- DigiByte Core **v9.26.0-rc44** or later
+- `jq`, `curl`
+- A [Matrix](https://matrix.org) bot account joined to `#digidollar:gitter.im`
+
+### Setup
+
+1. Create a Matrix bot account at [Element](https://app.element.io/#/register) (e.g. `@digidollar-oracle-bot:matrix.org`)
+2. Join `#digidollar:gitter.im` from the bot account
+3. Generate an access token on the VPS:
+```bash
+curl -s -X POST "https://matrix.org/_matrix/client/v3/login" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"YOUR_BOT_USERNAME"},"password":"YOUR_PASSWORD"}' \
+  | jq -r '.access_token'
+```
+4. Get the room ID (Element → Room Settings → Advanced → Internal room ID)
+5. Add to `~/.oracle-monitor/config`:
+```bash
+MATRIX_ACCESS_TOKEN="your_token_here"
+MATRIX_ROOM_ID="!your_room_id:gitter.im"
+```
+6. Test: `./oracle-network-status.sh --dry-run`
+7. Test: `./oracle-network-status.sh --test`
+8. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
+
+### Flags
+
+| Flag | What it does |
+|------|-------------|
+| *(none)* | Collect data and post to Gitter |
+| `--dry-run` | Collect data, print to terminal, skip Gitter post |
+| `--test` | Send a test message to Gitter to verify Matrix API |
+
+### Important: single-operator bot
+
+This script is designed for a **single designated community operator** to post to the shared DigiDollar Gitter channel. Running a second instance against the same channel will create duplicate posts. If you want to monitor your own oracle, use `oracle-monitor.sh` with a Discord webhook to your private channel.
 
 ---
 
@@ -200,10 +297,11 @@ If you adapt this for a different release, double-check these field names — th
 | Component | Version |
 |-----------|---------|
 | OS | Ubuntu 24.04 LTS |
-| DigiByte Core | v9.26.0-rc44 |
+| DigiByte Core | v9.26.0-rc45 (also compatible with rc44) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
 | oracle-monitor.sh | v2.2 |
+| oracle-network-status.sh | v1.2 |
 
 If you're running a different release and something breaks, please open an issue.
 
