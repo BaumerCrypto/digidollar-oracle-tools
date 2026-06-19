@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.2
+# Version: 1.3
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -25,14 +25,18 @@
 #   5. Add to ~/.oracle-monitor/config:
 #      MATRIX_ACCESS_TOKEN="your_token_here"
 #      MATRIX_ROOM_ID="!your_room_id:gitter.im"
-#   6. Test:  ./oracle-network-status.sh --dry-run
-#   7. Test:  ./oracle-network-status.sh --test
-#   8. Cron:  0 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+#   6. For @ mentions: populate ~/.oracle-monitor/oracle-roster.conf
+#      (see oracle-roster.template in the repo for format)
+#   7. Test:  ./oracle-network-status.sh --dry-run
+#   8. Test:  ./oracle-network-status.sh --test
+#   9. Test:  ./oracle-network-status.sh --test-mention
+#  10. Cron:  5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
 #
 # FLAGS:
-#   (none)     Collect data and post to Gitter
-#   --dry-run  Collect data, print to terminal, skip Gitter post
-#   --test     Send a test message to Gitter to verify Matrix API
+#   (none)          Collect data and post to Gitter
+#   --dry-run       Collect data, print to terminal, skip Gitter post
+#   --test          Send a test message to Gitter to verify Matrix API
+#   --test-mention  Send a test mention to verify notifications work
 #
 # DATA SOURCES (RPCs):
 #   getoracles true              — per-oracle heartbeat status (active/offline list)
@@ -40,7 +44,21 @@
 #   getdigidollardeploymentinfo  — BIP9 status, quorum config, MuSig2 session
 #   getoraclesigners 50          — recent bundle signer participation
 #
+# FILES:
+#   ~/.oracle-monitor/config             — shared config (CLI, webhook, Matrix token)
+#   ~/.oracle-monitor/oracle-roster.conf — oracle ID to Gitter handle mapping (VPS only)
+#   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
+#
 # CHANGELOG:
+#   v1.3 — @ mention support for stale/inactive operators. Roster mapping
+#          file (oracle-roster.conf) maps oracle IDs to Gitter Matrix IDs.
+#          Ping cap: 6 per outage (configurable via MENTION_MAX), resets
+#          when oracle returns fresh. Dual-slot dedup (Jared 0+28, LookInto
+#          7+20 get one ping not two). Matrix formatted_body with HTML
+#          mention pills for clean display names + m.mentions for proper
+#          notifications. New flag: --test-mention. Label rename: "Not
+#          connected" → "Inactive" (accurate — key/wallet issues, not
+#          absent operators).
 #   v1.2 — Rename "Active" → "Fresh Heartbeats" to match dashboard language.
 #          Add "Software" section: aggregates software_version by operator
 #          count and fresh heartbeats. Format nonces/sigs as X/X vs required.
@@ -79,11 +97,17 @@ MATRIX_ROOM_ID=""
 QUORUM_GREEN=20
 QUORUM_YELLOW=12
 
+# Mention settings
+MENTION_MAX=6
+
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
 # ============================================================================
 
 CONFIG_FILE="${HOME}/.oracle-monitor/config"
+MONITOR_DIR="${HOME}/.oracle-monitor"
+ROSTER_FILE="${MONITOR_DIR}/oracle-roster.conf"
+MENTION_STATE_FILE="${MONITOR_DIR}/mention_state"
 
 if [ -f "$CONFIG_FILE" ]; then
     # shellcheck source=/dev/null
@@ -92,6 +116,82 @@ fi
 
 # Runtime flag
 DRY_RUN=false
+
+# ============================================================================
+# MENTION HELPER FUNCTIONS
+# ============================================================================
+
+# Arrays for tracking mentions during this run
+declare -a ALL_MENTION_IDS=()
+declare -a ALL_MENTION_NAMES=()
+declare -a MENTIONED_HANDLES=()
+
+# Look up Gitter Matrix ID for an oracle slot
+# Roster file format: ID|@handle:server (one per line, # comments)
+get_gitter_handle() {
+    local oracle_id="$1"
+    if [ ! -f "$ROSTER_FILE" ]; then
+        return
+    fi
+    grep -v '^#' "$ROSTER_FILE" | grep -v '^$' | grep "^${oracle_id}|" | head -1 | cut -d'|' -f2
+}
+
+# Get current mention count for an oracle from state file
+get_mention_count() {
+    local oracle_id="$1"
+    if [ ! -f "$MENTION_STATE_FILE" ]; then
+        echo "0"
+        return
+    fi
+    local count
+    count=$(grep "^${oracle_id}|" "$MENTION_STATE_FILE" 2>/dev/null | head -1 | cut -d'|' -f2)
+    echo "${count:-0}"
+}
+
+# Update mention count for an oracle (increment by 1)
+increment_mention_count() {
+    local oracle_id="$1"
+    local old_count="$2"
+    local new_count=$((old_count + 1))
+    local timestamp
+    timestamp=$(date +%s)
+
+    # Ensure state file exists
+    touch "$MENTION_STATE_FILE" 2>/dev/null
+
+    # Remove old entry, append new
+    sed -i "/^${oracle_id}|/d" "$MENTION_STATE_FILE" 2>/dev/null
+    echo "${oracle_id}|${new_count}|${timestamp}" >> "$MENTION_STATE_FILE"
+}
+
+# Reset mention count for an oracle (called when oracle returns fresh)
+reset_mention_count() {
+    local oracle_id="$1"
+    if [ -f "$MENTION_STATE_FILE" ]; then
+        sed -i "/^${oracle_id}|/d" "$MENTION_STATE_FILE" 2>/dev/null
+    fi
+}
+
+# Check if a handle was already mentioned this run (dual-slot dedup)
+is_already_mentioned() {
+    local handle="$1"
+    local h
+    for h in "${MENTIONED_HANDLES[@]}"; do
+        if [ "$h" = "$handle" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Record a mention for this run
+record_mention() {
+    local handle="$1"
+    local display_name="$2"
+    MENTIONED_HANDLES+=("$handle")
+    ALL_MENTION_IDS+=("$handle")
+    ALL_MENTION_NAMES+=("$display_name")
+}
 
 # ============================================================================
 # FLAG PARSING
@@ -109,11 +209,13 @@ case "${1:-}" in
         fi
         echo "Sending test message to Gitter..."
         txn_id="test_$(date +%s)"
+        payload=$(jq -n --arg body "🟢 Oracle Network Monitor — test message ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
+            '{msgtype: "m.text", body: $body}')
         response=$(curl -s -w "\n%{http_code}" -X PUT \
             "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${txn_id}" \
             -H "Authorization: Bearer ${MATRIX_ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"msgtype\":\"m.text\",\"body\":\"🟢 Oracle Network Monitor — test message ($(date -u +'%Y-%m-%d %H:%M UTC'))\"}")
+            -d "$payload")
         http_code=$(echo "$response" | tail -1)
         body=$(echo "$response" | head -1)
         if [ "$http_code" = "200" ]; then
@@ -124,11 +226,53 @@ case "${1:-}" in
         fi
         exit 0
         ;;
+    --test-mention)
+        if [ -z "$MATRIX_ACCESS_TOKEN" ] || [ -z "$MATRIX_ROOM_ID" ]; then
+            echo "ERROR: MATRIX_ACCESS_TOKEN and MATRIX_ROOM_ID must be set in $CONFIG_FILE"
+            exit 1
+        fi
+        if [ ! -f "$ROSTER_FILE" ]; then
+            echo "ERROR: Roster file not found: $ROSTER_FILE"
+            echo "Create it with oracle ID to Gitter handle mappings."
+            exit 1
+        fi
+        # Look up slot 17 (digibyte-maxi) for the test mention
+        test_handle=$(get_gitter_handle 17)
+        if [ -z "$test_handle" ]; then
+            echo "ERROR: No handle found for oracle ID 17 in $ROSTER_FILE"
+            exit 1
+        fi
+        echo "Sending test mention to ${test_handle}..."
+        txn_id="testmention_$(date +%s)"
+        mention_array=$(echo "$test_handle" | jq -R . | jq -s .)
+        payload=$(jq -n \
+            --arg body "🟢 Bot account test — please ignore | ${test_handle} testing 12hr Oracle Monitor Bot @ mention feature!" \
+            --argjson mentions "$mention_array" \
+            '{msgtype: "m.text", body: $body, "m.mentions": {user_ids: $mentions}}')
+        response=$(curl -s -w "\n%{http_code}" -X PUT \
+            "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${txn_id}" \
+            -H "Authorization: Bearer ${MATRIX_ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload")
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -1)
+        if [ "$http_code" = "200" ]; then
+            echo "✅ Mention sent. Check Gitter — did you get a notification?"
+            echo "   Handle used: $test_handle"
+            echo ""
+            echo "If NO notification: the Gitter bridge may need HTML mention pills."
+            echo "If YES: @ mentions are working. Ready for production."
+        else
+            echo "❌ Failed (HTTP $http_code): $body"
+            exit 1
+        fi
+        exit 0
+        ;;
     "")
         # Normal run
         ;;
     *)
-        echo "Usage: $0 [--dry-run | --test]"
+        echo "Usage: $0 [--dry-run | --test | --test-mention]"
         exit 1
         ;;
 esac
@@ -139,6 +283,8 @@ esac
 
 post_to_gitter() {
     local message="$1"
+    local html_message="${2:-}"
+    local mention_ids_csv="${3:-}"
 
     if [ "$DRY_RUN" = true ]; then
         echo ""
@@ -148,6 +294,10 @@ post_to_gitter() {
         echo ""
         echo "$message"
         echo ""
+        if [ -n "$mention_ids_csv" ]; then
+            echo "  m.mentions user_ids: $mention_ids_csv"
+            echo "  formatted_body: yes (HTML mention pills)"
+        fi
         echo "═══════════════════════════════════════════════"
         return 0
     fi
@@ -158,15 +308,38 @@ post_to_gitter() {
     fi
 
     local txn_id="status_$(date +%s%N)"
-    local escaped_message
-    escaped_message=$(echo "$message" | jq -Rs .)
+
+    # Build JSON payload with jq (handles escaping properly)
+    local payload
+    if [ -n "$html_message" ] && [ -n "$mention_ids_csv" ]; then
+        # Full payload: plain body + HTML formatted_body with pills + m.mentions
+        local mention_array
+        mention_array=$(echo "$mention_ids_csv" | tr ',' '\n' | jq -R . | jq -s .)
+
+        payload=$(jq -n \
+            --arg body "$message" \
+            --arg html "$html_message" \
+            --argjson mentions "$mention_array" \
+            '{msgtype: "m.text", body: $body, format: "org.matrix.custom.html", formatted_body: $html, "m.mentions": {user_ids: $mentions}}')
+    elif [ -n "$mention_ids_csv" ]; then
+        # Mentions but no HTML (fallback)
+        local mention_array
+        mention_array=$(echo "$mention_ids_csv" | tr ',' '\n' | jq -R . | jq -s .)
+
+        payload=$(jq -n \
+            --arg body "$message" \
+            --argjson mentions "$mention_array" \
+            '{msgtype: "m.text", body: $body, "m.mentions": {user_ids: $mentions}}')
+    else
+        payload=$(jq -n --arg body "$message" '{msgtype: "m.text", body: $body}')
+    fi
 
     local response
     response=$(curl -s -w "\n%{http_code}" -X PUT \
         "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${txn_id}" \
         -H "Authorization: Bearer ${MATRIX_ACCESS_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"msgtype\":\"m.text\",\"body\":${escaped_message}}")
+        -d "$payload")
 
     local http_code
     http_code=$(echo "$response" | tail -1)
@@ -220,15 +393,11 @@ TOTAL_ORACLES=$(echo "$ORACLES_JSON" | jq 'length')
 FRESH_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "fresh")] | length')
 STALE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "stale")] | length')
 
-# Not connected = everything that isn't fresh or stale (none, unknown, null, missing)
-NOT_CONNECTED_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale")] | length')
+# Inactive = everything that isn't fresh or stale (none, unknown, null, missing)
+INACTIVE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale")] | length')
 
-# Total offline = not fresh (stale + not connected)
+# Total offline = not fresh (stale + inactive)
 OFFLINE_COUNT=$((TOTAL_ORACLES - FRESH_COUNT))
-
-# Build separate lists for stale (liveness concern) vs not connected (never set up)
-STALE_LIST=$(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "stale") | "ID \(.oracle_id) (\(.name))"')
-NOT_CONNECTED_LIST=$(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale") | "ID \(.oracle_id) (\(.name))"')
 
 # --- Consensus price ---
 if [ $PRICE_OK -eq 0 ] && ! echo "$PRICE_JSON" | grep -q "error"; then
@@ -303,12 +472,24 @@ else
 fi
 
 # ============================================================================
+# RESET MENTION COUNTS FOR FRESH ORACLES
+# ============================================================================
+
+# Any oracle that's currently fresh should have its ping count cleared
+# (so if they go stale again later, they get a new round of pings)
+if [ -f "$MENTION_STATE_FILE" ]; then
+    while read -r fresh_id; do
+        reset_mention_count "$fresh_id"
+    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "fresh") | .oracle_id')
+fi
+
+# ============================================================================
 # FORMAT MESSAGE
 # ============================================================================
 
 TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M UTC')
 
-# Build the message
+# Build the message header
 MESSAGE="${STATUS_EMOJI} Oracle Network Status — ${TIMESTAMP}
 
 Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL} — threshold: ${QUORUM_REQUIRED})
@@ -338,22 +519,108 @@ Software:
 ${SOFTWARE_SECTION}"
 fi
 
-# Add stale list (liveness concern — were running, went down)
+# ============================================================================
+# BUILD STALE SECTION WITH @ MENTIONS
+# ============================================================================
+
 if [ "$STALE_COUNT" -gt 0 ]; then
-    STALE_FORMATTED=$(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "stale") | "  — ID \(.oracle_id) \(.name)"')
+    STALE_SECTION=""
+
+    while IFS='|' read -r oid oname; do
+        line="  — ID ${oid} ${oname}"
+
+        # Look up Gitter handle and apply mention logic
+        handle=$(get_gitter_handle "$oid")
+        if [ -n "$handle" ]; then
+            count=$(get_mention_count "$oid")
+            if [ "$count" -lt "$MENTION_MAX" ]; then
+                # Only add @ to message if this handle wasn't already mentioned (dual-slot dedup)
+                if ! is_already_mentioned "$handle"; then
+                    line="${line} ${handle}"
+                    record_mention "$handle" "$oname"
+                fi
+                # Always increment count even if deduped — keeps dual-slot counts in sync
+                if [ "$DRY_RUN" != true ]; then
+                    increment_mention_count "$oid" "$count"
+                fi
+            fi
+        fi
+
+        if [ -z "$STALE_SECTION" ]; then
+            STALE_SECTION="${line}"
+        else
+            STALE_SECTION="${STALE_SECTION}
+${line}"
+        fi
+    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "stale") | "\(.oracle_id)|\(.name)"')
+
     MESSAGE="${MESSAGE}
 
 ⚠️ Stale (${STALE_COUNT}):
-${STALE_FORMATTED}"
+${STALE_SECTION}"
 fi
 
-# Add not connected list (never set up on this testnet)
-if [ "$NOT_CONNECTED_COUNT" -gt 0 ]; then
-    NC_FORMATTED=$(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale") | "  — ID \(.oracle_id) \(.name)"')
+# ============================================================================
+# BUILD INACTIVE SECTION WITH @ MENTIONS
+# ============================================================================
+
+if [ "$INACTIVE_COUNT" -gt 0 ]; then
+    INACTIVE_SECTION=""
+
+    while IFS='|' read -r oid oname; do
+        line="  — ID ${oid} ${oname}"
+
+        # Look up Gitter handle and apply mention logic
+        handle=$(get_gitter_handle "$oid")
+        if [ -n "$handle" ]; then
+            count=$(get_mention_count "$oid")
+            if [ "$count" -lt "$MENTION_MAX" ]; then
+                if ! is_already_mentioned "$handle"; then
+                    line="${line} ${handle}"
+                    record_mention "$handle" "$oname"
+                fi
+                if [ "$DRY_RUN" != true ]; then
+                    increment_mention_count "$oid" "$count"
+                fi
+            fi
+        fi
+
+        if [ -z "$INACTIVE_SECTION" ]; then
+            INACTIVE_SECTION="${line}"
+        else
+            INACTIVE_SECTION="${INACTIVE_SECTION}
+${line}"
+        fi
+    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale") | "\(.oracle_id)|\(.name)"')
+
     MESSAGE="${MESSAGE}
 
-❌ Not connected (${NOT_CONNECTED_COUNT}):
-${NC_FORMATTED}"
+❌ Inactive (${INACTIVE_COUNT}):
+${INACTIVE_SECTION}"
+fi
+
+# ============================================================================
+# BUILD HTML MESSAGE WITH MENTION PILLS
+# ============================================================================
+
+# If there are mentions, build an HTML version with clickable mention pills.
+# The plain text MESSAGE (with raw handles) stays as the body fallback.
+# The HTML version uses <a href="matrix.to"> pills for clean display.
+MESSAGE_HTML=""
+
+if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
+    # Start with the plain text message, convert newlines to <br>
+    MESSAGE_HTML=$(printf '%s' "$MESSAGE" | sed 's/$/<br>/g')
+
+    # Replace each raw handle with an HTML mention pill
+    for i in "${!ALL_MENTION_IDS[@]}"; do
+        handle="${ALL_MENTION_IDS[$i]}"
+        display="${ALL_MENTION_NAMES[$i]}"
+        # Escape dots in handle for sed pattern matching
+        escaped_handle=$(printf '%s' "$handle" | sed 's/\./\\./g')
+        pill="<a href=\"https://matrix.to/#/${handle}\">@${display}</a>"
+        MESSAGE_HTML=$(printf '%s' "$MESSAGE_HTML" | sed "s|${escaped_handle}|${pill}|g")
+    done
 fi
 
 # ============================================================================
@@ -363,16 +630,30 @@ fi
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo "--- Parsed Data ---"
-    echo "Fresh: $FRESH_COUNT  Stale: $STALE_COUNT  Not connected: $NOT_CONNECTED_COUNT  Total: $TOTAL_ORACLES"
+    echo "Fresh: $FRESH_COUNT  Stale: $STALE_COUNT  Inactive: $INACTIVE_COUNT  Total: $TOTAL_ORACLES"
     echo "Quorum required: $QUORUM_REQUIRED  Status: $QUORUM_LABEL"
     echo "Price: \$$PRICE_USD ($PRICE_STATUS)  Stale: $PRICE_STALE"
     echo "BIP9: $BIP9_STATUS (bit $BIP9_BIT)"
     echo "MuSig2: epoch $MUSIG2_EPOCH, state=$MUSIG2_STATE, nonces=$MUSIG2_NONCES, sigs=$MUSIG2_SIGS"
     echo "Bundles in window: $BUNDLE_COUNT  Last: block $LAST_BUNDLE_HEIGHT ($LAST_BUNDLE_SIGNERS signers)"
-    if [ "$STALE_COUNT" -gt 0 ]; then echo "Stale ($STALE_COUNT): $STALE_LIST"; fi
-    if [ "$NOT_CONNECTED_COUNT" -gt 0 ]; then echo "Not connected ($NOT_CONNECTED_COUNT): $NOT_CONNECTED_LIST"; fi
+    echo ""
+    echo "--- Mention State ---"
+    echo "Roster file: $ROSTER_FILE ($([ -f "$ROSTER_FILE" ] && echo "found" || echo "NOT FOUND — mentions disabled"))"
+    echo "Mention state: $MENTION_STATE_FILE"
+    echo "Mention max: $MENTION_MAX pings per outage"
+    if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
+        echo "Would mention (${#ALL_MENTION_IDS[@]}): ${ALL_MENTION_IDS[*]}"
+    else
+        echo "No mentions this cycle."
+    fi
 fi
 
-post_to_gitter "$MESSAGE"
+# Build comma-separated mention IDs for m.mentions
+MENTION_CSV=""
+if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
+    MENTION_CSV=$(IFS=','; echo "${ALL_MENTION_IDS[*]}")
+fi
+
+post_to_gitter "$MESSAGE" "$MESSAGE_HTML" "$MENTION_CSV"
 
 exit 0

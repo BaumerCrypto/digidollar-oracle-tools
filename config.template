@@ -1,14 +1,16 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh at startup.
+# This file is sourced by oracle-monitor.sh and oracle-network-status.sh.
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #
-# After editing, verify with:  ./oracle-monitor.sh --dry-run
+# After editing, verify with:
+#   ./oracle-monitor.sh --dry-run
+#   ./oracle-network-status.sh --dry-run
 #
 # Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
 
-# ---- Discord Webhook (required for alerts) ----
+# ---- Discord Webhook (required for oracle-monitor.sh alerts) ----
 # Get from: Server Settings > Integrations > Webhooks > Copy URL
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
 
@@ -48,17 +50,20 @@ QUORUM_COOLDOWN=30
 # Set to 0 to disable (v2.0 behavior = recover at exact threshold).
 QUORUM_HYSTERESIS=3
 
-# ---- Gitter Bot — Matrix API (used by oracle-network-status.sh) ----
-# Bot account: @digidollar-oracle-bot:matrix.org (or your bot username)
+# ---- Matrix / Gitter Bot (oracle-network-status.sh) ----
+# Bot posts oracle network health summaries to Gitter via Matrix API.
 # See oracle-network-status.sh header for setup instructions.
 #
-# Generate token on VPS:
-#   curl -s -X POST "https://matrix.org/_matrix/client/v3/login" \
-#     -H "Content-Type: application/json" \
-#     -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"YOUR_BOT_USERNAME"},"password":"YOUR_PASSWORD"}' \
-#     | jq -r '.access_token'
-#
-# Get room ID from Element: Room Settings → Advanced → Internal room ID
+# CRITICAL: Do NOT log into the bot account from Element or any other
+# Matrix client — it invalidates this access token. Bot account is
+# accessed from VPS only.
 MATRIX_HOMESERVER="https://matrix.org"
-MATRIX_ACCESS_TOKEN="YOUR_MATRIX_ACCESS_TOKEN"
-MATRIX_ROOM_ID="YOUR_MATRIX_ROOM_ID"
+MATRIX_ACCESS_TOKEN=""
+MATRIX_ROOM_ID=""
+
+# ---- @ Mention Settings (oracle-network-status.sh v1.3+) ----
+# Stale/inactive operators are pinged via @ mention in Gitter.
+# Roster mapping: ~/.oracle-monitor/oracle-roster.conf (see oracle-roster.template)
+# After MENTION_MAX pings per outage, the @ is suppressed but the oracle
+# stays listed. Count resets when the oracle comes back fresh.
+MENTION_MAX=6

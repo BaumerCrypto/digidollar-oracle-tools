@@ -1,0 +1,24 @@
+# oracle-roster.template — Oracle ID to Gitter Matrix ID mapping
+#
+# Copy this to ~/.oracle-monitor/oracle-roster.conf and fill in real handles.
+# Used by oracle-network-status.sh v1.3+ for @ mention notifications.
+#
+# Format: ID|@matrix_handle:server
+#   - One entry per line
+#   - Lines starting with # are comments
+#   - Gitter users: @username:gitter.im
+#   - Matrix users: @username:matrix.org
+#
+# Dual-slot operators: if one person runs multiple oracles (e.g. slots 0+28),
+# list the SAME handle for both. The script deduplicates — they'll only get
+# one ping per run regardless of how many of their oracles are down.
+#
+# Where to find handles:
+#   - Gitter People list (sidebar) shows @handle:gitter.im
+#   - Matrix room member list via Element
+#   - Gitter JSON export: grep "sender" export.json | sort -u
+#
+# Example:
+# 0|@jared:gitter.im
+# 4|@shenger:gitter.im
+# 17|@digibyte-maxi:gitter.im

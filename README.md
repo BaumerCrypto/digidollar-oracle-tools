@@ -11,7 +11,8 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | File | Purpose |
 |------|---------|
 | [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.2 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.2 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/offline oracle list. Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.3 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
@@ -215,30 +216,28 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 - **BIP9 activation** — deployment status and signaling bit
 - **Last bundle** — most recent on-chain price bundle block height and signer count
 - **Software versions** — dominant version among active operators (✅ current vs 🔄 outdated during upgrades)
-- **Stale oracles** (⚠️) — were running, went down (liveness concern)
-- **Not connected oracles** (❌) — never set up or lost oracle key on this testnet
+- **Stale oracles** (⚠️) — were running, went down (liveness concern). Operators are @ mentioned in Gitter for up to 6 cycles (3 days), then suppressed but still listed.
+- **Inactive oracles** (❌) — have key or wallet issues on this testnet. Same @ mention behavior as stale.
 
 ### Example output
 
 ```
-🟢 Oracle Network Status — 2026-06-16 03:55 UTC
+🟢 Oracle Network Status — 2026-06-17 22:05 UTC
 
-Fresh Heartbeats: 29/35 (quorum healthy — threshold: 7)
-Consensus price: $0.00268 (status: active)
-MuSig2: epoch 475, complete, 7/7 nonces, 7/7 sigs
+Fresh Heartbeats: 31/35 (quorum healthy — threshold: 7)
+Consensus price: $0.002586 (status: active)
+MuSig2: epoch 688, complete, 7/7 nonces, 7/7 sigs
 BIP9: active (bit 23)
-Last bundle: block 19014, signed by 7 oracles
-Software: v9.26.0rc45-gabf5633876d1b78f008ca6b35cc9e891664b0609 — 27 operators
+Last bundle: block 27550, signed by 7 oracles
+Software: v9.26.0rc45-gabf5633876d1b78f008ca6b35cc9e891664b0609 — 29 operators
 
 ⚠️ Stale (2):
-  — ID 15 DigiSwarm
-  — ID 23 ChozenOne43
+  — ID 15 DigiSwarm @digiswarm:gitter.im
+  — ID 27 DennisPitallano @dennispitallano-5818ce18d73408ce4f32919d:gitter.im
 
-❌ Not connected (4):
-  — ID 28 DigiHash Mining Pool
-  — ID 29 medgboracle3452
-  — ID 31 Peer2Peer
-  — ID 34 Manu_DGB_oracle
+❌ Inactive (2):
+  — ID 31 Peer2Peer @digiroos:gitter.im
+  — ID 34 Manu_DGB_oracle @manudgb:gitter.im
 ```
 
 ### Data sources
@@ -274,9 +273,17 @@ curl -s -X POST "https://matrix.org/_matrix/client/v3/login" \
 MATRIX_ACCESS_TOKEN="your_token_here"
 MATRIX_ROOM_ID="!your_room_id:gitter.im"
 ```
-6. Test: `./oracle-network-status.sh --dry-run`
-7. Test: `./oracle-network-status.sh --test`
-8. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
+6. For @ mentions (optional): populate the roster mapping file:
+```bash
+wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-roster.template
+cp oracle-roster.template ~/.oracle-monitor/oracle-roster.conf
+nano ~/.oracle-monitor/oracle-roster.conf
+# Fill in oracle ID to Gitter Matrix ID mappings — see template for format
+```
+7. Test: `./oracle-network-status.sh --dry-run`
+8. Test: `./oracle-network-status.sh --test`
+9. Test mentions: `./oracle-network-status.sh --test-mention`
+10. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
 
 ### Flags
 
@@ -285,6 +292,7 @@ MATRIX_ROOM_ID="!your_room_id:gitter.im"
 | *(none)* | Collect data and post to Gitter |
 | `--dry-run` | Collect data, print to terminal, skip Gitter post |
 | `--test` | Send a test message to Gitter to verify Matrix API |
+| `--test-mention` | Send a test @ mention to verify Gitter notifications work |
 
 ### Important: single-operator bot
 
@@ -301,7 +309,7 @@ This script is designed for a **single designated community operator** to post t
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
 | oracle-monitor.sh | v2.2 |
-| oracle-network-status.sh | v1.2 |
+| oracle-network-status.sh | v1.3 |
 
 If you're running a different release and something breaks, please open an issue.
 
