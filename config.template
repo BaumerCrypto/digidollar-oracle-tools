@@ -50,6 +50,14 @@ QUORUM_COOLDOWN=30
 # Set to 0 to disable (v2.0 behavior = recover at exact threshold).
 QUORUM_HYSTERESIS=3
 
+# ---- Network Label (oracle-network-status.sh v1.4+) ----
+# Identifies which chain in the Gitter bot header.
+# Auto-detected from getblockchaininfo if not set:
+#   "test" → "Testnet", "main" → "Mainnet"
+# Override to show a specific label like "Testnet26".
+# Leave commented out for auto-detection.
+# NETWORK_LABEL="Testnet26"
+
 # ---- Matrix / Gitter Bot (oracle-network-status.sh) ----
 # Bot posts oracle network health summaries to Gitter via Matrix API.
 # See oracle-network-status.sh header for setup instructions.
@@ -67,3 +75,10 @@ MATRIX_ROOM_ID=""
 # After MENTION_MAX pings per outage, the @ is suppressed but the oracle
 # stays listed. Count resets when the oracle comes back fresh.
 MENTION_MAX=6
+
+# ---- Dual-Instance File Paths (oracle-network-status.sh v1.4+) ----
+# When running two instances via --config, state files auto-separate by
+# config directory. The roster file points to the shared default location
+# (same 35 operators on both networks). Override here if needed.
+# ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
+# MENTION_STATE_FILE="${HOME}/.oracle-monitor/mention_state"

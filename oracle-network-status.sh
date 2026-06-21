@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.3
+# Version: 1.4
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -33,12 +33,20 @@
 #  10. Cron:  5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
 #
 # FLAGS:
-#   (none)          Collect data and post to Gitter
-#   --dry-run       Collect data, print to terminal, skip Gitter post
-#   --test          Send a test message to Gitter to verify Matrix API
-#   --test-mention  Send a test mention to verify notifications work
+#   (none)              Collect data and post to Gitter
+#   --dry-run           Collect data, print to terminal, skip Gitter post
+#   --test              Send a test message to Gitter to verify Matrix API
+#   --test-mention      Send a test mention to verify notifications work
+#   --config /path      Use alternate config file (enables dual-instance)
+#
+# DUAL-INSTANCE EXAMPLE (testnet + mainnet on one VPS):
+#   # Testnet (default config)
+#   5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+#   # Mainnet (custom config)
+#   10 */12 * * * /home/dgboracle/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 #
 # DATA SOURCES (RPCs):
+#   getblockchaininfo            — chain identification (testnet/mainnet)
 #   getoracles true              — per-oracle heartbeat status (active/offline list)
 #   getoracleprice               — consensus price, status, oracle count
 #   getdigidollardeploymentinfo  — BIP9 status, quorum config, MuSig2 session
@@ -50,6 +58,16 @@
 #   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
 #
 # CHANGELOG:
+#   v1.4 — Network label in header: auto-detected from getblockchaininfo
+#          ("test" → Testnet, "main" → Mainnet), overridable via
+#          NETWORK_LABEL in config (e.g. "Testnet26"). Header now reads:
+#          🟢 Oracle Network Status — Testnet26 — 2026-06-21 10:05 UTC
+#          New --config /path flag for dual-instance support (Issue #23).
+#          Two cron entries + two config files = independent testnet and
+#          mainnet monitoring from one VPS. State files (mention_state)
+#          auto-separate per config directory. Roster file shared by
+#          default (same 35 operators on both networks).
+#          Requested by Aussie Epic and DanGB in Gitter.
 #   v1.3 — @ mention support for stale/inactive operators. Roster mapping
 #          file (oracle-roster.conf) maps oracle IDs to Gitter Matrix IDs.
 #          Ping cap: 6 per outage (configurable via MENTION_MAX), resets
@@ -82,7 +100,41 @@ for dep in jq curl; do
 done
 
 # ============================================================================
-# CONFIGURATION — DEFAULTS (override in ~/.oracle-monitor/config)
+# ARGUMENT PARSING (before config loading — --config must be extracted first)
+# ============================================================================
+
+ACTION_FLAG=""
+CONFIG_ARG=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            if [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
+                echo "ERROR: --config requires a path argument."
+                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+                exit 1
+            fi
+            CONFIG_ARG="$2"
+            shift 2
+            ;;
+        --dry-run|--test|--test-mention)
+            if [ -n "$ACTION_FLAG" ]; then
+                echo "ERROR: Cannot combine $ACTION_FLAG and $1."
+                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+                exit 1
+            fi
+            ACTION_FLAG="$1"
+            shift
+            ;;
+        *)
+            echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+            exit 1
+            ;;
+    esac
+done
+
+# ============================================================================
+# CONFIGURATION — DEFAULTS (override in config file)
 # ============================================================================
 
 # RPC settings (shared with oracle-monitor.sh)
@@ -100,15 +152,34 @@ QUORUM_YELLOW=12
 # Mention settings
 MENTION_MAX=6
 
+# Network label (auto-detected from getblockchaininfo if not set)
+# Override examples: "Testnet26", "Mainnet", "Testnet"
+NETWORK_LABEL=""
+
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
 # ============================================================================
 
-CONFIG_FILE="${HOME}/.oracle-monitor/config"
-MONITOR_DIR="${HOME}/.oracle-monitor"
-ROSTER_FILE="${MONITOR_DIR}/oracle-roster.conf"
+# Determine config file path
+if [ -n "$CONFIG_ARG" ]; then
+    if [ ! -f "$CONFIG_ARG" ]; then
+        echo "ERROR: Config file not found: $CONFIG_ARG"
+        exit 1
+    fi
+    CONFIG_FILE="$CONFIG_ARG"
+else
+    CONFIG_FILE="${HOME}/.oracle-monitor/config"
+fi
+
+# Derive state directory from config file location
+# (enables per-instance state when --config is used)
+MONITOR_DIR=$(dirname "$CONFIG_FILE")
+
+# Default file paths — roster shared across instances, state per-instance
+ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
 MENTION_STATE_FILE="${MONITOR_DIR}/mention_state"
 
+# Load config (can override CLI, MATRIX_*, NETWORK_LABEL, ROSTER_FILE, etc.)
 if [ -f "$CONFIG_FILE" ]; then
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
@@ -194,13 +265,14 @@ record_mention() {
 }
 
 # ============================================================================
-# FLAG PARSING
+# ACTION FLAG DISPATCH
 # ============================================================================
 
-case "${1:-}" in
+case "$ACTION_FLAG" in
     --dry-run)
         DRY_RUN=true
         echo "[DRY RUN] Will collect data and print — no Gitter post."
+        echo "[DRY RUN] Config: $CONFIG_FILE"
         ;;
     --test)
         if [ -z "$MATRIX_ACCESS_TOKEN" ] || [ -z "$MATRIX_ROOM_ID" ]; then
@@ -269,11 +341,7 @@ case "${1:-}" in
         exit 0
         ;;
     "")
-        # Normal run
-        ;;
-    *)
-        echo "Usage: $0 [--dry-run | --test | --test-mention]"
-        exit 1
+        # Normal run — continue
         ;;
 esac
 
@@ -360,12 +428,43 @@ post_to_gitter() {
 
 echo "[$(date -u)] Collecting oracle network data..."
 
+# --- 0. getblockchaininfo — network identification ---
+CHAIN_JSON=$($CLI getblockchaininfo 2>&1)
+if [ $? -eq 0 ] && ! echo "$CHAIN_JSON" | grep -q "error"; then
+    CHAIN_NAME=$(echo "$CHAIN_JSON" | jq -r '.chain // ""')
+else
+    CHAIN_NAME=""
+fi
+
+# Resolve network display label
+# Priority: NETWORK_LABEL from config > auto-detect from chain field
+if [ -n "$NETWORK_LABEL" ]; then
+    NETWORK_DISPLAY="$NETWORK_LABEL"
+elif [ "$CHAIN_NAME" = "test" ]; then
+    NETWORK_DISPLAY="Testnet"
+elif [ "$CHAIN_NAME" = "main" ]; then
+    NETWORK_DISPLAY="Mainnet"
+elif [ "$CHAIN_NAME" = "regtest" ]; then
+    NETWORK_DISPLAY="Regtest"
+elif [ -n "$CHAIN_NAME" ]; then
+    # Unknown chain value — capitalize first letter
+    NETWORK_DISPLAY=$(echo "$CHAIN_NAME" | sed 's/./\U&/')
+else
+    NETWORK_DISPLAY=""
+fi
+
 # --- 1. getoracles true — per-oracle heartbeat status ---
 ORACLES_JSON=$($CLI getoracles true 2>&1)
 if [ $? -ne 0 ] || echo "$ORACLES_JSON" | grep -q "error"; then
     echo "ERROR: getoracles true failed: $ORACLES_JSON"
     if [ "$DRY_RUN" != true ]; then
-        post_to_gitter "⚠️ Oracle Network Monitor — $(date -u +'%Y-%m-%d %H:%M UTC')
+        # Include network label in error message if available
+        if [ -n "$NETWORK_DISPLAY" ]; then
+            NET_ERR="${NETWORK_DISPLAY} — "
+        else
+            NET_ERR=""
+        fi
+        post_to_gitter "⚠️ Oracle Network Monitor — ${NET_ERR}$(date -u +'%Y-%m-%d %H:%M UTC')
 
 Status check failed: could not reach DigiByte daemon. Will retry next cycle."
     fi
@@ -489,8 +588,15 @@ fi
 
 TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M UTC')
 
+# Build network label segment for header
+if [ -n "$NETWORK_DISPLAY" ]; then
+    NET_SEGMENT="${NETWORK_DISPLAY} — "
+else
+    NET_SEGMENT=""
+fi
+
 # Build the message header
-MESSAGE="${STATUS_EMOJI} Oracle Network Status — ${TIMESTAMP}
+MESSAGE="${STATUS_EMOJI} Oracle Network Status — ${NET_SEGMENT}${TIMESTAMP}
 
 Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL} — threshold: ${QUORUM_REQUIRED})
 Consensus price: \$${PRICE_USD} (status: ${PRICE_STATUS})
@@ -630,6 +736,8 @@ fi
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo "--- Parsed Data ---"
+    echo "Network: ${NETWORK_DISPLAY:-"(none)"} (chain=${CHAIN_NAME:-"N/A"}, config=${NETWORK_LABEL:-"auto-detect"})"
+    echo "Config file: $CONFIG_FILE"
     echo "Fresh: $FRESH_COUNT  Stale: $STALE_COUNT  Inactive: $INACTIVE_COUNT  Total: $TOTAL_ORACLES"
     echo "Quorum required: $QUORUM_REQUIRED  Status: $QUORUM_LABEL"
     echo "Price: \$$PRICE_USD ($PRICE_STATUS)  Stale: $PRICE_STALE"
