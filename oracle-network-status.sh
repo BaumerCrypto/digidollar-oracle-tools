@@ -507,7 +507,7 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r '
   .[0:2] |
   to_entries |
   .[] |
-  (if .key == 0 then "  ✅ " else "  🔄 " end) +
+  "  ✅ " +
   (if (.value.version | length) > 25 then (.value.version[:22] + "...") else .value.version end) +
   " : \(.value.count) operators"
 ')
