@@ -10,10 +10,10 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.2 — 12 checks (daemon, oracle, chain sync, peers, consensus price, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.3 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.2 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, services, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.4 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. `--config /path` flag for dual-instance monitoring (testnet + mainnet). Bot account: `@digidollar-oracle-bot:matrix.org`. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide — SSH, UFW, Fail2Ban, kernel hardening, systemd. Step-by-step, based on my live oracle setup. |
@@ -67,7 +67,7 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.0-rc44** or later (RC45 recommended — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
+- DigiByte Core **v9.26.0-rc46** (also compatible with rc44 and rc45 — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
 - `jq` (for JSON parsing — install with `sudo apt install jq`)
 - `curl`
 - A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
@@ -151,41 +151,25 @@ The quorum minimum (`oracle_consensus_required`, currently 7) comes from the cha
 | Active oracles | Status | Escalation alert | Recovery alert |
 |----------------|--------|------------------|----------------|
 | 🟢 20+ | Comfortable | — | `✅ Quorum Healthy` |
-| 🟡 12–19 | Getting thin | `⚠️ Quorum Getting Thin` | `✅ Quorum Margin Improving` |
-| 🔴 7–11 | At quorum edge | `🔴 Quorum At Edge` | `✅ Quorum Recovering` |
-| 💀 Below 7 | DD signing halted | `💀 QUORUM LOST` | — |
+| 🟡 12–19 | Getting thin | `⚠️ Quorum Getting Thin` | `✅ Quorum Improved — Getting Thin → Healthy` |
+| 🔴 7–11 | At quorum edge | `🚨 Quorum at Edge` | `✅ Quorum Improved — At Edge → Getting Thin` |
+| 💀 Below 7 | DD signing halted | `🚨 QUORUM LOST` | `✅ Quorum Recovered — LOST → At Edge` |
 
-**Escalation** (dropping into a worse band) fires immediately — no delay. **Recovery** (climbing to a better band) is throttled by cooldown and requires clearing the hysteresis buffer:
+**Escalation** (count drops into a worse band) always fires immediately. **Recovery** (count rises into a better band) is throttled by `QUORUM_COOLDOWN` and requires the count to exceed the threshold by `QUORUM_HYSTERESIS` oracles. This prevents a single oracle bouncing around a boundary from generating a stream of alerts.
 
-| Recovery transition | Without hysteresis | With hysteresis=3 |
-|---------------------|--------------------|--------------------|
-| 💀→🔴 Critical → Red | 7+ oracles | 10+ oracles |
-| 🔴→🟡 Red → Yellow | 12+ oracles | 15+ oracles |
-| 🟡→🟢 Yellow → Green | 20+ oracles | 23+ oracles |
+### Hysteresis recovery thresholds (default QUORUM_HYSTERESIS=3)
 
-`QUORUM_GREEN` (20) and `QUORUM_YELLOW` (12) are configurable in your config file.
+| Recovery to | Threshold | Required count |
+|-------------|-----------|----------------|
+| 🟢 Healthy | `QUORUM_GREEN` (20) | 20 + 3 = **23** |
+| 🟡 Getting thin | `QUORUM_YELLOW` (12) | 12 + 3 = **15** |
+| 🔴 At edge | `oracle_consensus_required` (7) | 7 + 3 = **10** |
 
-### Anti-flap behavior (v2.1+)
+With `QUORUM_HYSTERESIS=0`, recovery fires at the exact threshold (v2.0 behavior).
 
-During network volatility (e.g. RC44 launch with operators upgrading), the active oracle count can oscillate rapidly around threshold boundaries. Without protection, this causes a flood of Discord alerts every 5 minutes as the count crosses back and forth.
+### RPC field reference
 
-Two configurable anti-flap features:
-
-**Cooldown timer** (`QUORUM_COOLDOWN`, default 30 min) — after any quorum alert fires, recovery alerts are suppressed for this many minutes. Escalation alerts (things getting worse) always fire immediately regardless of cooldown. Default tuned to testnet's ~20-minute oscillation cycle.
-
-**Hysteresis buffer** (`QUORUM_HYSTERESIS`, default 3) — recovery requires exceeding the threshold by this buffer. For example, with `QUORUM_GREEN=20` and `QUORUM_HYSTERESIS=3`, the count must reach 23 before recovering from yellow to green. This creates a dead zone that absorbs oscillation at boundaries. Hysteresis evaluates the count directly against thresholds — a multi-band recovery (e.g. 25/35 from critical) correctly lands on green, while a partial recovery (e.g. 22/35 from critical) correctly lands on yellow.
-
-Both can be set to `0` to disable (reverts to v2.0 behavior).
-
-### Heartbeat-based counting (v2.2)
-
-Prior to v2.2, the monitor counted oracles with `last_price_usd > 0` from `getoracles true`. This metric is volatile — it resets during MuSig2 round transitions (~every 10 minutes), causing the count to temporarily drop to 3–9 even when 24 oracles are online. This triggered false escalation alerts.
-
-v2.2 counts oracles with `heartbeat_status == "fresh"` instead — a signed operator heartbeat that stays valid for 30 minutes. This matches the dashboard's "Online Heartbeats" metric and remains stable across round transitions.
-
-### RPC field-name notes (RC44/RC45)
-
-If you adapt this for a different release, double-check these field names — they have changed between RCs:
+Both scripts parse specific fields from DigiByte Core RPCs. If a future RC renames a field, these scripts may need updates. Known field names as of RC46:
 
 | RPC | Field used |
 |-----|-----------|
@@ -194,6 +178,7 @@ If you adapt this for a different release, double-check these field names — th
 | `getoracleprice` | `price_usd`, `is_stale`, `status`, `oracle_count` |
 | `getdigidollardeploymentinfo` | `oracle_consensus_required`, `oracle_total_slots`, `musig2_session.state`, `musig2_session.epoch`, `musig2_session.nonce_count`, `musig2_session.partial_sig_count` |
 | `getoracles true` | `last_price_usd`, `status`, `heartbeat_status` *(v2.2: "fresh" = online within 30 min)*, `heartbeat_age_seconds`, `heartbeat_timestamp`, `software_version` *(used by oracle-network-status.sh)* |
+| `getblockchaininfo` | `chain` *(used by oracle-network-status.sh v1.4 for network label auto-detection)* |
 | `getoraclesigners` | `bundle_count`, `bundles[].height`, `bundles[].signer_count`, `bundles[].signer_ids` *(used by oracle-network-status.sh)* |
 
 **RC45 new RPCs** (not used by these scripts yet but available):
@@ -210,6 +195,7 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 
 ### What it reports
 
+- **Network label** — which chain the report covers (e.g. "Testnet26" or "Mainnet"), auto-detected from `getblockchaininfo` or set via `NETWORK_LABEL` in config (v1.4)
 - **Fresh Heartbeats** — active oracle count vs roster size, quorum health status (healthy / thin / critical / lost)
 - **Consensus price** — current DGB/USD price and oracle price feed status
 - **MuSig2 session** — current epoch, signing state, nonce and signature counts
@@ -222,28 +208,38 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 ### Example output
 
 ```
-🟢 Oracle Network Status — 2026-06-17 22:05 UTC
+🟢 Oracle Network Status — Testnet26 — 2026-06-21 23:25 UTC
 
-Fresh Heartbeats: 31/35 (quorum healthy — threshold: 7)
-Consensus price: $0.002586 (status: active)
-MuSig2: epoch 688, complete, 7/7 nonces, 7/7 sigs
+Fresh Heartbeats: 25/35 (quorum healthy — threshold: 7)
+Consensus price: $0.002718 (status: active)
+MuSig2: epoch 1160, complete, 7/7 nonces, 7/7 sigs
 BIP9: active (bit 23)
-Last bundle: block 27550, signed by 7 oracles
-Software: v9.26.0rc45-gabf5633876d1b78f008ca6b35cc9e891664b0609 — 29 operators
+Last bundle: block 46399, signed by 7 oracles
 
-⚠️ Stale (2):
-  — ID 15 DigiSwarm @digiswarm:gitter.im
-  — ID 27 DennisPitallano @dennispitallano-5818ce18d73408ce4f32919d:gitter.im
+Software:
+  ✅ v9.26.0rc46-g873d6d068... : 21 operators
+  ✅ v9.26.0rc46-873d6d068b9f : 2 operators
+
+⚠️ Stale (8):
+  — ID 5 Ycagel
+  — ID 11 hallvardo @hallvardo:gitter.im
+  — ID 13 DigiByteForce @digibyteforce:gitter.im
+  — ID 22 LivingTheLife
+  — ID 23 ChozenOne43 @chozenone43:gitter.im
+  — ID 27 DennisPitallano
+  — ID 30 DigibyteDaily @dailydgb:gitter.im
+  — ID 32 3DogsKanab @3dogskanab:gitter.im
 
 ❌ Inactive (2):
-  — ID 31 Peer2Peer @digiroos:gitter.im
-  — ID 34 Manu_DGB_oracle @manudgb:gitter.im
+  — ID 31 Peer2Peer
+  — ID 34 Manu_DGB_oracle
 ```
 
 ### Data sources
 
 | RPC | What it provides |
 |-----|-----------------|
+| `getblockchaininfo` | Chain identification — auto-detects "test" → Testnet, "main" → Mainnet for header label (v1.4) |
 | `getoracles true` | Per-oracle heartbeat status — active, stale, and offline lists |
 | `getoracleprice` | Consensus price, feed status, oracle count |
 | `getdigidollardeploymentinfo` | BIP9 activation, quorum config, MuSig2 session state |
@@ -252,7 +248,7 @@ Software: v9.26.0rc45-gabf5633876d1b78f008ca6b35cc9e891664b0609 — 29 operators
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.0-rc44** or later
+- DigiByte Core **v9.26.0-rc46** (also compatible with rc44 and rc45)
 - `jq`, `curl`
 - A [Matrix](https://matrix.org) bot account joined to `#digidollar:gitter.im`
 
@@ -273,17 +269,21 @@ curl -s -X POST "https://matrix.org/_matrix/client/v3/login" \
 MATRIX_ACCESS_TOKEN="your_token_here"
 MATRIX_ROOM_ID="!your_room_id:gitter.im"
 ```
-6. For @ mentions (optional): populate the roster mapping file:
+6. Set the network label (optional — auto-detected from chain if not set):
+```bash
+NETWORK_LABEL="Testnet26"
+```
+7. For @ mentions (optional): populate the roster mapping file:
 ```bash
 wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-roster.template
 cp oracle-roster.template ~/.oracle-monitor/oracle-roster.conf
 nano ~/.oracle-monitor/oracle-roster.conf
 # Fill in oracle ID to Gitter Matrix ID mappings — see template for format
 ```
-7. Test: `./oracle-network-status.sh --dry-run`
-8. Test: `./oracle-network-status.sh --test`
-9. Test mentions: `./oracle-network-status.sh --test-mention`
-10. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
+8. Test: `./oracle-network-status.sh --dry-run`
+9. Test: `./oracle-network-status.sh --test`
+10. Test mentions: `./oracle-network-status.sh --test-mention`
+11. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
 
 ### Flags
 
@@ -293,6 +293,29 @@ nano ~/.oracle-monitor/oracle-roster.conf
 | `--dry-run` | Collect data, print to terminal, skip Gitter post |
 | `--test` | Send a test message to Gitter to verify Matrix API |
 | `--test-mention` | Send a test @ mention to verify Gitter notifications work |
+| `--config /path` | Use alternate config file — enables dual-instance monitoring (v1.4) |
+
+### Dual-instance monitoring (testnet + mainnet)
+
+When mainnet launches, you can run two independent instances from the same script using `--config`:
+
+```cron
+# Testnet (default config)
+5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+# Mainnet (custom config)
+10 */12 * * * /home/dgboracle/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+```
+
+Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). Setup:
+
+```bash
+mkdir -p ~/.oracle-monitor-mainnet
+cp ~/.oracle-monitor/config ~/.oracle-monitor-mainnet/config
+# Edit mainnet config: CLI="digibyte-cli", NETWORK_LABEL="Mainnet"
+ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
+```
+
+`--config` combines with action flags in any order: `--config /path --dry-run` or `--dry-run --config /path`.
 
 ### Important: single-operator bot
 
@@ -305,11 +328,11 @@ This script is designed for a **single designated community operator** to post t
 | Component | Version |
 |-----------|---------|
 | OS | Ubuntu 24.04 LTS |
-| DigiByte Core | v9.26.0-rc45 (also compatible with rc44) |
+| DigiByte Core | v9.26.0-rc46 (also compatible with rc44 and rc45) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
 | oracle-monitor.sh | v2.2 |
-| oracle-network-status.sh | v1.3 |
+| oracle-network-status.sh | v1.4 |
 
 If you're running a different release and something breaks, please open an issue.
 
