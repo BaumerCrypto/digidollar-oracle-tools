@@ -20,11 +20,12 @@ What the monitor watches (all platforms): node process alive, oracle running and
 
 Works on Windows PowerShell 5.1 (preinstalled on every Windows 10/11) and PowerShell 7+. No dependencies to install — PowerShell parses JSON natively, so unlike the Linux script there's no jq requirement.
 
-**1. Download the files.** Save [`oracle-monitor.ps1`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.ps1) somewhere permanent, e.g. `C:\OracleMonitor\oracle-monitor.ps1`. Keep the file encoded as UTF-8 **with BOM** — it ships that way from the repo. If you re-save it in an editor that strips the BOM, Windows PowerShell 5.1 will misread the encoding and the emoji in your alerts turn to mojibake.
+**1. Download the files.** Save [`oracle-monitor.ps1`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.ps1) and [`config.template.ps1`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config.template.ps1) to the same folder, e.g. `C:\OracleMonitor\`. Keep the files encoded as UTF-8 **with BOM** — they ship that way from the repo. If you re-save them in an editor that strips the BOM, Windows PowerShell 5.1 will misread the encoding and the emoji in your alerts turn to mojibake.
 
 **2. Create your config.**
 
 ```powershell
+cd C:\OracleMonitor
 mkdir $env:USERPROFILE\.oracle-monitor
 copy config.template.ps1 $env:USERPROFILE\.oracle-monitor\config.ps1
 notepad $env:USERPROFILE\.oracle-monitor\config.ps1
@@ -87,9 +88,12 @@ Written for the stock `/bin/bash` 3.2 that ships with every Mac — no Homebrew 
 
 **1. Install jq** (one time): `brew install jq`
 
-**2. Download and prep the script.**
+**2. Download and prep the files.**
 
 ```bash
+cd ~
+curl -LO https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor-macos.sh
+curl -LO https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/config-macos.template
 chmod +x ~/oracle-monitor-macos.sh
 mkdir -p ~/.oracle-monitor
 cp config-macos.template ~/.oracle-monitor/config
