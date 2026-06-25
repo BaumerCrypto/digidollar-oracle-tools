@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.2
+# Version: 2.3
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -24,12 +24,20 @@
 #   --summary  Full status summary — always sends to Discord
 #   --dry-run  Runs all checks, prints to terminal, skips Discord, no state changes
 #   --test     Sends a test embed to Discord to verify webhook
+#   --config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CRON SCHEDULE:
 #   */5 = every 5 minutes for health checks (alerts only on problems)
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.3 — Add --config /path flag for dual-instance monitoring
+#          (Issue #23 pattern from oracle-network-status.sh v1.4).
+#          Two cron entries + two config files = independent testnet
+#          and mainnet monitoring from one VPS. State files auto-
+#          separate per config directory via dirname. Argument
+#          parsing restructured: while loop replaces positional
+#          case, handles --config + action flags in any order.
 #   v2.2 — Switch quorum counting from last_price_usd (volatile —
 #          resets during MuSig2 round transitions) to heartbeat_status
 #          ("fresh" = online within 30 min). Matches the dashboard's
@@ -70,6 +78,40 @@ if ! command -v jq &>/dev/null; then
 fi
 
 # ============================================================================
+# ARGUMENT PARSING (before config loading — --config must be extracted first)
+# ============================================================================
+
+ACTION_FLAG=""
+CONFIG_ARG=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            if [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
+                echo "ERROR: --config requires a path argument."
+                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test]"
+                exit 1
+            fi
+            CONFIG_ARG="$2"
+            shift 2
+            ;;
+        --dry-run|--summary|--test)
+            if [ -n "$ACTION_FLAG" ]; then
+                echo "ERROR: Cannot combine $ACTION_FLAG and $1."
+                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test]"
+                exit 1
+            fi
+            ACTION_FLAG="$1"
+            shift
+            ;;
+        *)
+            echo "Usage: $0 [--config /path] [--dry-run | --summary | --test]"
+            exit 1
+            ;;
+    esac
+done
+
+# ============================================================================
 # CONFIGURATION — DEFAULTS (override in ~/.oracle-monitor/config)
 # ============================================================================
 
@@ -78,8 +120,8 @@ fi
 DISCORD_WEBHOOK=""
 
 # Oracle settings
-ORACLE_ID=17
-ORACLE_NAME="digibyte-maxi"
+ORACLE_ID=0
+ORACLE_NAME="my-oracle"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
@@ -119,8 +161,20 @@ QUORUM_HYSTERESIS=3
 # LOAD EXTERNAL CONFIG (overrides defaults above)
 # ============================================================================
 
-STATE_DIR="${HOME}/.oracle-monitor"
-CONFIG_FILE="${STATE_DIR}/config"
+# Determine config file path
+if [ -n "$CONFIG_ARG" ]; then
+    if [ ! -f "$CONFIG_ARG" ]; then
+        echo "ERROR: Config file not found: $CONFIG_ARG"
+        exit 1
+    fi
+    CONFIG_FILE="$CONFIG_ARG"
+else
+    CONFIG_FILE="${HOME}/.oracle-monitor/config"
+fi
+
+# Derive state directory from config file location
+# (enables per-instance state when --config is used)
+STATE_DIR=$(dirname "$CONFIG_FILE")
 
 if [ -f "$CONFIG_FILE" ]; then
     # shellcheck source=/dev/null
@@ -777,7 +831,7 @@ run_checks() {
 # ENTRY POINT
 # ============================================================================
 
-case "${1:-}" in
+case "$ACTION_FLAG" in
     --summary)
         send_summary
         ;;
