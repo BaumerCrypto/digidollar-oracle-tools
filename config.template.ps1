@@ -1,0 +1,75 @@
+﻿# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
+#
+# This file is dot-sourced by oracle-monitor.ps1 at startup.
+# Edit values below to override the built-in defaults.
+# Lines starting with # are ignored.
+#
+# After editing, verify with:  .\oracle-monitor.ps1 -DryRun
+#
+# Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
+
+# ---- Discord Webhook (required for alerts) ----
+# Get from: Server Settings > Integrations > Webhooks > Copy URL
+$DISCORD_WEBHOOK = "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+
+# ---- Oracle Identity ----
+$ORACLE_ID   = 0
+$ORACLE_NAME = "my-oracle"
+
+# ---- RPC Settings ----
+# Full path to digibyte-cli.exe (or bare name if it's on your PATH).
+# Typical: "C:\Program Files\DigiByte\daemon\digibyte-cli.exe"
+$CLI_PATH = "C:\Program Files\DigiByte\daemon\digibyte-cli.exe"
+
+# Network arguments.
+# Testnet:  @("-testnet")        Mainnet:  @()
+$CLI_ARGS    = @("-testnet")
+$WALLET_FLAG = "-rpcwallet=oracle"
+
+# ---- Node Process ----
+# Process name WITHOUT .exe:
+#   "digibyted"    headless daemon (recommended for oracles)
+#   "digibyte-qt"  if you run the Qt wallet
+$DAEMON_PROCESS = "digibyted"
+
+# Optional: Windows service name if you run digibyted as a service
+# (e.g. wrapped with NSSM). Leave "" to skip.
+$SERVICE_NAME = ""
+
+# ---- Disk ----
+# Drive letter where your DigiByte datadir lives (default datadir is
+# %APPDATA%\DigiByte, which is normally drive C).
+$DISK_DRIVE = "C"
+
+# ---- Alert Thresholds ----
+$MIN_PEERS           = 3     # Minimum peer count before alerting
+$MIN_DISK_GB         = 5     # Minimum free disk space (GB) before alerting
+$STALE_PRICE_MINUTES = 30    # Reserved for future use — staleness currently from RPC
+$MEM_THRESHOLD       = 90    # Memory usage % above which to alert
+$MAX_CHAIN_BEHIND    = 10    # Blocks behind before alerting
+
+# ---- NTP Check ----
+# Clock offset is measured with one w32tm stripchart sample against this
+# server. Offsets beyond the max trigger a desync warning. Oracle bundle
+# timestamps are rejected past 3600s skew, so keep this tight.
+$NTP_SERVER             = "time.windows.com"
+$NTP_MAX_OFFSET_SECONDS = 1.0
+
+# ---- Quorum Alert Bands (v2.0) ----
+# Band thresholds for network-wide oracle liveness.
+# The on-chain minimum (oracle_consensus_required) comes from the chain
+# via getdigidollardeploymentinfo — not configurable here.
+$QUORUM_GREEN  = 20    # At or above = comfortable (no alerts)
+$QUORUM_YELLOW = 12    # At or above but below green = "getting thin"
+
+# ---- Anti-Flap (v2.1) ----
+# Cooldown: minimum minutes between quorum RECOVERY alerts.
+# Escalation (getting worse) always fires immediately.
+# Set to 0 to disable (v2.0 behavior = alert every state change).
+$QUORUM_COOLDOWN = 30
+
+# Hysteresis: recovery requires exceeding the threshold by this buffer.
+# Example: GREEN=20, HYSTERESIS=3 -> must hit 23 to recover to green.
+# Prevents rapid green/yellow flapping when count hovers near boundary.
+# Set to 0 to disable (v2.0 behavior = recover at exact threshold).
+$QUORUM_HYSTERESIS = 3
