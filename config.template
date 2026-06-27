@@ -1,12 +1,17 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh and oracle-network-status.sh.
+# This file is sourced by oracle-monitor.sh (v2.3+) and
+# oracle-network-status.sh (v1.4+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #
 # After editing, verify with:
 #   ./oracle-monitor.sh --dry-run
 #   ./oracle-network-status.sh --dry-run
+#
+# For dual-instance (e.g. testnet + mainnet on one VPS):
+#   ./oracle-monitor.sh --config /path/to/config --dry-run
+#   ./oracle-network-status.sh --config /path/to/config --dry-run
 #
 # Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
 
@@ -76,9 +81,36 @@ MATRIX_ROOM_ID=""
 # stays listed. Count resets when the oracle comes back fresh.
 MENTION_MAX=6
 
-# ---- Dual-Instance File Paths (oracle-network-status.sh v1.4+) ----
-# When running two instances via --config, state files auto-separate by
-# config directory. The roster file points to the shared default location
-# (same 35 operators on both networks). Override here if needed.
+# ---- Dual-Instance Monitoring (oracle-monitor.sh v2.3+ / oracle-network-status.sh v1.4+) ----
+# Both scripts support --config /path to run against a separate config file.
+# This lets you monitor testnet and mainnet (or PRE) from one VPS without
+# running two copies of the script.
+#
+# How it works:
+#   - Each instance reads its own config file (CLI path, webhook, thresholds)
+#   - State files (quorum_state, mention_state) auto-separate by config directory
+#   - The oracle roster is shared (same 35 operators on both networks) via symlink
+#
+# Setup example — adding a mainnet instance alongside testnet:
+#
+#   mkdir -p ~/.oracle-monitor-mainnet
+#   cp ~/.oracle-monitor/config ~/.oracle-monitor-mainnet/config
+#   ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
+#
+#   # Edit the mainnet config:
+#   #   CLI="digibyte-cli"                  (no -testnet flag)
+#   #   NETWORK_LABEL="Mainnet"             (shows in Gitter bot header)
+#   #   DISCORD_WEBHOOK="https://..."       (same or different webhook)
+#
+#   # Test:
+#   ./oracle-monitor.sh --config ~/.oracle-monitor-mainnet/config --dry-run
+#   ./oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --dry-run
+#
+#   # Cron (offset by 10 minutes to avoid RPC collision with testnet):
+#   10 */5 * * *  /home/dgboracle/oracle-monitor.sh --config /home/dgboracle/.oracle-monitor-mainnet/config 2>/dev/null
+#   10 */12 * * * /home/dgboracle/oracle-monitor.sh --config /home/dgboracle/.oracle-monitor-mainnet/config --summary 2>/dev/null
+#   10 */12 * * * /home/dgboracle/oracle-network-status.sh --config /home/dgboracle/.oracle-monitor-mainnet/config 2>/dev/null
+#
+# Override these if your roster or state files live somewhere else:
 # ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
 # MENTION_STATE_FILE="${HOME}/.oracle-monitor/mention_state"
