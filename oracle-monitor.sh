@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.3
+# Version: 2.4
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
@@ -31,6 +31,14 @@
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.4 — Add swap pressure detection (Check #12). Fires a yellow
+#          alert when swap usage exceeds SWAP_THRESHOLD_MB (default
+#          100 MB). On a properly configured box with swappiness=10,
+#          any meaningful swap usage signals real memory pressure —
+#          the exact condition that silently killed daemons in the
+#          PRE stale incident (Session 19). Companion to the OOM
+#          protection added to the hardening guide in v1.3.
+#          (fixes #26, suggested by shenger)
 #   v2.3 — Add --config /path flag for dual-instance monitoring
 #          (Issue #23 pattern from oracle-network-status.sh v1.4).
 #          Two cron entries + two config files = independent testnet
@@ -130,6 +138,7 @@ MIN_PEERS=3
 MIN_DISK_GB=5
 STALE_PRICE_MINUTES=30
 MEM_THRESHOLD=90
+SWAP_THRESHOLD_MB=100
 MAX_CHAIN_BEHIND=10
 
 # Thresholds — quorum margin (v2.0)
@@ -461,6 +470,32 @@ check_memory() {
     fi
 }
 
+# --- Check 12: Swap pressure (v2.4) ---
+check_swap() {
+    local swap_total_mb swap_used_mb
+    swap_total_mb=$(free -m | awk '/Swap:/ {print $2}')
+    swap_used_mb=$(free -m | awk '/Swap:/ {print $3}')
+
+    # No swap configured — skip silently in normal checks, note in summary
+    if [ "$swap_total_mb" -eq 0 ] 2>/dev/null; then
+        DETAILS+="ℹ️ Swap: not configured\n"
+        return
+    fi
+
+    if [ "$swap_used_mb" -gt "$SWAP_THRESHOLD_MB" ]; then
+        if should_alert "swap_pressure"; then
+            alert_yellow "⚠️ Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB. Memory pressure detected — check running processes."
+        fi
+        DETAILS+="⚠️ Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure!)\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        if clear_alert "swap_pressure"; then
+            alert_green "✅ Swap Pressure Cleared" "Swap usage back to ${swap_used_mb}MB of ${swap_total_mb}MB."
+        fi
+        DETAILS+="✅ Swap: ${swap_used_mb}MB / ${swap_total_mb}MB\n"
+    fi
+}
+
 # --- Check 8: Systemd service status ---
 check_services() {
     local dgb_status oracle_status
@@ -762,6 +797,7 @@ send_summary() {
     check_price
     check_disk
     check_memory
+    check_swap
     check_services
     check_version
     check_ntp
@@ -823,6 +859,7 @@ run_checks() {
     check_price
     check_disk
     check_memory
+    check_swap
     check_ntp
     check_quorum
 }
