@@ -38,6 +38,8 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 
 - [Over-Hardening Warnings](#over-hardening-warnings)
 - [Optional Extras](#optional-extras)
+  - [NTP Time Sync](#ntp-time-sync--verify-your-clock)
+  - [Resource Isolation and OOM Protection](#resource-isolation-and-oom-protection)
 - [Maintenance](#maintenance)
 
 ---
@@ -643,6 +645,147 @@ chronyc tracking
 
 If you're running [oracle-monitor.sh](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh), NTP is monitored automatically as Check #10 — it fires Discord alerts if sync drops.
 
+### Resource Isolation and OOM Protection
+
+> 🙏 *Suggested by shenger in Gitter — thanks for flagging this.*
+
+> ⚠️ **These limits target interactive/admin slices — NOT digibyted.** The oracle daemon runs in `system.slice` under systemd and is completely unaffected by the user-slice limits below. Do NOT create drop-in files for `digibyted.service` or apply `MemoryMax` to the oracle — that would starve it during IBD or reindex and kill your oracle. The whole point is to cap *everything else* so the oracle stays safe.
+
+If you run more than just the oracle on your VPS — SSH admin sessions, VS Code Server, shells, build jobs, language servers, or other tooling — memory spikes from those side workloads can push the whole host into memory pressure. The oracle and digibyted can be perfectly healthy, but interactive/admin processes trigger OOM kills, temporary unreachability, or the wrong process getting terminated. That is a hard failure to diagnose after the fact — same diagnostic problem as clock drift was before I added the NTP check.
+
+This is optional for oracle-only boxes. Recommended for anyone who actively works on the same machine.
+
+#### Check Current State First
+
+VPS providers ship images differently — some already have swap, some have `systemd-oomd` installed but disabled, some have neither. Check what you've got before changing anything:
+
+```bash
+swapon --show                                     # Existing swap? (blank = none)
+free -h                                            # Total RAM and what's available
+systemctl status systemd-oomd 2>/dev/null || echo "systemd-oomd: not installed"
+cat /proc/sys/vm/swappiness                        # Current swappiness (60 = default)
+```
+
+#### Add Swap (Safety Net)
+
+Swap gives the host breathing room during short memory spikes. It is **not** a replacement for RAM — with low swappiness (next step) it's only touched as a last resort. A 4 GB swap file is a good default for most VPS sizes:
+
+```bash
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+Verify:
+
+```bash
+swapon --show
+free -h
+```
+
+You should now see `/swapfile` listed as active with 0B used.
+
+#### Reduce Aggressive Swapping
+
+With swap present, keep swappiness low so the kernel only swaps when it actually needs to:
+
+```bash
+sudo tee /etc/sysctl.d/99-memory-tuning.conf > /dev/null <<'EOF'
+# DigiDollar Oracle — only swap as a last resort
+vm.swappiness = 10
+EOF
+
+sudo sysctl --system
+sysctl vm.swappiness
+```
+
+Expected: `vm.swappiness = 10`
+
+#### Install `systemd-oomd`
+
+The kernel OOM killer only reacts once things are already bad — and it picks the "biggest" process, which is often digibyted (the thing you most want to protect). `systemd-oomd` gives earlier userspace protection and can kill the right cgroup before the whole host becomes unstable:
+
+```bash
+sudo apt install systemd-oomd -y
+sudo systemctl enable --now systemd-oomd.service
+systemctl status systemd-oomd.service
+```
+
+> If `apt` reports no `systemd-oomd` package, your image may already bundle it in the `systemd` suite — run the `systemctl status` line first to check. Available as a separate package on Ubuntu 22.04+.
+
+#### Limit Interactive User Slices
+
+The goal is **not** to limit DigiByte Core or the oracle. It's to cap interactive/admin workloads so they can't take the whole VPS down. The oracle daemon runs in `system.slice` under systemd — these limits only apply to `user-.slice` (SSH sessions, VS Code, shells, build jobs).
+
+Size the limits to your host's RAM:
+
+| Host RAM | MemoryHigh | MemoryMax | Notes |
+|----------|------------|-----------|-------|
+| 8 GB | 2G | 3G | Tight — leaves ~5 GB for daemons |
+| 12 GB | 3G | 4G | Comfortable for 2-3 daemons + admin work |
+| 16 GB | 4G | 6G | Generous — room for heavy builds |
+| 24 GB+ | 6G | 8G | Large VPS — adjust to taste |
+
+Create the drop-in file (using your values from the table above — this example uses 12 GB / 3G/4G):
+
+```bash
+sudo mkdir -p /etc/systemd/system/user-.slice.d
+sudo tee /etc/systemd/system/user-.slice.d/50-interactive-guardrails.conf > /dev/null <<'EOF'
+[Slice]
+MemoryHigh=3G
+MemoryMax=4G
+ManagedOOMSwap=kill
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=40%
+EOF
+
+sudo systemctl daemon-reload
+```
+
+#### Verify
+
+Confirm digibyted is in `system.slice` (protected), not `user.slice` (limited):
+
+```bash
+cat /proc/$(pgrep -x digibyted)/cgroup
+```
+
+Expected: `0::/system.slice/digibyted.service`
+
+If it shows `user.slice` instead, your daemon was started manually from a login shell rather than via `systemctl start`. Always start daemons through systemd so they land in the correct slice.
+
+Check the drop-in is active:
+
+```bash
+systemctl show user-.slice | grep -E 'MemoryHigh|MemoryMax|ManagedOOM'
+```
+
+#### Rollback
+
+If anything behaves unexpectedly, all of this undoes cleanly with no data risk:
+
+```bash
+# Remove user-slice limits
+sudo rm -rf /etc/systemd/system/user-.slice.d
+sudo systemctl daemon-reload
+
+# Disable systemd-oomd
+sudo systemctl disable --now systemd-oomd.service
+
+# Restore swappiness to default
+sudo rm -f /etc/sysctl.d/99-memory-tuning.conf
+sudo sysctl --system
+
+# Remove swap file (optional)
+sudo swapoff /swapfile
+sudo sed -i '\#/swapfile none swap sw 0 0#d' /etc/fstab
+sudo rm -f /swapfile
+```
+
+None of this touches chain data, wallet files, or oracle state. It removes config files and clears live cgroup limits. `digibyted` is never affected.
+
 ### Lynis — Security Audit Tool
 
 Lynis scans your system and gives a hardening score with specific recommendations. It's a good way to find things you might have missed.
@@ -740,6 +883,7 @@ Here's everything this guide covers, in one table:
 | Services | Apport disabled | Stops crash reporter from weakening core dump protection |
 | Updates | Unattended security upgrades | Patches vulnerabilities automatically |
 | DigiByte | RPC localhost-only, wallet file permissions, systemd hardening | Protects oracle-specific assets |
+| Resource Isolation | Swap safety net, low swappiness, systemd-oomd, user-slice limits | Prevents admin workloads from killing the oracle (Optional Extra) |
 
 My oracle VPS gets hammered daily by automated scanners and brute-force bots. With this setup, they hit a wall at every layer — wrong port, wrong username, no password to guess, banned after 3 tries, and firewall blocking everything else. The oracle keeps running through all of it.
 
@@ -750,5 +894,5 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.2
+Version: v1.3
 
