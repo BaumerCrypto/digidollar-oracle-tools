@@ -1,14 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.5.1
+# Version: 2.5.2
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-
-readonly SCRIPT_VERSION="2.5.1"
+readonly SCRIPT_VERSION="2.5.2"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -33,6 +32,32 @@ readonly SCRIPT_VERSION="2.5.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.2 — check_daemon() now auto-detects either digibyted (headless)
+#            or digibyte-qt (GUI wallet). Sets DETECTED_DAEMON global so
+#            downstream checks can branch. check_services() skips the
+#            systemd check with an INFO line when the Qt wallet is running
+#            outside systemd (no false red). Optional DAEMON_PROCESS
+#            config override for anyone running both binaries on the same
+#            box. Backports the $DAEMON_PROCESS parity that already
+#            existed in the PowerShell version. (caught by Aussie Epic)
+#   v2.5.1 — Add SCRIPT_VERSION constant + NETWORK_LABEL in Discord card
+#            titles and dry-run/test output. Tune default quorum bands
+#            from 20/12 → 12/10 (v2.0 defaults produced yellow alerts at
+#            15/35 fresh — 2x the hard 7-of-35 floor — which conditioned
+#            operators to ignore the check). Quorum counting stays on
+#            heartbeat_status=="fresh" from v2.2.
+#   v2.5 — DigiDollar BIP9 pre-activation guard. New
+#          check_digidollar_active() sets DD_STATUS/DD_ACTIVE globals via
+#          getdigidollardeploymentinfo, called first in both run_checks()
+#          and send_summary() (--dry-run/--summary route through
+#          send_summary, so the pre-flight must live in both).
+#          check_oracle, check_price, check_services, check_quorum all
+#          downgrade "no data" to standby INFO instead of red alert while
+#          DD_ACTIVE=false. check_services now honours configurable
+#          ${SERVICE_NAME:-digibyted.service}. check_version reads
+#          $CLI getnetworkinfo → .subversion instead of the raw
+#          `digibyted --version` (which pulled the wrong binary from
+#          $PATH in dual-daemon setups).
 #   v2.4 — Add swap pressure detection (Check #12). Fires a yellow
 #          alert when swap usage exceeds SWAP_THRESHOLD_MB (default
 #          100 MB). On a properly configured box with swappiness=10,
@@ -271,18 +296,41 @@ ISSUES=0
 WARNINGS=0
 DETAILS=""
 
-# --- Check 1: Is digibyted running? ---
+# --- Check 1: Is digibyted (or digibyte-qt) running? ---
+# v2.5.2: Auto-detects either the headless daemon or the Qt GUI wallet.
+# DAEMON_PROCESS can be set in config to force a specific match
+# (e.g. DAEMON_PROCESS="digibyte-qt"). Default order: digibyted first,
+# then digibyte-qt. Sets the DETECTED_DAEMON global so check_services()
+# can branch — the Qt wallet typically runs outside systemd, so the
+# systemd check is skipped with an INFO line when Qt is the daemon.
 check_daemon() {
-    if pgrep -x digibyted > /dev/null 2>&1; then
-        if clear_alert "daemon_down"; then
-            alert_green "✅ Node Recovered" "digibyted is running again."
+    local daemon_candidate
+
+    if [ -n "${DAEMON_PROCESS:-}" ]; then
+        # Explicit override from config
+        if pgrep -x "$DAEMON_PROCESS" > /dev/null 2>&1; then
+            DETECTED_DAEMON="$DAEMON_PROCESS"
         fi
-        DETAILS+="✅ digibyted: running\n"
+    else
+        # Auto-detect: headless daemon first, then Qt wallet
+        for daemon_candidate in digibyted digibyte-qt; do
+            if pgrep -x "$daemon_candidate" > /dev/null 2>&1; then
+                DETECTED_DAEMON="$daemon_candidate"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "${DETECTED_DAEMON:-}" ]; then
+        if clear_alert "daemon_down"; then
+            alert_green "✅ Node Recovered" "$DETECTED_DAEMON is running again."
+        fi
+        DETAILS+="✅ Node: $DETECTED_DAEMON running\n"
     else
         if should_alert "daemon_down"; then
-            alert_red "🔴 Node Down" "digibyted is NOT running! Check systemd: \`sudo systemctl status digibyted.service\`"
+            alert_red "🔴 Node Down" "Neither digibyted nor digibyte-qt is running! For headless: \`sudo systemctl status digibyted.service\`. For Qt: launch the wallet."
         fi
-        DETAILS+="🔴 digibyted: NOT RUNNING\n"
+        DETAILS+="🔴 Node: NOT RUNNING (checked digibyted, digibyte-qt)\n"
         ISSUES=$((ISSUES + 1))
         return 1  # skip remaining checks
     fi
@@ -481,6 +529,11 @@ check_memory() {
 }
 
 # --- Check 12: Swap pressure (v2.4) ---
+# Fires a yellow alert when swap usage exceeds SWAP_THRESHOLD_MB.
+# On a properly configured box with swappiness=10, any meaningful swap
+# usage signals real memory pressure — the exact condition that silently
+# killed daemons during the PRE stale incident (Session 19). Companion to
+# the OOM protection in the hardening guide.
 check_swap() {
     local swap_total_mb swap_used_mb
     swap_total_mb=$(free -m | awk '/Swap:/ {print $2}')
@@ -488,7 +541,7 @@ check_swap() {
 
     # No swap configured — skip silently in normal checks, note in summary
     if [ "$swap_total_mb" -eq 0 ] 2>/dev/null; then
-        DETAILS+="ℹ️ Swap: not configured\n"
+        DETAILS+="ℹ️  Swap: not configured\n"
         return
     fi
 
@@ -507,18 +560,30 @@ check_swap() {
 }
 
 # --- Check 8: Systemd service status ---
+# v2.5: Reads SERVICE_NAME config var (defaults to digibyted.service).
+#       Adds DD_ACTIVE guard for oracle process (standby → INFO not warn).
+# v2.5.2: Skips systemd unit check with INFO line when the Qt wallet is
+#         the running daemon (Qt typically runs outside systemd).
 check_services() {
     local dgb_status oracle_status service_name
     service_name="${SERVICE_NAME:-digibyted.service}"
-    dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
-    oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
-    if [ "$dgb_status" = "active" ]; then
-        DETAILS+="✅ ${service_name}: active\n"
+    # v2.5.2: Skip systemd unit check when the Qt wallet is the running
+    # daemon — most Qt operators launch the GUI outside systemd, so a
+    # `systemctl is-active` on the headless unit is a misleading red.
+    if [ "${DETECTED_DAEMON:-}" = "digibyte-qt" ]; then
+        DETAILS+="ℹ️  Systemd: n/a — Qt wallet is the running daemon\n"
     else
-        DETAILS+="🔴 ${service_name}: $dgb_status\n"
-        ISSUES=$((ISSUES + 1))
+        dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
+        if [ "$dgb_status" = "active" ]; then
+            DETAILS+="✅ ${service_name}: active\n"
+        else
+            DETAILS+="🔴 ${service_name}: $dgb_status\n"
+            ISSUES=$((ISSUES + 1))
+        fi
     fi
+
+    oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
     if [ "$DD_ACTIVE" = "false" ]; then
         DETAILS+="ℹ️  Oracle process: standby (DigiDollar deployment: $DD_STATUS)\n"
@@ -531,11 +596,14 @@ check_services() {
 }
 
 # --- Check 9: Node version ---
+# v2.5: Read version via RPC (getnetworkinfo → .subversion) instead of
+# `digibyted --version`. The old approach pulled whichever `digibyted`
+# lived in $PATH, which read the wrong binary in dual-daemon setups.
 check_version() {
     local version
-    version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion)
-    if [ -n "$version" ]; then
-        DETAILS+="ℹ️ $version\n"
+    version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion 2>/dev/null)
+    if [ -n "$version" ] && [ "$version" != "null" ]; then
+        DETAILS+="ℹ️  $version\n"
     fi
 }
 
@@ -587,8 +655,10 @@ band_severity() {
 #     musig2_session.epoch, musig2_session.state ("complete"/other),
 #     musig2_session.nonce_count, musig2_session.partial_sig_count,
 #     musig2_session.creation_height
-#   getoracles true → array of objects, each with last_price_usd field
-#     "reporting" = last_price_usd exists and > 0
+#   getoracles true → array of objects, each with heartbeat_status field
+#     "reporting" = heartbeat_status == "fresh" (online + signed heartbeat
+#     within the last 30 min). Stable across MuSig2 round transitions,
+#     unlike last_price_usd which used to reset mid-round.
 #
 # Debug commands (if something looks wrong):
 #   digibyte-cli -testnet getdigidollardeploymentinfo | jq .
@@ -815,7 +885,7 @@ send_summary() {
     check_price
     check_disk
     check_memory
-    check_swap
+    check_swap                # v2.4
     check_services
     check_version
     check_ntp
@@ -872,17 +942,22 @@ EOF
 # --- Pre-flight: DigiDollar activation status (v2.5) ---
 # Sets globals DD_STATUS and DD_ACTIVE so other checks know whether to
 # alert on missing oracle data (post-activation) or downgrade to info
-# (pre-activation). Called from run_checks() before any oracle-dependent
-# check. Always succeeds — DD_ACTIVE defaults to "false" if RPC fails.
+# (pre-activation). Called first from both run_checks() and send_summary()
+# — the --dry-run and --summary flags route through send_summary, so the
+# pre-flight must live in both paths. Always succeeds; DD_ACTIVE defaults
+# to "false" if the RPC fails or DigiDollar is not yet deployed.
 check_digidollar_active() {
     local deploy_info
     deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
+
     if [ -z "$deploy_info" ]; then
         DD_STATUS="unknown"
         DD_ACTIVE="false"
         return
     fi
+
     DD_STATUS=$(echo "$deploy_info" | jq -r '.status // "unknown"' 2>/dev/null)
+
     if [ "$DD_STATUS" = "active" ]; then
         DD_ACTIVE="true"
     else
@@ -899,7 +974,7 @@ run_checks() {
     check_price
     check_disk
     check_memory
-    check_swap
+    check_swap                # v2.4
     check_ntp
     check_quorum
 }

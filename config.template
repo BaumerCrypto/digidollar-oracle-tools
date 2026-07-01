@@ -1,6 +1,6 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh (v2.5.1+) and
+# This file is sourced by oracle-monitor.sh (v2.5.2+) and
 # oracle-network-status.sh (v1.4+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
@@ -27,9 +27,25 @@ ORACLE_NAME="my-oracle"
 # Testnet:  CLI="digibyte-cli -testnet"
 # Mainnet:  CLI="digibyte-cli"
 # Dual-instance mainnet with conf file:
-#           CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
+#   CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
+
+# ---- Daemon Process Name (v2.5.2+) ----
+# The monitor auto-detects either "digibyted" (headless daemon) or
+# "digibyte-qt" (GUI wallet). In auto-detect mode it prefers digibyted
+# first, then falls back to digibyte-qt.
+#
+# Uncomment ONE line below to force a specific match. Only needed if you
+# run BOTH binaries on the same box and want to pin monitoring to one.
+#
+# For Qt-wallet operators: leave commented out — auto-detect will find it.
+# The systemd check (Check #8) automatically skips with an INFO line when
+# the Qt wallet is the detected daemon, since Qt usually runs outside
+# systemd.
+#
+# DAEMON_PROCESS="digibyted"
+# DAEMON_PROCESS="digibyte-qt"
 
 # ---- Alert Thresholds ----
 MIN_PEERS=3             # Minimum peer count before alerting
@@ -43,7 +59,7 @@ MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 #
 # Recommended values:
 #   Single-daemon setup (just testnet OR just mainnet): 100 MB
-#   Dual-daemon VPS (both testnet + mainnet running):  1500 MB
+#   Dual-daemon VPS (both testnet + mainnet running):   1500 MB
 #
 # Rationale: A DGB mainnet daemon has ~1.4 GB baseline swap usage under
 # normal operation on a 4 GB VPS. Setting threshold to 100 in a dual-daemon
@@ -58,6 +74,9 @@ SWAP_THRESHOLD_MB=100
 # For dual-daemon setups, set the mainnet config to your mainnet unit name:
 #   SERVICE_NAME="digibyted-mainnet.service"
 #
+# For Qt-wallet operators: this setting is ignored — the systemd check
+# auto-skips when digibyte-qt is the detected daemon (v2.5.2+).
+#
 # Leave commented out to use the default (digibyted.service).
 # SERVICE_NAME="digibyted.service"
 
@@ -67,8 +86,8 @@ SWAP_THRESHOLD_MB=100
 # via getdigidollardeploymentinfo — not configurable here (currently 7-of-35).
 #
 # Recommended values (v2.5.1):
-#   Mainnet (production, 35-slot roster):     GREEN=12, YELLOW=10
-#   Testnet26 (smaller active population):    GREEN=10, YELLOW=8
+#   Mainnet (production, 35-slot roster):    GREEN=12, YELLOW=10
+#   Testnet26 (smaller active population):   GREEN=10, YELLOW=8
 #
 # The v2.0-v2.4 defaults (20/12) were too permissive and fired "getting thin"
 # at 15/35 fresh — more than 2x the hard 7-of-35 quorum floor. This
@@ -94,7 +113,7 @@ QUORUM_HYSTERESIS=3
 #
 # oracle-monitor.sh v2.5.1+: shown in Discord card titles
 #   "✅ All Systems Healthy — Testnet26 Health Summary"
-#   "⚠️  1 Warnings — Mainnet Health Summary"
+#   "⚠️ 1 Warnings — Mainnet Health Summary"
 #
 # oracle-network-status.sh v1.4+: shown in the Gitter bot post header.
 #
@@ -139,21 +158,21 @@ MENTION_MAX=6
 #   ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
 #
 #   # Edit the mainnet config:
-#   #   CLI="digibyte-cli"                             (no -testnet flag)
-#   #   SERVICE_NAME="digibyted-mainnet.service"       (match your unit name)
-#   #   SWAP_THRESHOLD_MB=1500                         (dual-daemon baseline)
-#   #   QUORUM_GREEN=12, QUORUM_YELLOW=10              (tighter for production)
-#   #   NETWORK_LABEL="Mainnet"                        (shows in card titles)
-#   #   DISCORD_WEBHOOK="https://..."                  (same or different webhook)
+#   #   CLI="digibyte-cli"                       (no -testnet flag)
+#   #   SERVICE_NAME="digibyted-mainnet.service" (match your unit name)
+#   #   SWAP_THRESHOLD_MB=1500                   (dual-daemon baseline)
+#   #   QUORUM_GREEN=12, QUORUM_YELLOW=10        (tighter for production)
+#   #   NETWORK_LABEL="Mainnet"                  (shows in card titles)
+#   #   DISCORD_WEBHOOK="https://..."            (same or different webhook)
 #
 #   # Test:
 #   ./oracle-monitor.sh --config ~/.oracle-monitor-mainnet/config --dry-run
 #   ./oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --dry-run
 #
 #   # Cron (offset by 2 minutes to avoid RPC collision with testnet):
-#   2-59/5 * * * *   /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
-#   0 1,13 * * *     /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
-#   5 */12 * * *     /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   2-59/5 * * * *  /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   0 1,13 * * *    /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
+#   5 */12 * * *    /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
 #
 # Override these if your roster or state files live somewhere else:
 # ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
