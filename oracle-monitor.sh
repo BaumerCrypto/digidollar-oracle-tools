@@ -1,12 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.4
+# Version: 2.5.1
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
-# Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - June 2026
+# Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
+
+readonly SCRIPT_VERSION="2.5.1"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -16,8 +18,8 @@
 #   5. Test it: ./oracle-monitor.sh --dry-run
 #   6. Test webhook: ./oracle-monitor.sh --test
 #   7. Add to cron: crontab -e
-#      */5 * * * * /home/dgboracle/oracle-monitor.sh 2>/dev/null
-#      0 */12 * * * /home/dgboracle/oracle-monitor.sh --summary 2>/dev/null
+#      */5 * * * * /home/YOUR_USER/oracle-monitor.sh 2>/dev/null
+#      0 */12 * * * /home/YOUR_USER/oracle-monitor.sh --summary 2>/dev/null
 #
 # FLAGS:
 #   (none)     Normal health check — alerts only on problems/recovery
@@ -218,7 +220,7 @@ send_discord() {
     "title": "$title",
     "description": "$message",
     "color": $color,
-    "footer": {"text": "Oracle Monitor — $ORACLE_NAME (ID $ORACLE_ID)"},
+    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
     "timestamp": "$timestamp"
   }]
 }
@@ -293,6 +295,10 @@ check_oracle() {
     oracle_info=$($CLI $WALLET_FLAG listoracle 2>/dev/null)
 
     if [ $? -ne 0 ] || [ -z "$oracle_info" ]; then
+        if [ "$DD_ACTIVE" = "false" ]; then
+            DETAILS+="ℹ️  Oracle: standby (DigiDollar deployment: $DD_STATUS)\n"
+            return
+        fi
         if should_alert "oracle_down"; then
             alert_red "🔴 Oracle Not Running" "listoracle returned no data. Oracle may need to be restarted."
         fi
@@ -394,6 +400,10 @@ check_price() {
     price_info=$($CLI getoracleprice 2>/dev/null)
 
     if [ $? -ne 0 ]; then
+        if [ "$DD_ACTIVE" = "false" ]; then
+            DETAILS+="ℹ️  Price: pending (DigiDollar deployment: $DD_STATUS)\n"
+            return
+        fi
         DETAILS+="⚠️ Price: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
@@ -498,18 +508,21 @@ check_swap() {
 
 # --- Check 8: Systemd service status ---
 check_services() {
-    local dgb_status oracle_status
-    dgb_status=$(systemctl is-active digibyted.service 2>/dev/null)
+    local dgb_status oracle_status service_name
+    service_name="${SERVICE_NAME:-digibyted.service}"
+    dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
     oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
     if [ "$dgb_status" = "active" ]; then
-        DETAILS+="✅ digibyted.service: active\n"
+        DETAILS+="✅ ${service_name}: active\n"
     else
-        DETAILS+="🔴 digibyted.service: $dgb_status\n"
+        DETAILS+="🔴 ${service_name}: $dgb_status\n"
         ISSUES=$((ISSUES + 1))
     fi
 
-    if [ "$oracle_status" = "true" ]; then
+    if [ "$DD_ACTIVE" = "false" ]; then
+        DETAILS+="ℹ️  Oracle process: standby (DigiDollar deployment: $DD_STATUS)\n"
+    elif [ "$oracle_status" = "true" ]; then
         DETAILS+="✅ Oracle process: running\n"
     else
         DETAILS+="⚠️ Oracle process: $oracle_status\n"
@@ -520,7 +533,7 @@ check_services() {
 # --- Check 9: Node version ---
 check_version() {
     local version
-    version=$(digibyted --version 2>/dev/null | head -1)
+    version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion)
     if [ -n "$version" ]; then
         DETAILS+="ℹ️ $version\n"
     fi
@@ -625,6 +638,10 @@ check_quorum() {
     oracles=$($CLI getoracles true 2>/dev/null)
 
     if [ $? -ne 0 ] || [ -z "$oracles" ]; then
+        if [ "$DD_ACTIVE" = "false" ]; then
+            DETAILS+="ℹ️  Quorum: standby (DigiDollar deployment: $DD_STATUS)\n"
+            return
+        fi
         DETAILS+="⚠️ Quorum: could not query oracles\n"
         WARNINGS=$((WARNINGS + 1))
         return
@@ -790,6 +807,7 @@ check_quorum() {
 # ============================================================================
 
 send_summary() {
+    check_digidollar_active   # v2.5: must run before oracle-dependent checks
     check_daemon || return
     check_oracle
     check_chain
@@ -824,7 +842,7 @@ send_summary() {
 
     if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
         echo "======================================="
-        echo " Oracle Health Summary — $(date)"
+        echo " ${NETWORK_LABEL:-Oracle} Health Summary — $(date)"
         echo "======================================="
         echo -e "$desc"
         echo "======================================="
@@ -835,10 +853,10 @@ send_summary() {
     payload=$(cat <<EOF
 {
   "embeds": [{
-    "title": "$status — Oracle Health Summary",
+    "title": "$status — ${NETWORK_LABEL:-Oracle} Health Summary",
     "description": $(echo "$desc" | jq -Rs .),
     "color": $color,
-    "footer": {"text": "Oracle Monitor — $ORACLE_NAME (ID $ORACLE_ID)"},
+    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
     "timestamp": "$timestamp"
   }]
 }
@@ -851,7 +869,29 @@ EOF
 # MAIN — Normal health check (alerts only on problems/recovery)
 # ============================================================================
 
+# --- Pre-flight: DigiDollar activation status (v2.5) ---
+# Sets globals DD_STATUS and DD_ACTIVE so other checks know whether to
+# alert on missing oracle data (post-activation) or downgrade to info
+# (pre-activation). Called from run_checks() before any oracle-dependent
+# check. Always succeeds — DD_ACTIVE defaults to "false" if RPC fails.
+check_digidollar_active() {
+    local deploy_info
+    deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
+    if [ -z "$deploy_info" ]; then
+        DD_STATUS="unknown"
+        DD_ACTIVE="false"
+        return
+    fi
+    DD_STATUS=$(echo "$deploy_info" | jq -r '.status // "unknown"' 2>/dev/null)
+    if [ "$DD_STATUS" = "active" ]; then
+        DD_ACTIVE="true"
+    else
+        DD_ACTIVE="false"
+    fi
+}
+
 run_checks() {
+    check_digidollar_active   # v2.5: must run before oracle-dependent checks
     check_daemon || return
     check_oracle
     check_chain
@@ -883,7 +923,7 @@ case "$ACTION_FLAG" in
             echo "Configure it in: $CONFIG_FILE"
             exit 1
         fi
-        alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
+        alert_blue "🔧 ${NETWORK_LABEL:-Oracle} Test Alert" "${NETWORK_LABEL:-Oracle} monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;
     *)
