@@ -1,6 +1,6 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh (v2.3+) and
+# This file is sourced by oracle-monitor.sh (v2.5.1+) and
 # oracle-network-status.sh (v1.4+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
@@ -26,6 +26,8 @@ ORACLE_NAME="my-oracle"
 # ---- RPC Settings ----
 # Testnet:  CLI="digibyte-cli -testnet"
 # Mainnet:  CLI="digibyte-cli"
+# Dual-instance mainnet with conf file:
+#           CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
@@ -36,12 +38,44 @@ STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from R
 MEM_THRESHOLD=90        # Memory usage % above which to alert
 MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 
-# ---- Quorum Alert Bands (v2.0) ----
+# ---- Swap Pressure Threshold (v2.4+) ----
+# Alert when system-wide swap usage exceeds this many MB.
+#
+# Recommended values:
+#   Single-daemon setup (just testnet OR just mainnet): 100 MB
+#   Dual-daemon VPS (both testnet + mainnet running):  1500 MB
+#
+# Rationale: A DGB mainnet daemon has ~1.4 GB baseline swap usage under
+# normal operation on a 4 GB VPS. Setting threshold to 100 in a dual-daemon
+# setup produces constant false alarms. To calibrate: run `free -h` after
+# 24h of stable operation and set threshold ~200-500 MB above baseline.
+SWAP_THRESHOLD_MB=100
+
+# ---- Systemd Service Name (v2.5+) ----
+# Name of the systemd service that runs the digibyted daemon this monitor
+# instance watches. Defaults to digibyted.service.
+#
+# For dual-daemon setups, set the mainnet config to your mainnet unit name:
+#   SERVICE_NAME="digibyted-mainnet.service"
+#
+# Leave commented out to use the default (digibyted.service).
+# SERVICE_NAME="digibyted.service"
+
+# ---- Quorum Alert Bands (v2.0, tuned in v2.5.1) ----
 # Band thresholds for network-wide oracle liveness.
 # The on-chain minimum (oracle_consensus_required) comes from the chain
-# via getdigidollardeploymentinfo — not configurable here.
-QUORUM_GREEN=20         # At or above = comfortable (no alerts)
-QUORUM_YELLOW=12        # At or above but below green = "getting thin"
+# via getdigidollardeploymentinfo — not configurable here (currently 7-of-35).
+#
+# Recommended values (v2.5.1):
+#   Mainnet (production, 35-slot roster):     GREEN=12, YELLOW=10
+#   Testnet26 (smaller active population):    GREEN=10, YELLOW=8
+#
+# The v2.0-v2.4 defaults (20/12) were too permissive and fired "getting thin"
+# at 15/35 fresh — more than 2x the hard 7-of-35 quorum floor. This
+# conditioned operators to ignore quorum warnings entirely. New defaults fire
+# only at meaningful risk levels.
+QUORUM_GREEN=12         # At or above = comfortable (no alerts)
+QUORUM_YELLOW=10        # At or above but below green = "getting thin"
 
 # ---- Anti-Flap (v2.1) ----
 # Cooldown: minimum minutes between quorum RECOVERY alerts.
@@ -50,13 +84,20 @@ QUORUM_YELLOW=12        # At or above but below green = "getting thin"
 QUORUM_COOLDOWN=30
 
 # Hysteresis: recovery requires exceeding the threshold by this buffer.
-# Example: GREEN=20, HYSTERESIS=3 → must hit 23 to recover to green.
+# Example: GREEN=12, HYSTERESIS=3 → must hit 15 to recover to green.
 # Prevents rapid green/yellow flapping when count hovers near boundary.
 # Set to 0 to disable (v2.0 behavior = recover at exact threshold).
 QUORUM_HYSTERESIS=3
 
-# ---- Network Label (oracle-network-status.sh v1.4+) ----
-# Identifies which chain in the Gitter bot header.
+# ---- Network Label (oracle-monitor.sh v2.5.1+ / oracle-network-status.sh v1.4+) ----
+# Identifies which chain this monitor instance is watching.
+#
+# oracle-monitor.sh v2.5.1+: shown in Discord card titles
+#   "✅ All Systems Healthy — Testnet26 Health Summary"
+#   "⚠️  1 Warnings — Mainnet Health Summary"
+#
+# oracle-network-status.sh v1.4+: shown in the Gitter bot post header.
+#
 # Auto-detected from getblockchaininfo if not set:
 #   "test" → "Testnet", "main" → "Mainnet"
 # Override to show a specific label like "Testnet26".
@@ -98,18 +139,21 @@ MENTION_MAX=6
 #   ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
 #
 #   # Edit the mainnet config:
-#   #   CLI="digibyte-cli"                  (no -testnet flag)
-#   #   NETWORK_LABEL="Mainnet"             (shows in Gitter bot header)
-#   #   DISCORD_WEBHOOK="https://..."       (same or different webhook)
+#   #   CLI="digibyte-cli"                             (no -testnet flag)
+#   #   SERVICE_NAME="digibyted-mainnet.service"       (match your unit name)
+#   #   SWAP_THRESHOLD_MB=1500                         (dual-daemon baseline)
+#   #   QUORUM_GREEN=12, QUORUM_YELLOW=10              (tighter for production)
+#   #   NETWORK_LABEL="Mainnet"                        (shows in card titles)
+#   #   DISCORD_WEBHOOK="https://..."                  (same or different webhook)
 #
 #   # Test:
 #   ./oracle-monitor.sh --config ~/.oracle-monitor-mainnet/config --dry-run
 #   ./oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --dry-run
 #
-#   # Cron (offset by 10 minutes to avoid RPC collision with testnet):
-#   10 */5 * * *  /home/dgboracle/oracle-monitor.sh --config /home/dgboracle/.oracle-monitor-mainnet/config 2>/dev/null
-#   10 */12 * * * /home/dgboracle/oracle-monitor.sh --config /home/dgboracle/.oracle-monitor-mainnet/config --summary 2>/dev/null
-#   10 */12 * * * /home/dgboracle/oracle-network-status.sh --config /home/dgboracle/.oracle-monitor-mainnet/config 2>/dev/null
+#   # Cron (offset by 2 minutes to avoid RPC collision with testnet):
+#   2-59/5 * * * *   /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   0 1,13 * * *     /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
+#   5 */12 * * *     /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
 #
 # Override these if your roster or state files live somewhere else:
 # ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
