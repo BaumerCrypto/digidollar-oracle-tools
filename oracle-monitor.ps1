@@ -1,14 +1,15 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.2-win.1
+# Version: 2.5.2-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.2 (Linux). Same checks,
-# same quorum state machine, same anti-flap logic — Windows-native commands.
-# Runs on Windows PowerShell 5.1 (preinstalled on Windows 10/11) and
-# PowerShell 7+. No jq needed — PowerShell parses JSON natively.
+# Windows PowerShell port of my oracle-monitor.sh v2.5.2 (Linux). Same checks,
+# same quorum state machine, same anti-flap logic, same DigiDollar BIP9
+# pre-activation guard, same auto-detect for headless vs Qt wallet — Windows-
+# native commands. Runs on Windows PowerShell 5.1 (preinstalled on Windows
+# 10/11) and PowerShell 7+. No jq needed — PowerShell parses JSON natively.
 #
-# Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — June 2026
+# Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
 #
 # SETUP:
 #   1. Save this script somewhere permanent, e.g.:
@@ -26,23 +27,58 @@
 #   5. Test it:        .\oracle-monitor.ps1 -DryRun
 #   6. Test webhook:   .\oracle-monitor.ps1 -Test
 #   7. Schedule it (run both from an elevated or normal prompt):
-#        schtasks /Create /SC MINUTE /MO 5 /TN "OracleMonitor" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OracleMonitor\oracle-monitor.ps1"
-#        schtasks /Create /SC HOURLY /MO 12 /TN "OracleMonitorSummary" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OracleMonitor\oracle-monitor.ps1 -Summary"
+#        schtasks /Create /SC MINUTE /MO 5 /TN "OracleMonitor" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Users\YOUR_USER\OracleMonitor\oracle-monitor.ps1"
+#        schtasks /Create /SC HOURLY /MO 12 /TN "OracleMonitorSummary" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Users\YOUR_USER\OracleMonitor\oracle-monitor.ps1 -Summary"
 #      Then in Task Scheduler (taskschd.msc) open each task's Conditions tab
 #      and untick "Start the task only if the computer is on AC power" if
 #      this is a laptop. Your PC must be awake for the task to run.
 #
 # FLAGS:
-#   (none)     Normal health check — alerts only on problems/recovery
-#   -Summary   Full status summary — always sends to Discord
-#   -DryRun    Runs all checks, prints to terminal, skips Discord, no state changes
-#   -Watch     Live console dashboard — refreshes the full status every 60s
-#              (-Watch -RefreshSeconds 30 for 30s). Never alerts, never
-#              touches state: safe to leave a PowerShell window open with
-#              this running alongside the scheduled tasks.
-#   -Test      Sends a test embed to Discord to verify webhook
+#   (none)         Normal health check — alerts only on problems/recovery
+#   -Summary       Full status summary — always sends to Discord
+#   -DryRun        Runs all checks, prints to terminal, skips Discord, no state changes
+#   -Watch         Live console dashboard — refreshes the full status every 60s
+#                  (-Watch -RefreshSeconds 30 for 30s). Never alerts, never
+#                  touches state: safe to leave a PowerShell window open with
+#                  this running alongside the scheduled tasks.
+#   -Test          Sends a test embed to Discord to verify webhook
+#   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.5.2-win.1 — Check-Daemon() now auto-detects either digibyted
+#          (headless) or digibyte-qt (Qt wallet). Prefers headless first,
+#          falls back to Qt via a candidate loop. Sets $script:DetectedDaemon
+#          global so Check-Services() can branch: the Windows Service check
+#          is skipped with an INFO line when the Qt wallet is the running
+#          daemon (Qt operators typically run outside NSSM/service wrappers).
+#          Optional $DAEMON_PROCESS config override pins monitoring to a
+#          specific process name. Full parity with Linux v2.5.2.
+#   v2.5.1-win.1 — Add $SCRIPT_VERSION constant + $NETWORK_LABEL in the
+#          Discord card titles, dry-run header, watch header, and -Test
+#          output. Tune default quorum bands from 20/12 → 12/10 (v2.0
+#          defaults fired yellow at 15/35 fresh — 2x the hard 7-of-35
+#          floor). Quorum counting stays on heartbeat_status=="fresh"
+#          from v2.2.
+#   v2.5-win.1 — DigiDollar BIP9 pre-activation guard. New
+#          Check-DigidollarActive() sets $script:DdStatus / $script:DdActive
+#          globals via getdigidollardeploymentinfo, called first in both
+#          Invoke-Checks and Send-Summary (-DryRun / -Summary / -Watch all
+#          route through Send-Summary, so the pre-flight lives in both
+#          paths). Check-Oracle, Check-Price, Check-Services, Check-Quorum
+#          all downgrade "no data" to standby INFO instead of red while
+#          $DdActive=false. Check-Version now reads getnetworkinfo →
+#          .subversion via RPC instead of `digibyted --version` (which
+#          failed for Qt-wallet operators with no digibyted.exe on PATH).
+#   v2.4-win.1 — Add swap pressure detection (Check #12). Fires a yellow
+#          alert when page-file usage exceeds $SWAP_THRESHOLD_MB (default
+#          100 MB). Uses Get-CimInstance Win32_PageFileUsage for the read.
+#          On Windows with a healthy amount of RAM, sustained page-file
+#          use signals real memory pressure. (fixes #26 on Windows,
+#          suggested by shenger)
+#   v2.3-win.1 — Add -Config /path parameter for dual-instance monitoring.
+#          Two scheduled tasks + two config files = independent testnet and
+#          mainnet monitoring from one PC. State files auto-separate per
+#          config directory via Split-Path -Parent.
 #   v2.2-win.1 — Initial Windows PowerShell port. Logic parity with Linux
 #          v2.2: heartbeat-based quorum counting, anti-flap cooldown +
 #          hysteresis, single quorum_state file, escalation always
@@ -60,11 +96,14 @@
 #          configurable ($DAEMON_PROCESS) for Qt vs headless.
 #
 #   Linux lineage this port tracks (see oracle-monitor.sh for details):
-#   v2.2 — heartbeat_status quorum counting   v2.1.1 — hysteresis fix
-#   v2.1 — anti-flap                          v2.0 — quorum margin (#6)
-#   v1.5 — listoracle RPC check (#22)         v1.4 — warning/error enum (#21)
-#   v1.3 — RC44 status enum                   v1.2 — config file, dry-run
-#   v1.1 — degraded consensus, NTP            v1.0 — initial release
+#   v2.5.2 — headless/Qt auto-detect       v2.5.1 — version + label + footer
+#   v2.5 — DD BIP9 guard (#27)             v2.4 — swap pressure (#26)
+#   v2.3 — --config dual-instance (#23)    v2.2 — heartbeat_status quorum
+#   v2.1.1 — hysteresis fix                v2.1 — anti-flap
+#   v2.0 — quorum margin (#6)              v1.5 — listoracle RPC (#22)
+#   v1.4 — warning/error enum (#21)        v1.3 — RC44 status enum
+#   v1.2 — config file, dry-run            v1.1 — degraded consensus, NTP
+#   v1.0 — initial release
 ###############################################################################
 
 param(
@@ -72,8 +111,11 @@ param(
     [switch]$DryRun,
     [switch]$Test,
     [switch]$Watch,
-    [int]$RefreshSeconds = 60
+    [int]$RefreshSeconds = 60,
+    [string]$Config = ""
 )
+
+$SCRIPT_VERSION = "2.5.2-win.1"
 
 # ============================================================================
 # RUNTIME ENVIRONMENT
@@ -111,14 +153,18 @@ $CLI_PATH = "digibyte-cli.exe"
 $CLI_ARGS    = @("-testnet")
 $WALLET_FLAG = "-rpcwallet=oracle"
 
-# Process name of your node, WITHOUT .exe:
-#   "digibyted"    headless daemon (recommended for oracles)
-#   "digibyte-qt"  if you run the Qt wallet instead
-$DAEMON_PROCESS = "digibyted"
+# v2.5.2: Node process name (WITHOUT .exe).
+# The monitor auto-detects either "digibyted" (headless) or "digibyte-qt"
+# (Qt GUI wallet). Leave this empty (default) for auto-detect. Set it to
+# force a specific match only if you run BOTH binaries on the same PC:
+#   $DAEMON_PROCESS = "digibyted"     # headless daemon
+#   $DAEMON_PROCESS = "digibyte-qt"   # Qt wallet
+$DAEMON_PROCESS = ""
 
 # Optional: if you run digibyted as a Windows service (e.g. via NSSM),
 # put the service name here and the summary will report its status.
-# Leave "" to skip the service check.
+# Leave "" to skip the service check. Ignored automatically when the Qt
+# wallet is the detected daemon (v2.5.2+).
 $SERVICE_NAME = ""
 
 # Drive letter to watch for free disk space (where your DigiByte datadir
@@ -130,6 +176,7 @@ $MIN_PEERS           = 3
 $MIN_DISK_GB         = 5
 $STALE_PRICE_MINUTES = 30    # Reserved for future use — staleness currently from RPC
 $MEM_THRESHOLD       = 90
+$SWAP_THRESHOLD_MB   = 100   # v2.4 — page-file usage MB threshold
 $MAX_CHAIN_BEHIND    = 10
 
 # NTP check — measures actual clock offset against a time server using
@@ -139,7 +186,7 @@ $MAX_CHAIN_BEHIND    = 10
 $NTP_SERVER             = "time.windows.com"
 $NTP_MAX_OFFSET_SECONDS = 1.0
 
-# Thresholds — quorum margin (v2.0)
+# Thresholds — quorum margin (v2.0, tuned in v2.5.1)
 # These define the alert bands for network-wide oracle liveness.
 # Quorum threshold (oracle_consensus_required) comes from the chain via
 # getdigidollardeploymentinfo — not hardcoded here.
@@ -148,8 +195,13 @@ $NTP_MAX_OFFSET_SECONDS = 1.0
 # QUORUM_YELLOW: at or above this but below green = "getting thin" warning
 # Below QUORUM_YELLOW but at/above consensus_required = red, at quorum edge
 # Below consensus_required = CRITICAL — DD bundle signing may halt
-$QUORUM_GREEN  = 20
-$QUORUM_YELLOW = 12
+#
+# Defaults (v2.5.1): 12/10 for mainnet (35-slot roster, 7-of-35 quorum).
+# The old 20/12 defaults produced yellow at 15/35 fresh — more than 2x
+# the hard 7-of-35 floor — which conditioned operators to ignore the
+# check. Override for testnet: GREEN=10, YELLOW=8.
+$QUORUM_GREEN  = 12
+$QUORUM_YELLOW = 10
 
 # Anti-flap — quorum alert throttling (v2.1)
 # QUORUM_COOLDOWN: minimum minutes between quorum recovery alerts.
@@ -168,8 +220,19 @@ $QUORUM_HYSTERESIS = 3
 # LOAD EXTERNAL CONFIG (overrides defaults above)
 # ============================================================================
 
-$STATE_DIR   = Join-Path $env:USERPROFILE ".oracle-monitor"
-$CONFIG_FILE = Join-Path $STATE_DIR "config.ps1"
+# v2.3: -Config /path parameter overrides the default location.
+# State dir is derived from Split-Path so per-instance state auto-separates.
+if (-not [string]::IsNullOrEmpty($Config)) {
+    if (-not (Test-Path $Config)) {
+        Write-Output "ERROR: Config file not found: $Config"
+        exit 1
+    }
+    $CONFIG_FILE = $Config
+} else {
+    $CONFIG_FILE = Join-Path $env:USERPROFILE ".oracle-monitor\config.ps1"
+}
+
+$STATE_DIR = Split-Path -Parent $CONFIG_FILE
 
 if (Test-Path $CONFIG_FILE) {
     . $CONFIG_FILE
@@ -235,7 +298,7 @@ function Send-Discord {
                 title       = $Title
                 description = $Message
                 color       = $Color
-                footer      = @{ text = "Oracle Monitor — $ORACLE_NAME (ID $ORACLE_ID)" }
+                footer      = @{ text = "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" }
                 timestamp   = $timestamp
             }
         )
@@ -294,22 +357,43 @@ $script:Issues   = 0
 $script:Warnings = 0
 $script:Details  = New-Object System.Collections.Generic.List[string]
 
-# --- Check 1: Is digibyted running? ---
+# --- Check 1: Is digibyted (or digibyte-qt) running? ---
+# v2.5.2: Auto-detects either the headless daemon or the Qt GUI wallet.
+# $DAEMON_PROCESS can be set in config to force a specific match. Default
+# order: digibyted first, then digibyte-qt. Sets the $script:DetectedDaemon
+# global so Check-Services() can branch — the Qt wallet typically runs
+# outside NSSM/service wrappers, so the Windows Service check is skipped
+# with an INFO line when Qt is the detected daemon.
 function Check-Daemon {
-    $procName = $DAEMON_PROCESS -replace '\.exe$', ''
-    $proc = Get-Process -Name $procName -ErrorAction SilentlyContinue
+    $script:DetectedDaemon = $null
 
-    if ($proc) {
-        if (Clear-AlertState "daemon_down") {
-            Alert-Green "✅ Node Recovered" "$DAEMON_PROCESS is running again."
+    if (-not [string]::IsNullOrEmpty($DAEMON_PROCESS)) {
+        # Explicit override from config
+        $procName = $DAEMON_PROCESS -replace '\.exe$', ''
+        if (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
+            $script:DetectedDaemon = $procName
         }
-        $script:Details.Add("✅ ${DAEMON_PROCESS}: running")
+    } else {
+        # Auto-detect: headless daemon first, then Qt wallet
+        foreach ($candidate in @("digibyted", "digibyte-qt")) {
+            if (Get-Process -Name $candidate -ErrorAction SilentlyContinue) {
+                $script:DetectedDaemon = $candidate
+                break
+            }
+        }
+    }
+
+    if ($null -ne $script:DetectedDaemon) {
+        if (Clear-AlertState "daemon_down") {
+            Alert-Green "✅ Node Recovered" "$($script:DetectedDaemon) is running again."
+        }
+        $script:Details.Add("✅ Node: $($script:DetectedDaemon) running")
         return $true
     } else {
         if (Test-ShouldAlert "daemon_down") {
-            Alert-Red "🔴 Node Down" "$DAEMON_PROCESS is NOT running! Restart it (check Task Scheduler or your service manager if you run it as a service)."
+            Alert-Red "🔴 Node Down" "Neither digibyted nor digibyte-qt is running! For headless: restart your service or launch digibyted.exe. For Qt: launch the DigiByte wallet."
         }
-        $script:Details.Add("🔴 ${DAEMON_PROCESS}: NOT RUNNING")
+        $script:Details.Add("🔴 Node: NOT RUNNING (checked digibyted, digibyte-qt)")
         $script:Issues++
         return $false  # skip remaining checks
     }
@@ -320,6 +404,10 @@ function Check-Oracle {
     $raw = Invoke-DGBCli -RpcArgs @("listoracle") -UseWallet
 
     if ([string]::IsNullOrEmpty($raw)) {
+        if ($script:DdActive -eq $false) {
+            $script:Details.Add("ℹ️  Oracle: standby (DigiDollar deployment: $($script:DdStatus))")
+            return
+        }
         if (Test-ShouldAlert "oracle_down") {
             Alert-Red "🔴 Oracle Not Running" "listoracle returned no data. Oracle may need to be restarted."
         }
@@ -438,6 +526,10 @@ function Check-Price {
     $raw = Invoke-DGBCli -RpcArgs @("getoracleprice")
 
     if ([string]::IsNullOrEmpty($raw)) {
+        if ($script:DdActive -eq $false) {
+            $script:Details.Add("ℹ️  Price: pending (DigiDollar deployment: $($script:DdStatus))")
+            return
+        }
         $script:Details.Add("⚠️ Price: could not query")
         $script:Warnings++
         return
@@ -541,12 +633,62 @@ function Check-Memory {
     }
 }
 
+# --- Check 12: Swap pressure (v2.4) ---
+# Fires a yellow alert when page-file usage exceeds $SWAP_THRESHOLD_MB.
+# On Windows with a healthy amount of RAM, sustained page-file use
+# signals real memory pressure — the exact condition that silently
+# killed daemons during the PRE stale incident (Session 19 on Linux).
+# Uses Get-CimInstance Win32_PageFileUsage which reports CurrentUsage
+# and AllocatedBaseSize in MB. Sums across multiple page files if the
+# system has more than one (unusual but supported).
+function Check-Swap {
+    $pf = Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue
+
+    if ($null -eq $pf) {
+        # No page file configured, or CIM query failed. Windows without a
+        # page file is rare but valid — skip with an INFO line.
+        $script:Details.Add("ℹ️  Swap: not configured (or Win32_PageFileUsage unavailable)")
+        return
+    }
+
+    # Sum across all page files (in case there are multiple)
+    $swapUsedMb  = 0
+    $swapTotalMb = 0
+    foreach ($p in @($pf)) {
+        if ($null -ne $p.CurrentUsage)        { $swapUsedMb  += [int]$p.CurrentUsage }
+        if ($null -ne $p.AllocatedBaseSize)   { $swapTotalMb += [int]$p.AllocatedBaseSize }
+    }
+
+    if ($swapTotalMb -eq 0) {
+        $script:Details.Add("ℹ️  Swap: not configured")
+        return
+    }
+
+    if ($swapUsedMb -gt $SWAP_THRESHOLD_MB) {
+        if (Test-ShouldAlert "swap_pressure") {
+            Alert-Yellow "⚠️ Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB. Memory pressure detected — check running processes."
+        }
+        $script:Details.Add("⚠️ Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (pressure!)")
+        $script:Warnings++
+    } else {
+        if (Clear-AlertState "swap_pressure") {
+            Alert-Green "✅ Swap Pressure Cleared" "Page file usage back to ${swapUsedMb}MB of ${swapTotalMb}MB."
+        }
+        $script:Details.Add("✅ Swap: ${swapUsedMb}MB / ${swapTotalMb}MB")
+    }
+}
+
 # --- Check 8: Service status (summary only) ---
-# Windows has no systemd. If $SERVICE_NAME is set (e.g. NSSM-wrapped
-# digibyted), the Windows service is checked; otherwise the process check
-# stands in. Oracle process state comes from listoracle, same as Linux v1.5.
+# Windows has no systemd.
+# v2.5.2: Skips Windows Service check with an INFO line when the Qt wallet
+#         is the detected daemon — Qt operators typically run outside
+#         NSSM/service wrappers, so a "not found" red would be misleading.
+# v2.5:   Adds DD_ACTIVE guard for oracle process (standby → INFO not warn).
 function Check-Services {
-    if (-not [string]::IsNullOrEmpty($SERVICE_NAME)) {
+    # v2.5.2: Qt-skip
+    if ($script:DetectedDaemon -eq "digibyte-qt") {
+        $script:Details.Add("ℹ️  Service: n/a — Qt wallet is the running daemon")
+    } elseif (-not [string]::IsNullOrEmpty($SERVICE_NAME)) {
         $svc = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
         if ($null -ne $svc -and $svc.Status -eq "Running") {
             $script:Details.Add("✅ Service ${SERVICE_NAME}: running")
@@ -557,13 +699,18 @@ function Check-Services {
             $script:Issues++
         }
     } else {
-        $procName = $DAEMON_PROCESS -replace '\.exe$', ''
-        if (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
-            $script:Details.Add("✅ $DAEMON_PROCESS process: running")
+        # No service name set — stand in with the process check
+        if ($null -ne $script:DetectedDaemon) {
+            $script:Details.Add("✅ $($script:DetectedDaemon) process: running")
         } else {
-            $script:Details.Add("🔴 $DAEMON_PROCESS process: not running")
+            $script:Details.Add("🔴 DigiByte node process: not running")
             $script:Issues++
         }
+    }
+
+    if ($script:DdActive -eq $false) {
+        $script:Details.Add("ℹ️  Oracle process: standby (DigiDollar deployment: $($script:DdStatus))")
+        return
     }
 
     $oracleStatus = "unknown"
@@ -586,43 +733,25 @@ function Check-Services {
 }
 
 # --- Check 9: Node version (summary only) ---
-# Matches the Linux script: first line of `digibyted --version` (the full
-# version string incl. release candidate and git hash). Tries digibyted.exe
-# next to digibyte-cli.exe first, then on PATH. Falls back to the short
-# getnetworkinfo subversion over RPC if the daemon binary can't be invoked.
+# v2.5: Read version via RPC (getnetworkinfo → .subversion). The old
+# approach probed `digibyted --version` from a candidate path list, which
+# failed entirely for Qt-wallet operators (no digibyted.exe present) and
+# picked the wrong binary in dual-daemon setups. RPC always reports what's
+# actually running and works identically for Qt and headless.
 function Check-Version {
     $verLine = $null
-    $candidates = @()
-    try {
-        $cliDir = Split-Path -Parent $CLI_PATH
-        if ($cliDir) { $candidates += (Join-Path $cliDir "digibyted.exe") }
-    } catch { }
-    $candidates += ("$($DAEMON_PROCESS -replace '\.exe$', '').exe")
-
-    foreach ($bin in $candidates) {
+    $raw = Invoke-DGBCli -RpcArgs @("getnetworkinfo")
+    if (-not [string]::IsNullOrEmpty($raw)) {
         try {
-            $out = & $bin --version 2>$null
-            if ($LASTEXITCODE -eq 0 -and $out) {
-                $verLine = "$(@($out)[0])"
-                break
+            $info = $raw | ConvertFrom-Json
+            if ($null -ne $info.PSObject.Properties['subversion']) {
+                $verLine = $info.subversion
             }
         } catch { }
     }
 
-    if ([string]::IsNullOrEmpty($verLine)) {
-        $raw = Invoke-DGBCli -RpcArgs @("getnetworkinfo")
-        if (-not [string]::IsNullOrEmpty($raw)) {
-            try {
-                $info = $raw | ConvertFrom-Json
-                if ($null -ne $info.PSObject.Properties['subversion']) {
-                    $verLine = ($info.subversion -replace '/', '')
-                }
-            } catch { }
-        }
-    }
-
     if (-not [string]::IsNullOrEmpty($verLine)) {
-        $script:Details.Add("ℹ️ $verLine")
+        $script:Details.Add("ℹ️  $verLine")
     }
 }
 
@@ -762,6 +891,10 @@ function Check-Quorum {
     $rawOracles = Invoke-DGBCli -RpcArgs @("getoracles", "true")
 
     if ([string]::IsNullOrEmpty($rawOracles)) {
+        if ($script:DdActive -eq $false) {
+            $script:Details.Add("ℹ️  Quorum: standby (DigiDollar deployment: $($script:DdStatus))")
+            return
+        }
         $script:Details.Add("⚠️ Quorum: could not query oracles")
         $script:Warnings++
         return
@@ -953,6 +1086,7 @@ function Check-Quorum {
 # ============================================================================
 
 function Send-Summary {
+    Check-DigidollarActive   # v2.5: must run before oracle-dependent checks
     if (-not (Check-Daemon)) { return }
     Check-Oracle
     Check-Chain
@@ -960,6 +1094,7 @@ function Send-Summary {
     Check-Price
     Check-Disk
     Check-Memory
+    Check-Swap               # v2.4
     Check-Services
     Check-Version
     Check-Ntp
@@ -987,9 +1122,11 @@ function Send-Summary {
 
     $desc = ($script:Details -join "`n") + "`n⏱️ Uptime: $uptimeStr"
 
+    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
+
     if ($script:DRY_RUN -or [string]::IsNullOrEmpty($DISCORD_WEBHOOK)) {
         Write-Output "======================================="
-        Write-Output " Oracle Health Summary — $(Get-Date)"
+        Write-Output " $label Health Summary — $(Get-Date)"
         Write-Output "======================================="
         Write-Output $desc
         Write-Output "======================================="
@@ -999,10 +1136,10 @@ function Send-Summary {
     $payload = @{
         embeds = @(
             @{
-                title       = "$status — Oracle Health Summary"
+                title       = "$status — $label Health Summary"
                 description = $desc
                 color       = $color
-                footer      = @{ text = "Oracle Monitor — $ORACLE_NAME (ID $ORACLE_ID)" }
+                footer      = @{ text = "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" }
                 timestamp   = $timestamp
             }
         )
@@ -1019,7 +1156,40 @@ function Send-Summary {
 # MAIN — Normal health check (alerts only on problems/recovery)
 # ============================================================================
 
+# --- Pre-flight: DigiDollar activation status (v2.5) ---
+# Sets globals $script:DdStatus and $script:DdActive so other checks know
+# whether to alert on missing oracle data (post-activation) or downgrade
+# to info (pre-activation). Called first from both Invoke-Checks and
+# Send-Summary — -DryRun, -Summary, and -Watch all route through
+# Send-Summary, so the pre-flight lives in both paths. Always succeeds;
+# $DdActive defaults to $false if the RPC fails or DigiDollar isn't
+# yet deployed.
+function Check-DigidollarActive {
+    $raw = Invoke-DGBCli -RpcArgs @("getdigidollardeploymentinfo")
+
+    if ([string]::IsNullOrEmpty($raw)) {
+        $script:DdStatus = "unknown"
+        $script:DdActive = $false
+        return
+    }
+
+    $info = $null
+    try { $info = $raw | ConvertFrom-Json } catch { }
+    if ($null -eq $info) {
+        $script:DdStatus = "unknown"
+        $script:DdActive = $false
+        return
+    }
+
+    $script:DdStatus = "unknown"
+    if ($null -ne $info.PSObject.Properties['status']) {
+        $script:DdStatus = "$($info.status)"
+    }
+    $script:DdActive = ($script:DdStatus -eq "active")
+}
+
 function Invoke-Checks {
+    Check-DigidollarActive   # v2.5: must run before oracle-dependent checks
     if (-not (Check-Daemon)) { return }
     Check-Oracle
     Check-Chain
@@ -1027,6 +1197,7 @@ function Invoke-Checks {
     Check-Price
     Check-Disk
     Check-Memory
+    Check-Swap               # v2.4
     Check-Ntp
     Check-Quorum
 }
@@ -1042,7 +1213,8 @@ if ($Test) {
         Write-Output "Configure it in: $CONFIG_FILE"
         exit 1
     }
-    Alert-Blue "🔧 Test Alert" "Oracle monitor is configured and working! $(Get-Date)"
+    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
+    Alert-Blue "🔧 $label Test Alert" "$label monitor is configured and working! $(Get-Date)"
     Write-Output "Check your Discord channel."
 } elseif ($Watch) {
     # Live console dashboard — full status block, refreshed in place.
@@ -1051,9 +1223,10 @@ if ($Test) {
     # the scheduled Task Scheduler checks. Ctrl+C to exit.
     if ($RefreshSeconds -lt 5) { $RefreshSeconds = 5 }
     $script:DRY_RUN = $true
+    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
     while ($true) {
         Clear-Host
-        Write-Host "🔭 Oracle Monitor — watch mode (refreshes every ${RefreshSeconds}s, Ctrl+C to exit)"
+        Write-Host "🔭 $label Monitor — watch mode (refreshes every ${RefreshSeconds}s, Ctrl+C to exit)"
         $script:Issues   = 0
         $script:Warnings = 0
         $script:Details.Clear()

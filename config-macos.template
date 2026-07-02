@@ -1,10 +1,14 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration (macOS)
 #
-# This file is sourced by oracle-monitor-macos.sh at startup.
+# This file is sourced by oracle-monitor-macos.sh (v2.5.2-macos.1+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #
-# After editing, verify with:  ./oracle-monitor-macos.sh --dry-run
+# After editing, verify with:
+#   ./oracle-monitor-macos.sh --dry-run
+#
+# For dual-instance (e.g. testnet + mainnet on one Mac):
+#   ./oracle-monitor-macos.sh --config /path/to/config --dry-run
 #
 # Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
 
@@ -17,27 +21,54 @@ ORACLE_ID=0
 ORACLE_NAME="my-oracle"
 
 # ---- RPC Settings ----
-# If digibyte-cli is not on your PATH, use its full path, e.g.:
+# If digibyte-cli isn't on your PATH, use its full path, e.g.:
 #   CLI="/Users/YOURNAME/digibyte/bin/digibyte-cli -testnet"
 # Testnet:  CLI="digibyte-cli -testnet"
 # Mainnet:  CLI="digibyte-cli"
+# Dual-instance mainnet with conf file:
+#   CLI="digibyte-cli -conf=$HOME/Library/Application Support/DigiByte/mainnet.conf"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
-# ---- Node Process ----
-# Process name as it appears to pgrep:
-#   "digibyted"     headless daemon (recommended for oracles)
-#   "DigiByte-Qt"   if you run the Qt wallet app
-DAEMON_PROCESS="digibyted"
+# ---- Daemon Process Name (v2.5.2-macos.1+) ----
+# The monitor auto-detects either "digibyted" (headless daemon) or the
+# Qt GUI wallet. On macOS the Qt process name has never been standardized
+# across releases, so auto-detect tries THREE Qt candidates in order:
+#   1. DigiByte-Qt   (matches .app bundle capitalization on recent builds)
+#   2. Digibyte-Qt   (lower-case 'b' — some older releases)
+#   3. digibyte-qt   (Linux-style all-lowercase — cross-compiled builds)
+# In auto-detect mode digibyted (headless) is tried first, then the three
+# Qt candidates. The first pgrep -x match wins and the actual matched name
+# appears in the Discord "Node: X running" line.
+#
+# Uncomment ONE line below to force a specific match. Only needed if you
+# run BOTH binaries on the same Mac and want to pin monitoring to one.
+#
+# For Qt-wallet operators: leave commented out — auto-detect will find it.
+# The launchd check (Check #8) automatically skips with an INFO line when
+# any Qt candidate is the detected daemon, since Qt usually runs outside
+# launchd.
+#
+# To verify what your Qt binary shows up as:
+#   pgrep -x DigiByte-Qt || pgrep -x Digibyte-Qt || pgrep -x digibyte-qt
+#
+# DAEMON_PROCESS="digibyted"
+# DAEMON_PROCESS="DigiByte-Qt"
+# DAEMON_PROCESS="Digibyte-Qt"
+# DAEMON_PROCESS="digibyte-qt"
 
-# Optional: launchd label if you run digibyted via a LaunchAgent
-# (e.g. "org.digibyte.digibyted"). Leave "" to use the process check.
+# ---- launchd Label (optional) ----
+# If you run digibyted via a LaunchAgent, set the label here and Check #8
+# will report its loaded/not-loaded state. Ignored automatically when a
+# Qt wallet is the detected daemon (v2.5.2-macos.1+).
+#   LAUNCHD_LABEL="org.digibyte.digibyted"
 LAUNCHD_LABEL=""
 
-# ---- Disk ----
-# Path whose volume is watched for free space. The DigiByte datadir on
-# macOS is ~/Library/Application Support/DigiByte — same volume as $HOME
-# on most Macs, so the default is fine.
+# ---- Disk Watch Path ----
+# The volume containing this path is watched for free space. The default
+# DigiByte datadir on macOS is ~/Library/Application Support/DigiByte,
+# which lives on the same volume as $HOME on most Macs — the default is
+# fine unless your datadir is on an external drive.
 DISK_PATH="${HOME}"
 
 # ---- Alert Thresholds ----
@@ -47,19 +78,47 @@ STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from R
 MEM_THRESHOLD=90        # Memory usage % above which to alert
 MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 
+# ---- Swap Pressure Threshold (v2.4-macos.1+) ----
+# Alert when system-wide swap usage exceeds this many MB.
+#
+# macOS uses a dynamic swap file that grows on demand — sysctl vm.swapusage
+# reports its current total and used size. On a healthy Mac with plenty of
+# RAM, swap stays near 0 MB. Any sustained non-trivial usage means the
+# system is fighting for memory.
+#
+# Recommended values:
+#   Desktop / plenty of RAM (16GB+):     100 MB
+#   Laptop with 8GB and browser tabs:    500 MB
+#   Dual-daemon (testnet + mainnet):     1500 MB
+#
+# To calibrate: after 24h of stable operation, run:
+#   sysctl vm.swapusage
+# and set the threshold ~200-500 MB above the "used" value you see.
+SWAP_THRESHOLD_MB=100
+
 # ---- NTP Check ----
-# Clock offset is measured with one sntp query against this server.
-# Offsets beyond the max trigger a desync warning. Oracle bundle
-# timestamps are rejected past 3600s skew, so keep this tight.
+# One `sntp` query measures your real clock offset against this server.
+# Offsets beyond NTP_MAX_OFFSET trigger a desync warning. Oracle bundle
+# timestamps are rejected past 3600s skew, so keep this tight — a drifting
+# clock kills your signing.
 NTP_SERVER="time.apple.com"
 NTP_MAX_OFFSET="1.0"
 
-# ---- Quorum Alert Bands (v2.0) ----
+# ---- Quorum Alert Bands (v2.0, tuned in v2.5.1) ----
 # Band thresholds for network-wide oracle liveness.
 # The on-chain minimum (oracle_consensus_required) comes from the chain
-# via getdigidollardeploymentinfo — not configurable here.
-QUORUM_GREEN=20         # At or above = comfortable (no alerts)
-QUORUM_YELLOW=12        # At or above but below green = "getting thin"
+# via getdigidollardeploymentinfo — not configurable here (currently 7-of-35).
+#
+# Recommended values (v2.5.1):
+#   Mainnet (production, 35-slot roster):  GREEN=12, YELLOW=10
+#   Testnet26 (smaller active population): GREEN=10, YELLOW=8
+#
+# The v2.0-v2.4 defaults (20/12) were too permissive and fired "getting thin"
+# at 15/35 fresh — more than 2x the hard 7-of-35 quorum floor. This
+# conditioned operators to ignore quorum warnings entirely. New defaults
+# fire only at meaningful risk levels.
+QUORUM_GREEN=12         # At or above = comfortable (no alerts)
+QUORUM_YELLOW=10        # At or above but below green = "getting thin"
 
 # ---- Anti-Flap (v2.1) ----
 # Cooldown: minimum minutes between quorum RECOVERY alerts.
@@ -68,7 +127,48 @@ QUORUM_YELLOW=12        # At or above but below green = "getting thin"
 QUORUM_COOLDOWN=30
 
 # Hysteresis: recovery requires exceeding the threshold by this buffer.
-# Example: GREEN=20, HYSTERESIS=3 → must hit 23 to recover to green.
+# Example: GREEN=12, HYSTERESIS=3 → must hit 15 to recover to green.
 # Prevents rapid green/yellow flapping when count hovers near boundary.
 # Set to 0 to disable (v2.0 behavior = recover at exact threshold).
 QUORUM_HYSTERESIS=3
+
+# ---- Network Label (v2.5.1-macos.1+) ----
+# Identifies which chain this monitor instance is watching. Appears in
+# Discord card titles and the --dry-run / --watch / --test output:
+#   "✅ All Systems Healthy — Testnet26 Health Summary"
+#   "⚠️ 1 Warnings — Mainnet Health Summary"
+#   "🔧 Mainnet Test Alert"
+#   "🔭 Mainnet Monitor — watch mode (refreshes every 60s, Ctrl+C to exit)"
+#
+# Leave commented out for the generic "Oracle" label.
+# NETWORK_LABEL="Testnet26"
+# NETWORK_LABEL="Mainnet"
+
+# ---- Dual-Instance Monitoring (v2.3-macos.1+) ----
+# oracle-monitor-macos.sh supports --config /path to run against a separate
+# config file. This lets you monitor testnet and mainnet from one Mac
+# without running two copies of the script.
+#
+# How it works:
+#   - Each instance reads its own config file (CLI path, webhook, thresholds)
+#   - State files (quorum_state, daemon_down, etc.) auto-separate by config
+#     directory — the state dir is derived from `dirname CONFIG_FILE`
+#
+# Setup example — adding a mainnet instance alongside testnet:
+#
+#   mkdir -p ~/.oracle-monitor-mainnet
+#   cp ~/.oracle-monitor/config ~/.oracle-monitor-mainnet/config
+#
+#   # Edit the mainnet config to override at least:
+#   #   CLI="digibyte-cli"                          (no -testnet flag)
+#   #   SWAP_THRESHOLD_MB=1500                      (dual-daemon baseline)
+#   #   QUORUM_GREEN=12, QUORUM_YELLOW=10           (tighter for production)
+#   #   NETWORK_LABEL="Mainnet"                     (shows in card titles)
+#   #   DISCORD_WEBHOOK="https://..."               (same or different webhook)
+#
+#   # Test:
+#   ./oracle-monitor-macos.sh --config ~/.oracle-monitor-mainnet/config --dry-run
+#
+#   # Add to cron (offset by 2 minutes to avoid RPC collision with testnet):
+#   2-59/5 * * * * /Users/YOUR_USER/oracle-monitor-macos.sh --config /Users/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   0 1,13 * * * /Users/YOUR_USER/oracle-monitor-macos.sh --config /Users/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
