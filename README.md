@@ -10,7 +10,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.4 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). Discord webhook alerts with red/yellow/green embeds. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.2 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.4 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. `--config /path` flag for dual-instance monitoring (testnet + mainnet). Bot account: `@digidollar-oracle-bot:matrix.org`. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
@@ -18,11 +18,22 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.3 — SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection. Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide — Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.2-win.1 — full logic parity with Linux v2.2. PS 5.1 and PS 7 compatible, zero dependencies. Includes watch mode (`-Watch`). Ships UTF-8 with BOM. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.2-win.1 — full logic parity with Linux v2.5.2. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
 | [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.2-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`). |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.2-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
 | [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. |
 | [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports — installation, config, Task Scheduler/cron, watch mode, troubleshooting. |
+
+### Testing
+
+The Windows and macOS ports ship with parallel isolated test harnesses for verifying `check_daemon` + `check_services` behavior on your box before scheduling the monitor. Nine scenarios each — auto-detect for headless vs Qt, override honored, service check appropriately skipped when Qt is the running daemon, and so on.
+
+| Harness | Purpose |
+|------|---------|
+| [test-macos-daemon-services.sh](test-macos-daemon-services.sh) | Mocks pgrep, launchctl, and `$CLI` — runs 9 scenarios in isolation. Verifies parity with the Linux logic before you point the monitor at a live oracle. |
+| [test-win-daemon-services.ps1](test-win-daemon-services.ps1) | Mocks Get-Process, Get-Service, and Invoke-DGBCli — runs 9 scenarios under Windows PowerShell 5.1 or 7. Verifies PS-specific behavior including auto-detect candidate loop and Windows Service Qt-skip. Ships UTF-8 with BOM. |
+
+Neither harness sends Discord alerts, touches state files, or runs against a real node — they're safe to run on any box, even without DigiByte installed.
 
 More tools will be added as the DigiDollar testnet matures toward mainnet activation.
 **Roadmap:** See [open issues](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) for planned features — mainnet migration, bundle signer detection, cross-platform support, and more.
@@ -31,13 +42,13 @@ More tools will be added as the DigiDollar testnet matures toward mainnet activa
 
 ## Platform support
 
-The monitor runs natively on all three major platforms. Same quorum state machine, same anti-flap logic, same Discord alerts — only the plumbing underneath differs. The Linux version (v2.4) has 12 checks including swap pressure detection and `--config` dual-instance support; the Windows and macOS ports (v2.2) have 11 checks with watch mode.
+The monitor runs natively on all three major platforms. Same 12 checks, same DigiDollar BIP9 pre-activation guard, same quorum state machine, same anti-flap logic, same Qt/headless auto-detect, same Discord card format — only the platform plumbing differs.
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
-| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.4 |
-| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.2-win.1 |
-| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.2-macos.1 |
+| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.5.2 |
+| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.5.2-win.1 |
+| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.5.2-macos.1 |
 
 Windows needs no dependencies at all (PowerShell parses JSON natively). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with. Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
 
@@ -47,7 +58,7 @@ Windows needs no dependencies at all (PowerShell parses JSON natively). macOS ne
 
 ### What it checks (every 5 minutes by default)
 
-- `digibyted` daemon process alive
+- `digibyted` daemon process alive (auto-detects headless `digibyted` or Qt wallet `digibyte-qt` — configurable via `DAEMON_PROCESS` override)
 - Oracle is `running` in `listoracle`
 - Chain sync (`verificationprogress`)
 - Peer count (default min: 3)
@@ -56,19 +67,31 @@ Windows needs no dependencies at all (PowerShell parses JSON natively). macOS ne
 - Disk space (default min: 5GB free)
 - Memory usage
 - **Swap pressure** — alerts when swap usage exceeds threshold (default 100 MB). On a properly tuned box with `swappiness=10`, any meaningful swap usage signals real memory pressure before things get critical (v2.4)
-- `digibyted.service` and oracle process status via `listoracle` RPC
-- Binary version drift detection
+- `digibyted.service` and oracle process status via `listoracle` RPC — systemd unit check auto-skips with an INFO line when the Qt wallet is the running daemon (Qt operators typically run outside systemd)
+- Binary version drift detection via RPC (`getnetworkinfo` → `.subversion`) — works identically for Qt and headless (v2.5)
 - NTP time synchronization
 - **Quorum margin tracking** — counts online oracles via `getoracles true` using `heartbeat_status` (stable across MuSig2 round transitions, matches dashboard's "Online Heartbeats" metric), compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries
+
+### DigiDollar activation status handling
+
+Before DigiDollar BIP9 activates on your target chain, the oracle RPCs (`listoracle`, `getoracleprice`, `getoracles`) return no data — the deployment simply isn't live yet. Without special handling, a monitor pointed at a mainnet node right now would fire red alerts every 5 minutes for oracle down, price unknown, and quorum unavailable, even though nothing is actually broken.
+
+The v2.5+ monitors solve this with a pre-flight check. A `check_digidollar_active` function runs first on every pass, reads `getdigidollardeploymentinfo` for the current deployment status, and sets a `DD_ACTIVE` global that the four oracle-dependent checks (`check_oracle`, `check_price`, `check_services`, `check_quorum`) consult before deciding whether to alert.
+
+When `DD_ACTIVE=false`, those four checks downgrade "no data" to a blue ℹ️ standby INFO line instead of a red alert — showing something like `ℹ️ Oracle: standby (DigiDollar deployment: started)` in the health summary. The other 8 checks (daemon, chain, peers, disk, memory, swap, service, NTP, version) continue to alert normally on real problems. Result: your Discord channel stays quiet until DigiDollar activates, then automatically switches to full oracle alerting once `DD_ACTIVE=true`.
+
+This is why a pre-activation mainnet monitor shows an all-green health summary with four ℹ️ standby lines — that's correct pre-activation behavior, not a bug. It flips to full oracle data automatically the moment BIP9 locks in.
 
 ### What it sends
 
 Discord embeds — color-coded:
 
 - 🔴 **Red** — critical (daemon down, oracle stopped, chain stuck, quorum at edge or lost)
-- 🟡 **Yellow** — warnings (low peers, low disk, stale price, degraded consensus, NTP desync, quorum getting thin)
+- 🟡 **Yellow** — warnings (low peers, low disk, stale price, degraded consensus, NTP desync, quorum getting thin, swap pressure)
 - 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
-- 🔵 **Blue** — 12-hour status summary
+- 🔵 **Blue** — 12-hour status summary, plus ℹ️ INFO lines for pre-activation standby state
+- **Card titles** carry the `NETWORK_LABEL` from your config (e.g. `Testnet26 Health Summary` or `Mainnet Health Summary`) so dual-instance operators can tell alerts apart at a glance
+- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.2 — digibyte-maxi (ID 17)`)
 
 State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers. Quorum tracking uses a single `quorum_state` file that stores the current band and timestamp, with cooldown and hysteresis to prevent alert flapping during network volatility.
 
@@ -83,6 +106,8 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 **Quorum state transition alerts — red/yellow/green as oracle count changes:**
 
 ![Quorum Alerts](Discord_alert-Quorum2.jpg)
+
+_Both images will be refreshed post-DigiDollar BIP9 mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29). The current images still represent the day-to-day healthy-oracle state most operators see; the update after activation will capture the stable long-term post-activation mainnet cards._
 
 ### Requirements
 
@@ -305,7 +330,7 @@ nano ~/.oracle-monitor/oracle-roster.conf
 8. Test: `./oracle-network-status.sh --dry-run`
 9. Test: `./oracle-network-status.sh --test`
 10. Test mentions: `./oracle-network-status.sh --test-mention`
-11. Add to cron: `5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null`
+11. Add to cron: `5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null`
 
 ### Flags
 
@@ -323,9 +348,9 @@ When mainnet launches, you can run two independent instances from the same scrip
 
 ```cron
 # Testnet (default config)
-5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 # Mainnet (custom config)
-10 */12 * * * /home/dgboracle/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 ```
 
 Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). Setup:
@@ -353,9 +378,9 @@ This script is designed for a **single designated community operator** to post t
 | DigiByte Core | v9.26.0-rc46 (also compatible with rc44 and rc45) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.4 |
-| oracle-monitor.ps1 | v2.2-win.1 |
-| oracle-monitor-macos.sh | v2.2-macos.1 |
+| oracle-monitor.sh | v2.5.2 |
+| oracle-monitor.ps1 | v2.5.2-win.1 |
+| oracle-monitor-macos.sh | v2.5.2-macos.1 |
 | oracle-network-status.sh | v1.4 |
 
 If you're running a different release and something breaks, please open an issue.
