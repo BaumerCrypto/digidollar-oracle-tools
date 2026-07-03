@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.5.3-win.1
+# Version: 2.5.4-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh v2.5.3 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -45,6 +45,15 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.5.4-win.1 — Full-repo audit fixes (July 2026), matching Linux
+#          v2.5.4. (1) $NETWORK_LABEL now declared in the defaults block
+#          ("" = auto) so the script is StrictMode-safe and the defaults
+#          list matches the config template. (2) Combined action flags
+#          (e.g. -DryRun -Summary) are now rejected with a clear error —
+#          previously one silently won — matching the bash ports, which
+#          have always errored on combined flags. (3) -Test no longer
+#          double-labels the card when $NETWORK_LABEL is set (the label
+#          lives in the title only, added by Send-Discord).
 #   v2.5.3-win.1 — Send-Discord now prefixes every individual alert title
 #          with $NETWORK_LABEL (when set), not just the health summary and
 #          -Test alert. Fixes dual-instance operators (testnet+mainnet on
@@ -123,7 +132,15 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.5.3-win.1"
+$SCRIPT_VERSION = "2.5.4-win.1"
+
+# v2.5.4-win.1: reject combined action flags (parity with the bash ports,
+# which error on e.g. --dry-run --summary; previously one silently won).
+$__actionFlags = @($Summary, $DryRun, $Test, $Watch) | Where-Object { $_ }
+if (@($__actionFlags).Count -gt 1) {
+    Write-Output "ERROR: Use only one of -Summary, -DryRun, -Test, -Watch."
+    exit 1
+}
 
 # ============================================================================
 # RUNTIME ENVIRONMENT
@@ -174,6 +191,12 @@ $DAEMON_PROCESS = ""
 # Leave "" to skip the service check. Ignored automatically when the Qt
 # wallet is the detected daemon (v2.5.2+).
 $SERVICE_NAME = ""
+
+# Network label shown in Discord card titles (v2.5.1+). Leave "" for no
+# label; set e.g. "Testnet26" or "Mainnet" for dual-instance setups.
+# (Declared here since v2.5.4-win.1 so the defaults block is complete
+# and the script runs clean under Set-StrictMode.)
+$NETWORK_LABEL = ""
 
 # Drive letter to watch for free disk space (where your DigiByte datadir
 # lives — datadir default is %APPDATA%\DigiByte on drive C).
@@ -655,7 +678,7 @@ function Check-Memory {
 # Fires a yellow alert when page-file usage exceeds $SWAP_THRESHOLD_MB.
 # On Windows with a healthy amount of RAM, sustained page-file use
 # signals real memory pressure — the exact condition that silently
-# killed daemons during the PRE stale incident (Session 19 on Linux).
+# killed daemons during the PRE stale incident (June 2026, on Linux).
 # Uses Get-CimInstance Win32_PageFileUsage which reports CurrentUsage
 # and AllocatedBaseSize in MB. Sums across multiple page files if the
 # system has more than one (unusual but supported).
@@ -1231,8 +1254,9 @@ if ($Test) {
         Write-Output "Configure it in: $CONFIG_FILE"
         exit 1
     }
-    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
-    Alert-Blue "🔧 Test Alert" "$label monitor is configured and working! $(Get-Date)"
+    # v2.5.4-win.1: label lives in the title only (Send-Discord prefixes
+    # $NETWORK_LABEL) — no more doubled label in the card.
+    Alert-Blue "🔧 Test Alert" "Oracle monitor is configured and working! $(Get-Date)"
     Write-Output "Check your Discord channel."
 } elseif ($Watch) {
     # Live console dashboard — full status block, refreshed in place.

@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.5.3
+# Version: 2.5.4
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.5.3"
+readonly SCRIPT_VERSION="2.5.4"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -32,6 +32,23 @@ readonly SCRIPT_VERSION="2.5.3"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.4 — Full-repo audit fixes (July 2026). (1) Default quorum bands
+#            now actually 12/10 — the v2.5.1 changelog promised the tune
+#            but this script kept 20/12 while both ports and all three
+#            config templates already shipped 12/10. (2) Node Down alert
+#            names the configured SERVICE_NAME instead of a hardcoded
+#            digibyted.service (dual-instance operators were told to
+#            check the wrong unit). (3) check_disk: new DISK_PATH config
+#            knob for datadirs on non-/home mounts, plus a numeric guard
+#            so a failed df reads "could not query" instead of a silent
+#            green line. (4) --dry-run no longer deletes the legacy v2.0
+#            quorum state files (dry-run must touch nothing). (5) Discord
+#            payloads built with jq -n — a quote or backslash in
+#            RPC-derived text could previously break the webhook POST
+#            silently. (6) check_ntp degrades to a "could not verify"
+#            warning on systems without timedatectl (containers) instead
+#            of a false desync alert. (7) --test no longer double-labels
+#            the card when NETWORK_LABEL is set.
 #   v2.5.3 — send_discord() now prefixes every individual alert title with
 #            NETWORK_LABEL (when set), not just the health summary and
 #            --test alert. Fixes dual-instance operators (testnet+mainnet
@@ -74,7 +91,7 @@ readonly SCRIPT_VERSION="2.5.3"
 #          100 MB). On a properly configured box with swappiness=10,
 #          any meaningful swap usage signals real memory pressure —
 #          the exact condition that silently killed daemons in the
-#          PRE stale incident (Session 19). Companion to the OOM
+#          PRE stale incident (June 2026). Companion to the OOM
 #          protection added to the hardening guide in v1.3.
 #          (fixes #26, suggested by shenger)
 #   v2.3 — Add --config /path flag for dual-instance monitoring
@@ -179,6 +196,11 @@ MEM_THRESHOLD=90
 SWAP_THRESHOLD_MB=100
 MAX_CHAIN_BEHIND=10
 
+# Path whose filesystem is watched for free disk space (v2.5.4).
+# Set this to the mount that holds your DigiByte datadir if it isn't
+# under /home (e.g. DISK_PATH="/mnt/blockchain").
+DISK_PATH="/home"
+
 # Thresholds — quorum margin (v2.0)
 # These define the alert bands for network-wide oracle liveness.
 # Quorum threshold (oracle_consensus_required) comes from the chain via
@@ -188,8 +210,14 @@ MAX_CHAIN_BEHIND=10
 # QUORUM_YELLOW: at or above this but below green = "getting thin" warning
 # Below QUORUM_YELLOW but at/above consensus_required = red, at quorum edge
 # Below consensus_required = CRITICAL — DD bundle signing may halt
-QUORUM_GREEN=20
-QUORUM_YELLOW=12
+#
+# Defaults (tuned in v2.5.1, code fixed in v2.5.4): 12/10 for mainnet
+# (35-slot roster, 7-of-35 quorum). The old 20/12 defaults produced
+# yellow at 15/35 fresh — more than 2x the hard 7-of-35 floor — which
+# conditioned operators to ignore the check. Override for testnet:
+# GREEN=10, YELLOW=8.
+QUORUM_GREEN=12
+QUORUM_YELLOW=10
 
 # Anti-flap — quorum alert throttling (v2.1)
 # QUORUM_COOLDOWN: minimum minutes between quorum recovery alerts.
@@ -260,19 +288,16 @@ send_discord() {
         return
     fi
 
+    # v2.5.4: payload built with jq -n so quotes/backslashes in
+    # RPC-derived text can't silently break the webhook POST.
     local payload
-    payload=$(cat <<EOF
-{
-  "embeds": [{
-    "title": "$title",
-    "description": "$message",
-    "color": $color,
-    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
-    "timestamp": "$timestamp"
-  }]
-}
-EOF
-)
+    payload=$(jq -n \
+        --arg title "$title" \
+        --arg desc "$message" \
+        --argjson color "$color" \
+        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg ts "$timestamp" \
+        '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
 }
 
@@ -350,7 +375,7 @@ check_daemon() {
         DETAILS+="✅ Node: $DETECTED_DAEMON running\n"
     else
         if should_alert "daemon_down"; then
-            alert_red "🔴 Node Down" "Neither digibyted nor digibyte-qt is running! For headless: \`sudo systemctl status digibyted.service\`. For Qt: launch the wallet."
+            alert_red "🔴 Node Down" "Neither digibyted nor digibyte-qt is running! For headless: \`sudo systemctl status ${SERVICE_NAME:-digibyted.service}\`. For Qt: launch the wallet."
         fi
         DETAILS+="🔴 Node: NOT RUNNING (checked digibyted, digibyte-qt)\n"
         ISSUES=$((ISSUES + 1))
@@ -515,9 +540,18 @@ check_price() {
 }
 
 # --- Check 6: Disk space ---
+# v2.5.4: Watches the filesystem holding DISK_PATH (default /home) so
+# datadirs on other mounts can be monitored. Numeric guard: a failed df
+# now reads as "could not query" instead of a silent green line.
 check_disk() {
     local avail_gb
-    avail_gb=$(df -BG /home | tail -1 | awk '{print $4}' | tr -d 'G')
+    avail_gb=$(df -BG "${DISK_PATH:-/home}" 2>/dev/null | tail -1 | awk '{print $4}' | tr -d 'G')
+
+    if [ -z "$avail_gb" ] || ! [[ "$avail_gb" =~ ^[0-9]+$ ]]; then
+        DETAILS+="⚠️ Disk: could not query ${DISK_PATH:-/home}\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
 
     if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
         if should_alert "low_disk"; then
@@ -554,7 +588,7 @@ check_memory() {
 # Fires a yellow alert when swap usage exceeds SWAP_THRESHOLD_MB.
 # On a properly configured box with swappiness=10, any meaningful swap
 # usage signals real memory pressure — the exact condition that silently
-# killed daemons during the PRE stale incident (Session 19). Companion to
+# killed daemons during the PRE stale incident (June 2026). Companion to
 # the OOM protection in the hardening guide.
 check_swap() {
     local swap_total_mb swap_used_mb
@@ -630,7 +664,15 @@ check_version() {
 }
 
 # --- Check 10: NTP time sync ---
+# v2.5.4: degrades to "could not verify" on systems without timedatectl
+# (containers, minimal images) instead of firing a false desync alert.
 check_ntp() {
+    if ! command -v timedatectl &>/dev/null; then
+        DETAILS+="⚠️ NTP: could not verify (timedatectl not available)\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
+
     local synced
     synced=$(timedatectl status 2>/dev/null | grep -c "synchronized: yes")
 
@@ -688,7 +730,10 @@ band_severity() {
 #
 check_quorum() {
     # --- Migration: clean up v2.0 state files (runs once, harmless after) ---
-    rm -f "$STATE_DIR/quorum_yellow" "$STATE_DIR/quorum_red" "$STATE_DIR/quorum_critical"
+    # v2.5.4: skipped in dry-run — dry-run must not touch state.
+    if [ "$DRY_RUN" != true ]; then
+        rm -f "$STATE_DIR/quorum_yellow" "$STATE_DIR/quorum_red" "$STATE_DIR/quorum_critical"
+    fi
 
     # --- Step 1: Get deployment info (quorum threshold + MuSig2 session) ---
     local deploy_info
@@ -941,19 +986,15 @@ send_summary() {
         return
     fi
 
+    # v2.5.4: payload built with jq -n (matches send_discord hardening).
     local payload
-    payload=$(cat <<EOF
-{
-  "embeds": [{
-    "title": "$status — ${NETWORK_LABEL:-Oracle} Health Summary",
-    "description": $(echo "$desc" | jq -Rs .),
-    "color": $color,
-    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
-    "timestamp": "$timestamp"
-  }]
-}
-EOF
-)
+    payload=$(jq -n \
+        --arg title "$status — ${NETWORK_LABEL:-Oracle} Health Summary" \
+        --arg desc "$desc" \
+        --argjson color "$color" \
+        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg ts "$timestamp" \
+        '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
 }
 
@@ -1020,7 +1061,9 @@ case "$ACTION_FLAG" in
             echo "Configure it in: $CONFIG_FILE"
             exit 1
         fi
-        alert_blue "🔧 Test Alert" "${NETWORK_LABEL:-Oracle} monitor is configured and working! $(date)"
+        # v2.5.4: label lives in the title only (send_discord prefixes
+        # NETWORK_LABEL) — no more "Mainnet — ... Mainnet monitor..." doubling.
+        alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;
     *)

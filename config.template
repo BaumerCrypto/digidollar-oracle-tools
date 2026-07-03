@@ -1,7 +1,7 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh (v2.5.3+) and
-# oracle-network-status.sh (v1.4+).
+# This file is sourced by oracle-monitor.sh (v2.5.4+) and
+# oracle-network-status.sh (v1.5+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #
@@ -53,6 +53,12 @@ MIN_DISK_GB=5           # Minimum free disk space (GB) before alerting
 STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from RPC
 MEM_THRESHOLD=90        # Memory usage % above which to alert
 MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
+
+# ---- Disk Watch Path (oracle-monitor.sh v2.5.4+) ----
+# Path whose filesystem is watched for free disk space. Default /home.
+# Set this to the mount that holds your DigiByte datadir if it lives
+# elsewhere (e.g. a dedicated blockchain volume):
+# DISK_PATH="/mnt/blockchain"
 
 # ---- Swap Pressure Threshold (v2.4+) ----
 # Alert when system-wide swap usage exceeds this many MB.

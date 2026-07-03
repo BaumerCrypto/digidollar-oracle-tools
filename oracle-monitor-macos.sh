@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord Alerts (macOS)
-# Version: 2.5.3-macos.1
+# Version: 2.5.4-macos.1
 #
 # macOS port of my oracle-monitor.sh v2.5.3 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
@@ -10,7 +10,7 @@
 # (no Homebrew bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.5.3-macos.1"
+readonly SCRIPT_VERSION="2.5.4-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -51,6 +51,15 @@ readonly SCRIPT_VERSION="2.5.3-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.4-macos.1 — Full-repo audit fixes (July 2026), matching Linux
+#          v2.5.4. (1) Discord payloads built with jq -n — a quote or
+#          backslash in RPC-derived text could previously break the
+#          webhook POST silently. (2) check_services launchd check now
+#          matches the LaunchAgent label exactly (a substring grep could
+#          false-positive on partially matching labels, e.g.
+#          org.digibyte.digibyted matching org.digibyte.digibyted-main).
+#          (3) --test no longer double-labels the card when
+#          NETWORK_LABEL is set.
 #   v2.5.3-macos.1 — send_discord() now prefixes every individual alert
 #          title with NETWORK_LABEL (when set), not just the health summary
 #          and --test alert. Fixes dual-instance operators (testnet+mainnet
@@ -313,19 +322,16 @@ send_discord() {
         return
     fi
 
+    # v2.5.4-macos.1: payload built with jq -n so quotes/backslashes in
+    # RPC-derived text can't silently break the webhook POST.
     local payload
-    payload=$(cat <<EOF
-{
-  "embeds": [{
-    "title": "$title",
-    "description": "$message",
-    "color": $color,
-    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
-    "timestamp": "$timestamp"
-  }]
-}
-EOF
-)
+    payload=$(jq -n \
+        --arg title "$title" \
+        --arg desc "$message" \
+        --argjson color "$color" \
+        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg ts "$timestamp" \
+        '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
 }
 
@@ -647,7 +653,7 @@ check_memory() {
 # Fires a yellow alert when swap usage exceeds SWAP_THRESHOLD_MB.
 # On a memory-tight box, any meaningful swap usage signals real pressure —
 # the exact condition that silently killed daemons during the PRE stale
-# incident (Session 19 on Linux). macOS reports dynamic swap via
+# incident (June 2026, on Linux). macOS reports dynamic swap via
 # `sysctl vm.swapusage`, output format:
 #   vm.swapusage: total = 2048.00M  used = 512.30M  free = 1535.70M  (encrypted)
 # We parse the numeric part of the "total = X.XXM" and "used = X.XXM" tokens
@@ -715,7 +721,9 @@ check_services() {
     if [ "$is_qt" = true ]; then
         DETAILS+="ℹ️  launchd: n/a — Qt wallet is the running daemon\n"
     elif [ -n "$LAUNCHD_LABEL" ]; then
-        if launchctl list 2>/dev/null | grep -q "$LAUNCHD_LABEL"; then
+        # v2.5.4-macos.1: exact label match on launchctl's third column —
+        # a substring grep could false-positive on partially matching labels.
+        if launchctl list 2>/dev/null | awk '{print $3}' | grep -qx "$LAUNCHD_LABEL"; then
             DETAILS+="✅ LaunchAgent $LAUNCHD_LABEL: loaded\n"
         else
             DETAILS+="🔴 LaunchAgent $LAUNCHD_LABEL: not loaded\n"
@@ -1073,19 +1081,15 @@ send_summary() {
         return
     fi
 
+    # v2.5.4-macos.1: payload built with jq -n (matches send_discord).
     local payload
-    payload=$(cat <<EOF
-{
-  "embeds": [{
-    "title": "$status — ${NETWORK_LABEL:-Oracle} Health Summary",
-    "description": $(echo "$desc" | jq -Rs .),
-    "color": $color,
-    "footer": {"text": "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"},
-    "timestamp": "$timestamp"
-  }]
-}
-EOF
-)
+    payload=$(jq -n \
+        --arg title "$status — ${NETWORK_LABEL:-Oracle} Health Summary" \
+        --arg desc "$desc" \
+        --argjson color "$color" \
+        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg ts "$timestamp" \
+        '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
 }
 
@@ -1172,7 +1176,9 @@ case "$ACTION_FLAG" in
             echo "Configure it in: $CONFIG_FILE"
             exit 1
         fi
-        alert_blue "🔧 Test Alert" "${NETWORK_LABEL:-Oracle} monitor is configured and working! $(date)"
+        # v2.5.4-macos.1: label lives in the title only (send_discord
+        # prefixes NETWORK_LABEL) — no more doubled label in the card.
+        alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;
     *)
