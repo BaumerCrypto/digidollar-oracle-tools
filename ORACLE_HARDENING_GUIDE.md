@@ -481,14 +481,16 @@ These are security steps specific to running a DigiByte oracle node.
 
 ### Wallet Passphrase File Permissions
 
-If you store your wallet passphrase in a file for automated oracle startup (which I do for systemd auto-start), lock the permissions:
+**A note on oracle wallet encryption:** The community has largely converged on running the oracle signing wallet **unencrypted** on hardened VPS environments — Bastian's argument (Gitter, 2026): the oracle wallet is signing-only, holds no coins, and the hardened environment itself is the real protection. Since RC25, an unencrypted wallet auto-starts the oracle on load with no manual intervention required (survives reboots cleanly). This is what I run on both my testnet and mainnet oracles.
+
+If instead you choose to run an encrypted wallet with a passphrase file for automated startup, lock the permissions:
 
 ```bash
 chmod 600 /home/dgboperator/.oracle_passphrase
 chown dgboperator:dgboperator /home/dgboperator/.oracle_passphrase
 ```
 
-This means only your oracle user can read it — no other user or process on the system.
+This means only your oracle user can read it — no other user or process on the system. Note that even with strict permissions, a passphrase file on disk is functionally similar to an unencrypted wallet — the passphrase is still readable by the oracle user process, so a compromised oracle user is a compromised key either way. The main threat model the passphrase file protects against is offline disk theft (e.g., someone getting a VPS snapshot); it does not add meaningful protection against a live-system compromise.
 
 ### Systemd Service Hardening
 
@@ -644,6 +646,40 @@ chronyc tracking
 ```
 
 If you're running [oracle-monitor.sh](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh), NTP is monitored automatically as Check #10 — it fires Discord alerts if sync drops.
+
+### Serving Compact Block Filters (BIP157/158)
+
+> 🙏 *Requested by JohnnyLawDGB in Gitter for mobile wallet compatibility — trivial change, real network benefit.*
+
+Modern light clients (Neutrino-style mobile wallets) use BIP157/158 compact block filters to sync without trusting a specific server. To let them use your node directly, add two lines to your `digibyte.conf` (or `mainnet.conf`):
+
+```ini
+blockfilterindex=basic
+peerblockfilters=1
+```
+
+**What each line does:**
+- `blockfilterindex=basic` — builds a local BIP158 compact filter index (~4-6 GB extra on disk for a full mainnet chain).
+- `peerblockfilters=1` — serves those filters to light clients over P2P (BIP157). Requires the index above.
+
+Restart the daemon after adding both lines. The filter index builds in a background thread and takes several hours to catch up on a synced full chain (~4-8 hours depending on disk speed). It does not block oracle signing or any other node function.
+
+Verify build progress with:
+
+```bash
+digibyte-cli getindexinfo
+```
+
+You'll see the `basic block filter index` entry with `synced: false` and a climbing `best_block_height` until it matches your chain tip, then `synced: true`.
+
+**Cost/benefit for oracle operators:**
+- Disk: +4-6 GB (VPS 20 has 100+ GB — negligible).
+- CPU: background thread, non-blocking.
+- Bandwidth: modest outbound increase (mobile wallets syncing filters ~1-2 GB per full sync).
+- Oracle signing: not affected.
+- Public-good contribution: light clients get better privacy and reliability without you doing anything after the initial setup.
+
+Recommended if your oracle is serving as a public seed peer, optional otherwise.
 
 ### Resource Isolation and OOM Protection
 
@@ -894,5 +930,5 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.3
+Version: v1.4
 
