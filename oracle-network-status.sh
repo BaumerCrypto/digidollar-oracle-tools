@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.4
+# Version: 1.5
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -30,7 +30,7 @@
 #   7. Test:  ./oracle-network-status.sh --dry-run
 #   8. Test:  ./oracle-network-status.sh --test
 #   9. Test:  ./oracle-network-status.sh --test-mention
-#  10. Cron:  5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+#  10. Cron:  5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 #
 # FLAGS:
 #   (none)              Collect data and post to Gitter
@@ -41,9 +41,9 @@
 #
 # DUAL-INSTANCE EXAMPLE (testnet + mainnet on one VPS):
 #   # Testnet (default config)
-#   5 */12 * * * /home/dgboracle/oracle-network-status.sh 2>/dev/null
+#   5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 #   # Mainnet (custom config)
-#   10 */12 * * * /home/dgboracle/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+#   10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 #
 # DATA SOURCES (RPCs):
 #   getblockchaininfo            — chain identification (testnet/mainnet)
@@ -58,6 +58,21 @@
 #   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
 #
 # CHANGELOG:
+#   v1.5 — Full-repo audit fixes (July 2026). (1) Header cron examples
+#          use generic /home/YOUR_USER paths. (2) Default quorum bands
+#          brought in line with oracle-monitor.sh v2.5.1+ (12/10, was
+#          20/12 — the config file overrides these either way). (3)
+#          --dry-run no longer resets mention_state entries: dry-run
+#          must not touch state. (4) --test-mention pings your own
+#          ORACLE_ID from config instead of a hardcoded slot (previously
+#          every operator's test pinged slot 17), falling back to the
+#          first roster entry. (5) RPC failure detection now validates
+#          JSON with jq -e instead of substring-grepping for "error" —
+#          an oracle name containing "error" could trip the old check.
+#          (6) formatted_body is HTML-escaped and mention-pill
+#          substitution is sed-safe, so operator-supplied oracle names
+#          containing &, <, > or backslashes can no longer inject markup
+#          into the Gitter post or corrupt the pill replacement.
 #   v1.4 — Network label in header: auto-detected from getblockchaininfo
 #          ("test" → Testnet, "main" → Mainnet), overridable via
 #          NETWORK_LABEL in config (e.g. "Testnet26"). Header now reads:
@@ -145,9 +160,15 @@ MATRIX_HOMESERVER="https://matrix.org"
 MATRIX_ACCESS_TOKEN=""
 MATRIX_ROOM_ID=""
 
-# Quorum alert bands (same as oracle-monitor.sh for consistency)
-QUORUM_GREEN=20
-QUORUM_YELLOW=12
+# Oracle identity — used by --test-mention to ping your own slot (v1.5).
+# Normally set in the shared config file (same key oracle-monitor.sh uses).
+ORACLE_ID=0
+
+# Quorum alert bands (same defaults as oracle-monitor.sh v2.5.1+):
+# 12/10 for mainnet (35-slot roster, 7-of-35 quorum). Override for
+# testnet: GREEN=10, YELLOW=8.
+QUORUM_GREEN=12
+QUORUM_YELLOW=10
 
 # Mention settings
 MENTION_MAX=6
@@ -308,13 +329,24 @@ case "$ACTION_FLAG" in
             echo "Create it with oracle ID to Gitter handle mappings."
             exit 1
         fi
-        # Look up slot 17 (digibyte-maxi) for the test mention
-        test_handle=$(get_gitter_handle 17)
+        # v1.5: ping YOUR OWN slot (ORACLE_ID from config), falling back
+        # to the first roster entry. Previously hardcoded to slot 17,
+        # which pinged the tool author from every operator's test.
+        TEST_ID="${ORACLE_ID:-0}"
+        test_handle=""
+        if [ "$TEST_ID" != "0" ]; then
+            test_handle=$(get_gitter_handle "$TEST_ID")
+        fi
         if [ -z "$test_handle" ]; then
-            echo "ERROR: No handle found for oracle ID 17 in $ROSTER_FILE"
+            first_line=$(grep -v '^#' "$ROSTER_FILE" | grep -v '^$' | head -1)
+            TEST_ID=$(echo "$first_line" | cut -d'|' -f1)
+            test_handle=$(echo "$first_line" | cut -d'|' -f2)
+        fi
+        if [ -z "$test_handle" ]; then
+            echo "ERROR: No usable handle found. Set ORACLE_ID in $CONFIG_FILE or add entries to $ROSTER_FILE."
             exit 1
         fi
-        echo "Sending test mention to ${test_handle}..."
+        echo "Sending test mention to ${test_handle} (oracle ID ${TEST_ID})..."
         txn_id="testmention_$(date +%s)"
         mention_array=$(echo "$test_handle" | jq -R . | jq -s .)
         payload=$(jq -n \
@@ -430,7 +462,9 @@ echo "[$(date -u)] Collecting oracle network data..."
 
 # --- 0. getblockchaininfo — network identification ---
 CHAIN_JSON=$($CLI getblockchaininfo 2>&1)
-if [ $? -eq 0 ] && ! echo "$CHAIN_JSON" | grep -q "error"; then
+# v1.5: validate the JSON parse (jq -e) instead of substring-grepping
+# for "error" — same change applied to every RPC check below.
+if [ $? -eq 0 ] && echo "$CHAIN_JSON" | jq -e . >/dev/null 2>&1; then
     CHAIN_NAME=$(echo "$CHAIN_JSON" | jq -r '.chain // ""')
 else
     CHAIN_NAME=""
@@ -455,7 +489,7 @@ fi
 
 # --- 1. getoracles true — per-oracle heartbeat status ---
 ORACLES_JSON=$($CLI getoracles true 2>&1)
-if [ $? -ne 0 ] || echo "$ORACLES_JSON" | grep -q "error"; then
+if [ $? -ne 0 ] || ! echo "$ORACLES_JSON" | jq -e . >/dev/null 2>&1; then
     echo "ERROR: getoracles true failed: $ORACLES_JSON"
     if [ "$DRY_RUN" != true ]; then
         # Include network label in error message if available
@@ -499,7 +533,7 @@ INACTIVE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status != "
 OFFLINE_COUNT=$((TOTAL_ORACLES - FRESH_COUNT))
 
 # --- Consensus price ---
-if [ $PRICE_OK -eq 0 ] && ! echo "$PRICE_JSON" | grep -q "error"; then
+if [ $PRICE_OK -eq 0 ] && echo "$PRICE_JSON" | jq -e . >/dev/null 2>&1; then
     PRICE_USD=$(echo "$PRICE_JSON" | jq -r '.price_usd // "N/A"')
     PRICE_STATUS=$(echo "$PRICE_JSON" | jq -r '.status // "unknown"')
     PRICE_STALE=$(echo "$PRICE_JSON" | jq -r '.is_stale // false')
@@ -512,7 +546,7 @@ else
 fi
 
 # --- Deployment info ---
-if [ $DEPLOY_OK -eq 0 ] && ! echo "$DEPLOY_JSON" | grep -q "error"; then
+if [ $DEPLOY_OK -eq 0 ] && echo "$DEPLOY_JSON" | jq -e . >/dev/null 2>&1; then
     BIP9_STATUS=$(echo "$DEPLOY_JSON" | jq -r '.status // "unknown"')
     BIP9_BIT=$(echo "$DEPLOY_JSON" | jq -r '.bit // "N/A"')
     QUORUM_REQUIRED=$(echo "$DEPLOY_JSON" | jq -r '.oracle_consensus_required // 7')
@@ -533,7 +567,7 @@ else
 fi
 
 # --- Last bundle signers ---
-if [ $SIGNERS_OK -eq 0 ] && ! echo "$SIGNERS_JSON" | grep -q "error"; then
+if [ $SIGNERS_OK -eq 0 ] && echo "$SIGNERS_JSON" | jq -e . >/dev/null 2>&1; then
     BUNDLE_COUNT=$(echo "$SIGNERS_JSON" | jq -r '.bundle_count // 0')
     if [ "$BUNDLE_COUNT" -gt 0 ]; then
         # Most recent bundle (newest first)
@@ -576,7 +610,8 @@ fi
 
 # Any oracle that's currently fresh should have its ping count cleared
 # (so if they go stale again later, they get a new round of pings)
-if [ -f "$MENTION_STATE_FILE" ]; then
+# v1.5: skipped in --dry-run — dry-run must not touch mention state.
+if [ -f "$MENTION_STATE_FILE" ] && [ "$DRY_RUN" != true ]; then
     while read -r fresh_id; do
         reset_mention_count "$fresh_id"
     done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "fresh") | .oracle_id')
@@ -715,17 +750,23 @@ fi
 MESSAGE_HTML=""
 
 if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
-    # Start with the plain text message, convert newlines to <br>
-    MESSAGE_HTML=$(printf '%s' "$MESSAGE" | sed 's/$/<br>/g')
+    # v1.5: HTML-escape the plain message (&, <, >) BEFORE building the
+    # formatted_body, so operator-supplied oracle names can't inject
+    # markup into the Gitter post. Then convert newlines to <br>.
+    MESSAGE_HTML=$(printf '%s' "$MESSAGE" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/$/<br>/g')
 
     # Replace each raw handle with an HTML mention pill
     for i in "${!ALL_MENTION_IDS[@]}"; do
         handle="${ALL_MENTION_IDS[$i]}"
         display="${ALL_MENTION_NAMES[$i]}"
-        # Escape dots in handle for sed pattern matching
-        escaped_handle=$(printf '%s' "$handle" | sed 's/\./\\./g')
-        pill="<a href=\"https://matrix.to/#/${handle}\">@${display}</a>"
-        MESSAGE_HTML=$(printf '%s' "$MESSAGE_HTML" | sed "s|${escaped_handle}|${pill}|g")
+        # v1.5: escape every BRE-special char in the handle (was dots
+        # only), HTML-escape the display name, and escape & / \ in the
+        # replacement so sed can't mangle or expand it.
+        escaped_handle=$(printf '%s' "$handle" | sed 's/[][\.*^$]/\\&/g')
+        display_html=$(printf '%s' "$display" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+        pill="<a href=\"https://matrix.to/#/${handle}\">@${display_html}</a>"
+        pill_escaped=$(printf '%s' "$pill" | sed -e 's/[&\\]/\\&/g')
+        MESSAGE_HTML=$(printf '%s' "$MESSAGE_HTML" | sed "s|${escaped_handle}|${pill_escaped}|g")
     done
 fi
 

@@ -104,24 +104,24 @@ Don't run your oracle node as root (Linux), Administrator (Windows), or your dai
 
 ```bash
 # Create a dedicated user
-sudo adduser dgboracle
+sudo adduser dgboperator
 
 # DO NOT add to sudo group unless you need it for initial setup
 # If you do need sudo temporarily:
-sudo usermod -aG sudo dgboracle
+sudo usermod -aG sudo dgboperator
 # Remove sudo after setup is complete:
-sudo deluser dgboracle sudo
+sudo deluser dgboperator sudo
 ```
 
-Log in as `dgboracle` for all oracle operations. Install DigiByte, configure your node, and run everything under this account.
+Log in as `dgboperator` for all oracle operations. Install DigiByte, configure your node, and run everything under this account.
 
 **Windows:**
 
 1. Open **Settings → Accounts → Other users → Add account** (Windows 11) or **Settings → Accounts → Family & other users → Add someone else to this PC** (Windows 10)
 2. Click **"I don't have this person's sign-in information"** → **"Add a user without a Microsoft account"**
-3. Create a local account named `dgboracle` with a strong password
+3. Create a local account named `dgboperator` with a strong password
 4. Leave it as a **Standard User** — do NOT make it an Administrator
-5. Log in as `dgboracle` to install and run your oracle
+5. Log in as `dgboperator` to install and run your oracle
 
 > **Windows tip:** If you need to install software or change system settings, use "Run as administrator" on individual tasks rather than making the oracle account an admin.
 
@@ -132,9 +132,9 @@ Log in as `dgboracle` for all oracle operations. Install DigiByte, configure you
 > **macOS version note:** This guide references "System Settings" throughout — that's the name used in macOS Ventura (13) and newer. If you're running macOS Monterey (12) or older, look for "System Preferences" instead. All paths are otherwise identical.
 2. Click the **+** button (you'll need to unlock with your admin password)
 3. Set **New Account** to **Standard**
-4. Name it `dgboracle`
+4. Name it `dgboperator`
 5. Set a strong password
-6. Log in as `dgboracle` to install and run your oracle
+6. Log in as `dgboperator` to install and run your oracle
 
 ---
 
@@ -415,7 +415,7 @@ chronyc tracking
 > ```
 > If you don't have mail configured, the log option is a basic fallback — but you'll need to check the file manually:
 > ```bash
-> 0 */6 * * * /usr/bin/timedatectl status | grep -q "synchronized: yes" || echo "$(date): TIME SYNC FAILED" >> /home/dgboracle/time-sync.log
+> 0 */6 * * * /usr/bin/timedatectl status | grep -q "synchronized: yes" || echo "$(date): TIME SYNC FAILED" >> /home/dgboperator/time-sync.log
 > ```
 
 **Windows:**
@@ -536,9 +536,9 @@ Wants=network-online.target
 
 [Service]
 Type=forking
-User=dgboracle
-Group=dgboracle
-ExecStart=/usr/local/bin/digibyted -daemon -conf=/home/dgboracle/.digibyte/digibyte.conf
+User=dgboperator
+Group=dgboperator
+ExecStart=/usr/local/bin/digibyted -daemon -conf=/home/dgboperator/.digibyte/digibyte.conf
 ExecStop=/usr/local/bin/digibyte-cli stop
 Restart=on-failure
 RestartSec=30
@@ -568,8 +568,8 @@ Requires=digibyted.service
 
 [Service]
 Type=oneshot
-User=dgboracle
-ExecStart=/home/dgboracle/start-oracle.sh
+User=dgboperator
+ExecStart=/home/dgboperator/start-oracle.sh
 RemainAfterExit=yes
 
 [Install]
@@ -597,12 +597,12 @@ C:\nssm\nssm.exe install DigiByteDaemon
 # In the GUI that opens:
 # Path: C:\path\to\digibyted.exe
 # Startup directory: C:\path\to\digibyte\
-# Arguments: -conf=C:\Users\dgboracle\AppData\Roaming\DigiByte\digibyte.conf
+# Arguments: -conf=C:\Users\dgboperator\AppData\Roaming\DigiByte\digibyte.conf
 # Service name: DigiByteDaemon
 ```
 
 4. Go to the **Exit** tab: set **Restart: Restart application**
-5. Go to the **Log on** tab: set to run as the `dgboracle` user
+5. Go to the **Log on** tab: set to run as the `dgboperator` user
 6. Click **Install service**
 
 ```cmd
@@ -628,7 +628,7 @@ sc query DigiByteDaemon
 > 1. **Add Qt to Windows Startup:** Press Win+R → type `shell:startup` → create a shortcut to `digibyte-qt.exe` in that folder. Qt will launch on login.
 > 2. **Auto-load the wallet:** Add `wallet=oracle` to your `digibyte.conf`. Qt will automatically load the oracle wallet on startup.
 > 3. **Auto-start behavior (since RC25):** If the wallet is **unencrypted**, the oracle auto-starts when the wallet loads — no manual intervention needed. If the wallet is **encrypted**, you must manually unlock it first (via the Qt unlock dialog or Debug Console: `walletpassphrase "yourpassphrase" 0`), then the oracle auto-starts.
-> 4. **Windows auto-login (security tradeoff):** You can set Windows to auto-login your `dgboracle` user (Settings → Accounts → Sign-in options → disable password on wake). Combined with Qt in Startup and an unencrypted wallet, this gives you unattended recovery. But it means anyone with physical access to your machine has access to your oracle signing key.
+> 4. **Windows auto-login (security tradeoff):** You can set Windows to auto-login your `dgboperator` user (Settings → Accounts → Sign-in options → disable password on wake). Combined with Qt in Startup and an unencrypted wallet, this gives you unattended recovery. But it means anyone with physical access to your machine has access to your oracle signing key.
 >
 > **The honest tradeoff:**
 >
@@ -668,7 +668,7 @@ Create `~/Library/LaunchAgents/com.digibyte.daemon.plist`:
     <key>KeepAlive</key>
     <true/>
     <key>UserName</key>
-    <string>dgboracle</string>
+    <string>dgboperator</string>
     <key>StandardOutPath</key>
     <string>/tmp/digibyted.stdout.log</string>
     <key>StandardErrorPath</key>
@@ -695,36 +695,36 @@ Your oracle wallet file contains the private key that signs price bundles. Prote
 
 ```bash
 # Restrict wallet file to owner only
-chmod 600 /home/dgboracle/.digibyte/wallets/oracle/wallet.dat
+chmod 600 /home/dgboperator/.digibyte/wallets/oracle/wallet.dat
 
 # Restrict the wallets directory
-chmod 700 /home/dgboracle/.digibyte/wallets/
+chmod 700 /home/dgboperator/.digibyte/wallets/
 
 # Verify
-ls -la /home/dgboracle/.digibyte/wallets/oracle/wallet.dat
-# Should show: -rw------- 1 dgboracle dgboracle
+ls -la /home/dgboperator/.digibyte/wallets/oracle/wallet.dat
+# Should show: -rw------- 1 dgboperator dgboperator
 ```
 
 **Windows:**
 
-1. Navigate to `C:\Users\dgboracle\AppData\Roaming\DigiByte\wallets\oracle\`
+1. Navigate to `C:\Users\dgboperator\AppData\Roaming\DigiByte\wallets\oracle\`
 2. Right-click `wallet.dat` → **Properties → Security**
 3. Click **Advanced → Disable inheritance** → **"Convert inherited permissions"**
-4. Remove all entries except `dgboracle` (Full Control) and `SYSTEM` (Full Control)
+4. Remove all entries except `dgboperator` (Full Control) and `SYSTEM` (Full Control)
 5. Click Apply
 
 Or via PowerShell (run as Administrator):
 
 ```powershell
-$path = "C:\Users\dgboracle\AppData\Roaming\DigiByte\wallets\oracle\wallet.dat"
+$path = "C:\Users\dgboperator\AppData\Roaming\DigiByte\wallets\oracle\wallet.dat"
 $acl = Get-Acl $path
 $acl.SetAccessRuleProtection($true, $false)  # Disable inheritance
 
 # Remove all existing rules
 $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) }
 
-# Add dgboracle full control
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule("dgboracle", "FullControl", "Allow")
+# Add dgboperator full control
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule("dgboperator", "FullControl", "Allow")
 $acl.AddAccessRule($rule)
 
 # Add SYSTEM full control (required for services)
@@ -749,7 +749,7 @@ chmod 700 ~/Library/Application\ Support/DigiByte/wallets/
 
 After completing Tier 1:
 
-- [ ] Dedicated `dgboracle` user account (not root/admin)
+- [ ] Dedicated `dgboperator` user account (not root/admin)
 - [ ] Host firewall enabled — only P2P port allowed inbound
 - [ ] Port forwarding on router — ONLY the P2P port, nothing else
 - [ ] Static local IP on the oracle machine
@@ -803,7 +803,7 @@ sudo nano /etc/ssh/sshd_config
 Critical settings to change:
 
 ```
-Port 5520                           # Move off default port 22
+Port 2222                           # Move off default port 22
 PermitRootLogin no                  # Never allow root SSH
 PubkeyAuthentication yes            # Allow key auth
 PasswordAuthentication no           # Disable password auth (key-only)
@@ -811,7 +811,7 @@ KbdInteractiveAuthentication no     # Disable keyboard-interactive
 MaxAuthTries 3                      # Lock out after 3 failures
 LoginGraceTime 30                   # 30 seconds to authenticate
 X11Forwarding no                    # No GUI forwarding needed
-AllowUsers dgboracle                # Only allow the oracle user
+AllowUsers dgboperator                # Only allow the oracle user
 ClientAliveInterval 300             # 5-minute keepalive
 ClientAliveCountMax 2               # Drop after 2 missed keepalives
 ```
@@ -823,7 +823,7 @@ sudo systemctl restart ssh
 sudo systemctl restart ssh.socket
 
 # Add SSH port to UFW (local network only)
-sudo ufw allow from 192.168.0.0/16 to any port 5520 comment "SSH local only"
+sudo ufw allow from 192.168.0.0/16 to any port 2222 comment "SSH local only"
 ```
 
 > **Do NOT port-forward SSH through your router** unless you're using a VPN (Tier 3). The UFW rule above limits SSH to your local network only.
@@ -837,7 +837,7 @@ ssh-keygen -t ed25519 -C "oracle-access"
 ssh-keygen -t ed25519 -C "oracle-access"
 
 # Copy the public key to your oracle machine
-ssh-copy-id -p 5520 dgboracle@192.168.1.100
+ssh-copy-id -p 2222 dgboperator@192.168.1.100
 ```
 
 Test the connection before disabling password auth — if you lock yourself out, you'll need physical access to fix it.
@@ -861,7 +861,7 @@ SSH (Remote Login) is built in but disabled by default:
 
 1. Open **System Settings → General → Sharing**
 2. Toggle **Remote Login** to **On**
-3. Restrict to specific users (your `dgboracle` account)
+3. Restrict to specific users (your `dgboperator` account)
 
 SSH config is at `/etc/ssh/sshd_config`. Same settings apply.
 
@@ -873,7 +873,7 @@ If you enabled SSH (Step 8), install Fail2Ban to block brute force attempts. If 
 
 > **Answering Aussie Epic's question:** "Does Fail2Ban need configuring differently as SSH is not being used? Or, because the Home Lab server does not use SSH and can only be accessed locally via RDP, does this negate an attack occurring as SSH is not running on the machine?"
 >
-> **If SSH is not running, you don't need Fail2Ban for SSH.** No SSH service = nothing listening on port 22 (or 5520) = nothing to brute force. Your xRDP is local-only (not port-forwarded), so it's not reachable from the internet either. In that scenario, Fail2Ban adds nothing.
+> **If SSH is not running, you don't need Fail2Ban for SSH.** No SSH service = nothing listening on port 22 (or 2222) = nothing to brute force. Your xRDP is local-only (not port-forwarded), so it's not reachable from the internet either. In that scenario, Fail2Ban adds nothing.
 >
 > **If you enable SSH (Step 8), install Fail2Ban.** Even if SSH is only on your local network, Fail2Ban is cheap insurance.
 
@@ -887,7 +887,7 @@ sudo nano /etc/fail2ban/jail.local
 ```ini
 [sshd]
 enabled = true
-port = 5520
+port = 2222
 maxretry = 3
 findtime = 600
 bantime = 86400

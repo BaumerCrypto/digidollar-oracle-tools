@@ -11,7 +11,7 @@ Before configuring your firewall, know what your oracle needs to function:
 |------|-----------|----------|---------|
 | 12024/tcp | Inbound | Yes (mainnet) | P2P node discovery + oracle bundle relay |
 | 12033/tcp | Inbound | Yes (testnet26) | P2P testnet connections |
-| Your SSH port | Inbound | Yes | SSH admin access (default 22, or custom port like 5520 — see SSH Hardening section in this Guide) |
+| Your SSH port | Inbound | Yes | SSH admin access (default 22, or custom port like 2222 — see SSH Hardening section in this Guide) |
 | ALL | Outbound | **Allow ALL — do not restrict** | Price feeds (exchange APIs), peer connections, NTP time sync, DNS, system updates |
 
 > ⚠️ **Do NOT set `ufw default deny outgoing`.** Your oracle needs outbound access for exchange price feeds, NTP sync, peer discovery, and system updates. Blocking outbound traffic is the #1 over-hardening mistake — your node looks fine but silently stops reporting prices. See [Over-Hardening Warnings](#over-hardening-warnings) for more.
@@ -104,7 +104,7 @@ sudo nano /etc/ssh/sshd_config
 Find and set these values. Some may already exist and need changing, others you may need to add:
 
 ```
-Port 5520                          # Pick your own port — not 22
+Port 2222                          # Pick your own port — not 22
 LoginGraceTime 30                  # 30 seconds to authenticate, then disconnect
 PermitRootLogin no                 # Never allow root login via SSH
 MaxAuthTries 3                     # Lock out after 3 failed attempts per session
@@ -136,7 +136,7 @@ sudo systemctl restart ssh.socket
 Open a **second** terminal/PuTTY window and connect using your new port:
 
 ```bash
-ssh -p 5520 dgboperator@your-vps-ip
+ssh -p 2222 dgboperator@your-vps-ip
 ```
 
 If the new session works, you're good. If it doesn't, your original session is still open to fix things.
@@ -231,7 +231,7 @@ sudo ufw default deny incoming
 sudo ufw default allow outgoing
 
 # Allow SSH on your custom port (CRITICAL — do this before enabling UFW)
-sudo ufw allow 5520/tcp comment 'SSH custom port'
+sudo ufw allow 2222/tcp comment 'SSH custom port'
 
 # Allow DigiByte MainNet P2P
 sudo ufw allow 12024/tcp comment 'DGB MainNet P2P'
@@ -262,7 +262,7 @@ Default: deny (incoming), allow (outgoing), disabled (routed)
 
 To                         Action      From
 --                         ------      ----
-5520/tcp                   ALLOW IN    Anywhere        # SSH custom port
+2222/tcp                   ALLOW IN    Anywhere        # SSH custom port
 12024/tcp                  ALLOW IN    Anywhere        # DGB MainNet P2P
 12033/tcp                  ALLOW IN    Anywhere        # DGB TestNet P2P
 ```
@@ -304,7 +304,7 @@ Add this:
 ```ini
 [sshd]
 enabled = true
-port = 5520
+port = 2222
 filter = sshd
 backend = systemd
 maxretry = 3
@@ -381,7 +381,7 @@ If any of those are wrong, add them to `99-oracle-hardening.conf`.
 
 ### A Note on `log_martians`
 
-Many hardening guides recommend enabling `net.ipv4.conf.all.log_martians = 1` to log packets with spoofed source addresses. I have it in my config, but on some cloud providers (including Contabo), the cloud networking stack resets this value on every boot. If it doesn't persist on your VPS, don't worry — the actual protection comes from `rp_filter` (reverse path filtering), which Ubuntu 24.04 enables by default in `/etc/sysctl.d/10-network-security.conf`. That's what drops the spoofed packets. `log_martians` just writes a note about packets that are already being blocked.
+Many hardening guides recommend enabling `net.ipv4.conf.all.log_martians = 1` to log packets with spoofed source addresses. It's worth having in your config, but on some cloud providers the cloud networking stack resets this value on every boot. If it doesn't persist on your VPS, don't worry — the actual protection comes from `rp_filter` (reverse path filtering), which Ubuntu 24.04 enables by default in `/etc/sysctl.d/10-network-security.conf`. That's what drops the spoofed packets. `log_martians` just writes a note about packets that are already being blocked.
 
 ---
 
@@ -523,7 +523,7 @@ Your oracle wallet contains the signing key that makes you an oracle operator. I
 
 ```bash
 # Copy wallet from VPS to local machine (run from your local machine)
-scp -P 5520 dgboperator@your-vps-ip:~/.digibyte/wallets/oracle/wallet.dat ./wallet-backup.dat
+scp -P 2222 dgboperator@your-vps-ip:~/.digibyte/wallets/oracle/wallet.dat ./wallet-backup.dat
 ```
 
 Or use WinSCP/FileZilla for a graphical transfer.
@@ -578,7 +578,7 @@ uptime
 
 ### Take a Snapshot
 
-After completing all hardening steps and verifying with a reboot, take a snapshot through your VPS provider's control panel. This gives you a known-good restore point. If a future upgrade or config change breaks something, you can roll back to a fully hardened, working state. Most providers limit the number of snapshots (Contabo allows 2), so delete the oldest before creating a new one. I take a fresh snapshot after every major change — binary upgrades, hardening updates, or config migrations.
+After completing all hardening steps and verifying with a reboot, take a snapshot through your VPS provider's control panel. This gives you a known-good restore point. If a future upgrade or config change breaks something, you can roll back to a fully hardened, working state. Most providers limit the number of snapshots (some allow as few as 2), so delete the oldest before creating a new one. I take a fresh snapshot after every major change — binary upgrades, hardening updates, or config migrations.
 ---
 
 ## Over-Hardening Warnings
@@ -930,5 +930,5 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.4
+Version: v1.4.1
 
