@@ -634,13 +634,16 @@ sc query DigiByteDaemon
 >
 > | Setup | Unattended Recovery | Security |
 > |-------|-------------------|----------|
-> | digibyted + encrypted wallet + service + startup script | ✅ Fully automated | ✅ Passphrase protected |
-> | Qt + unencrypted wallet + auto-login + Startup | ✅ Mostly automated (needs login) | 🔴 **Not recommended** — no passphrase, anyone with physical access owns your oracle key |
-> | Qt + encrypted wallet | ❌ Manual unlock after every reboot | ✅ Passphrase protected |
+> | digibyted + unencrypted wallet + service | ✅ Fully automated (auto-start since RC25) | ⚠️ Depends on host hardening — see below |
+> | digibyted + encrypted wallet + service + passphrase file | ✅ Fully automated | ⚠️ Passphrase file is on disk with the wallet — a live-system compromise gets both |
+> | Qt + unencrypted wallet + auto-login + Startup | ✅ Mostly automated (needs login) | 🔴 **Anyone with physical access to the machine can extract the key** |
+> | Qt + encrypted wallet | ❌ Manual unlock after every reboot | ✅ Passphrase-protected against physical theft (if passphrase is not on disk) |
 >
-> **I strongly recommend against running an unencrypted oracle wallet.** Yes, it makes auto-start easier with Qt — but your oracle signing key sits on disk with zero protection. Anyone with physical access to your machine (or malware) can extract it. Always encrypt your wallet. Always.
+> **The community consensus for oracle signing wallets has shifted.** In Gitter (Sessions 2026), Bastian's argument was widely accepted: the oracle wallet is signing-only, holds no coins, and the hardened environment is the real protection. Running unencrypted on a properly hardened machine is now the mainstream approach for VPS oracles. I run unencrypted on both my testnet and mainnet oracles.
 >
-> For a frozen-roster oracle that needs to be online 24/7, `digibyted` daemon with an encrypted wallet and automated startup is the right answer.
+> **Home vs VPS threat model — the real difference.** A VPS lives in a datacenter behind physical access controls. A home machine sits in your house where physical theft is a real (if uncommon) risk, and malware from other household devices on the same network is a more realistic risk than for a hardened VPS. If those threats concern you, an encrypted wallet with a manual-unlock-after-reboot workflow (or a passphrase file with `chmod 600`) is a reasonable choice for home operators. If you've fully hardened your home network per the earlier steps in this guide, unencrypted is defensible.
+>
+> **What matters more than encryption:** losing your wallet file entirely means losing your oracle slot (frozen roster — no on-chain way to rotate keys today). Back up your wallet.dat to multiple locations regardless of which encryption path you choose. See Step 15 for backup guidance.
 >
 > **⚠️ Community testing needed:** I run my oracle on a VPS with `digibyted`, not Qt. The Qt wallet guidance above is based on the official oracle setup documentation and the auto-start behavior confirmed in the codebase (since RC25). I haven't tested Qt oracle recovery on every OS myself. If you're running your oracle through Qt and find something that doesn't match this guide — crashes, wallet lock behavior, auto-start issues — let me know on Gitter (digibyte-maxi) or open an issue on my GitHub. The more real-world Qt testing we get, the better this section becomes.
 
@@ -1190,15 +1193,60 @@ CLI="digibyte-cli"
 CLI="digibyte-cli -testnet"
 ```
 
-The health checks (oracle status, chain sync, consensus price, disk space, memory) all work the same. The Discord webhook alerts work from home as long as you have internet access.
+The 12 health checks (daemon, oracle status, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin) all work the same on a home machine. The Discord webhook alerts work from home as long as you have internet access.
+
+**Features you get:**
+- **DigiDollar BIP9 pre-activation guard** — until DigiDollar activates on mainnet, checks that depend on oracle activity (oracle status, price, quorum) will show ℹ️ **standby** INFO lines instead of red alerts. This is correct pre-activation behavior — you're not broken, DigiDollar just hasn't locked in yet.
+- **Qt vs headless auto-detect** — if you're running `digibyte-qt` (GUI wallet) instead of `digibyted` (headless daemon), the monitor auto-detects and adapts. No config change needed.
+- **NETWORK_LABEL in Discord card titles** — set `NETWORK_LABEL="Home Mainnet"` (or whatever) in your config to distinguish cards if you monitor multiple boxes.
+- **Footer version stamp** on every Discord card so you know which version is running.
 
 **What changes for home:**
 - The `ss -tlnp | grep 12024` port check works the same (use `grep 12033` for testnet)
-- Systemd service checks work the same
+- Systemd service checks work the same (or skip if you're running Qt — the monitor handles this)
 - Disk and memory checks work the same
 - You may want to add a check for your UPS battery level (if using NUT: `upsc myups battery.charge`)
 
-> **Windows and macOS operators:** oracle-monitor.sh is Bash/Linux only. A cross-platform Python version is on my roadmap (Issue #11 on my GitHub). For now, Windows operators can use the DigiByte-Qt wallet GUI to visually check oracle status, or manually run `digibyte-cli listoracle` and `digibyte-cli getoracleprice` in a command prompt.
+**Windows and macOS home operators** — see the Windows/macOS note in the Ongoing Operations section above for native ports (`oracle-monitor.ps1` and `oracle-monitor-macos.sh`) with full parity to Linux.
+
+> **Windows and macOS operators:** Native ports of oracle-monitor with full parity to the Linux version are on my GitHub:
+>
+> - **Windows PowerShell:** [`oracle-monitor.ps1`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.ps1) — PowerShell 5.1 and 7 compatible, zero dependencies (native JSON parsing), Task Scheduler for cron-equivalent, includes `-Watch` mode for live console dashboard.
+> - **macOS:** [`oracle-monitor-macos.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor-macos.sh) — stock bash 3.2 compatible, `jq` is the only dependency, includes `--watch` mode.
+>
+> Both ports have the same 12 health checks as Linux (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin), the same DigiDollar BIP9 pre-activation guard, the same Qt/headless auto-detect, and the same Discord card format including per-check `NETWORK_LABEL` prefixes for dual-instance monitoring. Full setup guide with platform-specific notes: [`CROSS_PLATFORM_SETUP.md`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/CROSS_PLATFORM_SETUP.md).
+>
+> A unified Python port (Issue #11 on my GitHub) may still land in the future as a single codebase for all three platforms, but the native ports above are the recommended path today and are actively maintained in lockstep with the Linux version.
+
+---
+
+### Optional: Serve Compact Block Filters (BIP157/158)
+
+> 🙏 *Requested by JohnnyLawDGB in Gitter for mobile wallet compatibility.*
+
+If your home oracle has a stable internet connection and some spare disk, you can enable BIP157/158 compact block filter serving so that light mobile wallets can sync from your node. Add two lines to your `digibyte.conf`:
+
+```ini
+blockfilterindex=basic
+peerblockfilters=1
+```
+
+Restart the daemon (or Qt wallet) after adding both lines. The filter index builds in a background thread over several hours (~4-8 hours after a full-chain sync), then serves filters to any BIP157-compatible mobile wallet that connects to your node.
+
+**Cost:** ~4-6 GB extra disk. Background CPU during initial build. Modest bandwidth increase (mobile wallets syncing filters ~1-2 GB each).
+
+**Benefit:** More decentralized mobile wallet infrastructure for DigiByte. Even home nodes with dynamic IPs contribute — light clients rotate through peers naturally.
+
+**Verify build progress:**
+
+```bash
+digibyte-cli getindexinfo
+```
+
+Look for `basic block filter index` in the output — `synced: false, best_block_height: N` means it's building; `synced: true` means ready to serve.
+
+**Worth doing if:** your machine is on 24/7 with reasonable uptime and you want to contribute more to the network beyond just running the oracle.
+**Skip if:** you're already at disk pressure or bandwidth-constrained on a metered home connection.
 
 ---
 
