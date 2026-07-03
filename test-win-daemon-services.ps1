@@ -1,12 +1,12 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # test-win-daemon-services.ps1 v2 — Isolated harness for Check-Daemon +
-# Check-Services on Windows PowerShell 5.1 / 7+. Mirrors the Session 24a
-# macOS harness (9 scenarios pass on macOS bash). Mocks Get-Process,
+# Check-Services on Windows PowerShell 5.1 / 7+. Mirrors the macOS
+# harness (9 scenarios pass on macOS bash). Mocks Get-Process,
 # Get-Service, and Invoke-DGBCli so each scenario runs deterministically
 # without a real DigiByte node or NSSM-wrapped service.
 #
-# v2 fix (Session 24, live-Windows verification): mock functions now use
+# v2 fix (live-Windows verification, June 2026): mock functions now use
 # [CmdletBinding()] so caller-side -ErrorAction SilentlyContinue passes
 # through as an auto-added common parameter instead of colliding with an
 # explicitly declared $ErrorAction. Scenario state moved to $script: vars

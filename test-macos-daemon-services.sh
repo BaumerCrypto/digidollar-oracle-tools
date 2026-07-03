@@ -1,14 +1,28 @@
 #!/bin/bash
 ###############################################################################
 # test-macos-daemon-services.sh — Isolated harness for check_daemon +
-# check_services on macOS. Mirrors the Session 23 approach used for the
-# Linux v2.5.2 verification. Mocks pgrep, launchctl, jq, and $CLI so we
-# can drive each scenario deterministically without a real DigiByte node.
+# check_services on macOS. Mirrors the harness approach used for the
+# Linux v2.5.2 verification (June 2026). Mocks pgrep, launchctl, jq, and
+# $CLI so we can drive each scenario deterministically without a real
+# DigiByte node.
+#
+# Run it from the folder that contains oracle-monitor-macos.sh:
+#   ./test-macos-daemon-services.sh
 ###############################################################################
 
 set -u
 
-SCRIPT="/home/claude/work/oracle-monitor-macos.sh"
+# Resolve oracle-monitor-macos.sh next to this harness, wherever it lives.
+SCRIPT="$(cd "$(dirname "$0")" && pwd)/oracle-monitor-macos.sh"
+if [ ! -f "$SCRIPT" ]; then
+    SCRIPT="./oracle-monitor-macos.sh"
+fi
+if [ ! -f "$SCRIPT" ]; then
+    echo "ERROR: oracle-monitor-macos.sh not found."
+    echo "Place this harness in the same folder as oracle-monitor-macos.sh and run it from there."
+    exit 1
+fi
+
 PASS=0
 FAIL=0
 
