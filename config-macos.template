@@ -1,6 +1,6 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration (macOS)
 #
-# This file is sourced by oracle-monitor-macos.sh (v2.5.2-macos.1+).
+# This file is sourced by oracle-monitor-macos.sh (v2.5.3-macos.1+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #

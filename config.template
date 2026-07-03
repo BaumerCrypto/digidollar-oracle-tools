@@ -1,6 +1,6 @@
 # ~/.oracle-monitor/config — Oracle Monitor Configuration
 #
-# This file is sourced by oracle-monitor.sh (v2.5.2+) and
+# This file is sourced by oracle-monitor.sh (v2.5.3+) and
 # oracle-network-status.sh (v1.4+).
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.

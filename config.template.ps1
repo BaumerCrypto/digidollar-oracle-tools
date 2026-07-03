@@ -1,6 +1,6 @@
 ﻿# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
 #
-# This file is dot-sourced by oracle-monitor.ps1 (v2.5.2-win.1+) at startup.
+# This file is dot-sourced by oracle-monitor.ps1 (v2.5.3-win.1+) at startup.
 # Edit values below to override the built-in defaults.
 # Lines starting with # are ignored.
 #
