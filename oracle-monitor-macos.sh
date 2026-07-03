@@ -1,16 +1,16 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord Alerts (macOS)
-# Version: 2.5.2-macos.1
+# Version: 2.5.3-macos.1
 #
-# macOS port of my oracle-monitor.sh v2.5.2 (Linux). Same checks, same quorum
+# macOS port of my oracle-monitor.sh v2.5.3 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
 # guard, same auto-detect for headless vs Qt wallet — BSD/macOS-native
 # commands. Written for the stock /bin/bash 3.2 that ships with every Mac
 # (no Homebrew bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.5.2-macos.1"
+readonly SCRIPT_VERSION="2.5.3-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -51,6 +51,14 @@ readonly SCRIPT_VERSION="2.5.2-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.3-macos.1 — send_discord() now prefixes every individual alert
+#          title with NETWORK_LABEL (when set), not just the health summary
+#          and --test alert. Fixes dual-instance operators (testnet+mainnet
+#          on one box) getting an unlabeled "Node Down" card with no way to
+#          tell which daemon fired it. Single chokepoint — every alert_red/
+#          yellow/green/blue call routes through send_discord(). No-op for
+#          single-instance operators without NETWORK_LABEL set. Ports the
+#          fix shipped in oracle-monitor.sh v2.5.3.
 #   v2.5.2-macos.1 — check_daemon() now auto-detects either digibyted
 #          (headless) or the Qt GUI wallet. Tries multiple Qt process-name
 #          conventions (DigiByte-Qt, Digibyte-Qt, digibyte-qt) in order —
@@ -289,6 +297,16 @@ send_discord() {
     local message="$3"
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # v2.5.3-macos.1: prefix every individual alert title with NETWORK_LABEL
+    # (if set) so dual-instance operators (e.g. testnet + mainnet on one box)
+    # can tell which daemon fired the alert from the Discord card title alone.
+    # Single chokepoint — every alert_red/yellow/green/blue call routes
+    # through here. No-op for single-instance operators without NETWORK_LABEL
+    # set. Ports the same fix shipped in oracle-monitor.sh v2.5.3.
+    if [ -n "${NETWORK_LABEL:-}" ]; then
+        title="${NETWORK_LABEL} — ${title}"
+    fi
 
     if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
         echo "[$(date)] ALERT: $title — $message"
@@ -1154,7 +1172,7 @@ case "$ACTION_FLAG" in
             echo "Configure it in: $CONFIG_FILE"
             exit 1
         fi
-        alert_blue "🔧 ${NETWORK_LABEL:-Oracle} Test Alert" "${NETWORK_LABEL:-Oracle} monitor is configured and working! $(date)"
+        alert_blue "🔧 Test Alert" "${NETWORK_LABEL:-Oracle} monitor is configured and working! $(date)"
         echo "Check your Discord channel."
         ;;
     *)

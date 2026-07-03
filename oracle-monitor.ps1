@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.5.2-win.1
+# Version: 2.5.3-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.5.2 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.5.3 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet — Windows-
 # native commands. Runs on Windows PowerShell 5.1 (preinstalled on Windows
@@ -45,6 +45,14 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.5.3-win.1 — Send-Discord now prefixes every individual alert title
+#          with $NETWORK_LABEL (when set), not just the health summary and
+#          -Test alert. Fixes dual-instance operators (testnet+mainnet on
+#          one box) getting an unlabeled "Node Down" card with no way to
+#          tell which daemon fired it. Single chokepoint — every Alert-Red/
+#          Yellow/Green/Blue call routes through Send-Discord(). No-op for
+#          single-instance operators without $NETWORK_LABEL set. Ports the
+#          fix shipped in oracle-monitor.sh v2.5.3.
 #   v2.5.2-win.1 — Check-Daemon() now auto-detects either digibyted
 #          (headless) or digibyte-qt (Qt wallet). Prefers headless first,
 #          falls back to Qt via a candidate loop. Sets $script:DetectedDaemon
@@ -115,7 +123,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.5.2-win.1"
+$SCRIPT_VERSION = "2.5.3-win.1"
 
 # ============================================================================
 # RUNTIME ENVIRONMENT
@@ -282,6 +290,16 @@ function Send-Discord {
         [string]$Message
     )
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+    # v2.5.3-win.1: prefix every individual alert title with NETWORK_LABEL
+    # (when set) so dual-instance operators (e.g. testnet + mainnet on one
+    # box) can tell which daemon fired the alert from the Discord card title
+    # alone. Single chokepoint — every Alert-Red/Yellow/Green/Blue call routes
+    # through here. No-op for single-instance operators without NETWORK_LABEL
+    # set. Ports the same fix shipped in oracle-monitor.sh v2.5.3.
+    if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
+        $Title = "$NETWORK_LABEL — $Title"
+    }
 
     if ($script:DRY_RUN -or [string]::IsNullOrEmpty($DISCORD_WEBHOOK)) {
         # Write-Host, not Write-Output: this function is called inside checks
@@ -1214,7 +1232,7 @@ if ($Test) {
         exit 1
     }
     $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
-    Alert-Blue "🔧 $label Test Alert" "$label monitor is configured and working! $(Get-Date)"
+    Alert-Blue "🔧 Test Alert" "$label monitor is configured and working! $(Get-Date)"
     Write-Output "Check your Discord channel."
 } elseif ($Watch) {
     # Live console dashboard — full status block, refreshed in place.
