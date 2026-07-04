@@ -10,7 +10,7 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.4 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.5 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.5 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. `--config /path` flag for dual-instance monitoring (testnet + mainnet). Bot account: `@digidollar-oracle-bot:matrix.org`. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
@@ -18,9 +18,9 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.4.1 — SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection. Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide — Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.4-win.1 — full logic parity with Linux v2.5.4. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.5-win.1 — full logic parity with Linux v2.5.5. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
 | [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.4-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.5-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
 | [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. |
 | [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports — installation, config, Task Scheduler/cron, watch mode, troubleshooting. |
 
@@ -46,9 +46,9 @@ The monitor runs natively on all three major platforms. Same 12 checks, same Dig
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
-| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.5.4 |
-| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.5.4-win.1 |
-| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.5.4-macos.1 |
+| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.5.5 |
+| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.5.5-win.1 |
+| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.5.5-macos.1 |
 
 Windows needs no dependencies at all (PowerShell parses JSON natively). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with. Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
 
@@ -64,7 +64,7 @@ Windows needs no dependencies at all (PowerShell parses JSON natively). macOS ne
 - Peer count (default min: 3)
 - Price freshness (`is_stale` flag on `getoracleprice`)
 - Degraded consensus detection (`status` != `ok` on `getoracleprice`)
-- Disk space (default min: 5GB free)
+- Disk space — free, total, and used% (default min: 5GB free); the Low Disk alert names your `DATADIR` on its own line so you know exactly where to clean up (v2.5.5)
 - Memory usage
 - **Swap pressure** — alerts when swap usage exceeds threshold (default 100 MB). On a properly tuned box with `swappiness=10`, any meaningful swap usage signals real memory pressure before things get critical (v2.4)
 - `digibyted.service` and oracle process status via `listoracle` RPC — systemd unit check auto-skips with an INFO line when the Qt wallet is the running daemon (Qt operators typically run outside systemd)
@@ -91,7 +91,7 @@ Discord embeds — color-coded:
 - 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
 - 🔵 **Blue** — 12-hour status summary, plus ℹ️ INFO lines for pre-activation standby state
 - **Card titles** carry the `NETWORK_LABEL` from your config on *every* alert — health summaries (`Testnet26 Health Summary`), individual checks (`Mainnet — 🔴 Node Down`), and the `--test` alert — so dual-instance operators can tell which daemon fired an alert at a glance without opening the card (v2.5.3)
-- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.4 — digibyte-maxi (ID 17)`)
+- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.5 — digibyte-maxi (ID 17)`)
 
 State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers. Quorum tracking uses a single `quorum_state` file that stores the current band and timestamp, with cooldown and hysteresis to prevent alert flapping during network volatility.
 
@@ -183,6 +183,8 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | `WALLET_FLAG` | `-rpcwallet=oracle` | Wallet flag for RPC calls |
 | `MIN_PEERS` | `3` | Minimum peer count before alerting |
 | `MIN_DISK_GB` | `5` | Minimum free disk space (GB) |
+| `DISK_PATH` | `/home` | Path whose filesystem is watched for free space. Point it at the mount holding your datadir if that isn't under `/home` (v2.5.4) |
+| `DATADIR` | `$HOME/.digibyte` | DigiByte datadir named in the Low Disk alert. Display-only — never read or written. Dual-instance operators set it per config so each alert names its own datadir (v2.5.5) |
 | `MEM_THRESHOLD` | `90` | Memory usage % above which to alert |
 | `SWAP_THRESHOLD_MB` | `100` | Swap usage in MB above which to alert. On a swappiness=10 box, any meaningful swap means real pressure (v2.4) |
 | `MAX_CHAIN_BEHIND` | `10` | Blocks behind before alerting |
@@ -192,6 +194,37 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | `QUORUM_HYSTERESIS` | `3` | Recovery buffer — must exceed threshold by this many oracles to recover. Prevents flapping at boundaries. Set to `0` to disable (v2.1+) |
 
 The quorum minimum (`oracle_consensus_required`, currently 7) comes from the chain itself via `getdigidollardeploymentinfo` — it's not configurable. Below that threshold, DigiDollar signing halts regardless of your config settings.
+
+### Low Disk alerts name your datadir (v2.5.5)
+
+The disk line shows the full picture — `✅ Disk: 156GB free of 200GB (22% used)` — and when disk runs low, the red alert names the datadir to clean up, on its own line so it's a clean copy target on mobile:
+
+```
+🔴 Low Disk Space
+Only 3GB free of 200GB (98% used).
+Clean up old logs or unused chain data in:
+/home/YOU/.digibyte/
+```
+
+That path comes from the `DATADIR` config variable. No RPC returns the datadir, so the monitor can't discover it — you declare it. Single-instance operators leave the default and never think about it again.
+
+Dual-instance operators (testnet + mainnet on one box via `--config`) should set `DATADIR` per config file — left at the default, both instances name the same path and the two alerts are ambiguous. Set per config (testnet: `DATADIR="$HOME/.digibyte/testnet26"`, mainnet: `DATADIR="$HOME/.digibyte"`), the same full disk produces two distinct, actionable cards:
+
+```
+Testnet26 — 🔴 Low Disk Space
+Only 3GB free of 200GB (98% used).
+Clean up old logs or unused chain data in:
+/home/YOU/.digibyte/testnet26/
+```
+
+```
+Mainnet — 🔴 Low Disk Space
+Only 3GB free of 200GB (98% used).
+Clean up old logs or unused chain data in:
+/home/YOU/.digibyte/
+```
+
+Same disk, same numbers — but each card tells you which daemon fired (`NETWORK_LABEL`, v2.5.3) and exactly which directory to prune (`DATADIR`, v2.5.5). Both v2.5.5 disk enhancements were suggested by Aussie Epic. Mainnet chain data lives at the datadir top level; testnet data lives in a subdirectory named for the current testnet reset (`testnet26`, `testnet27`, ...) — bump your testnet `DATADIR` when the testnet resets.
 
 ### Quorum alert bands
 
@@ -378,9 +411,9 @@ This script is designed for a **single designated community operator** to post t
 | DigiByte Core | v9.26.4 (also compatible with v9.26.2, v9.26.3, and RC44/RC45/RC46) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.5.4 |
-| oracle-monitor.ps1 | v2.5.4-win.1 |
-| oracle-monitor-macos.sh | v2.5.4-macos.1 |
+| oracle-monitor.sh | v2.5.5 |
+| oracle-monitor.ps1 | v2.5.5-win.1 |
+| oracle-monitor-macos.sh | v2.5.5-macos.1 |
 | oracle-network-status.sh | v1.5 |
 
 If you're running a different release and something breaks, please open an issue.

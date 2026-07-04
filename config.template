@@ -60,6 +60,26 @@ MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 # elsewhere (e.g. a dedicated blockchain volume):
 # DISK_PATH="/mnt/blockchain"
 
+# ---- DigiByte Datadir Named in Low Disk Alerts (oracle-monitor.sh v2.5.5+) ----
+# The Low Disk Space alert prints this path on its own line so you know
+# exactly where to clean up. Display-only — the monitor never reads or
+# deletes anything here. No RPC returns the datadir, so it's declared in
+# config. Set it per config file, same pattern as SERVICE_NAME and
+# NETWORK_LABEL:
+#
+#   Single-instance (one daemon on this box) — leave the default:
+#     DATADIR="$HOME/.digibyte"
+#
+#   Dual-instance (testnet + mainnet via --config) — set each config so
+#   each instance's alert names its own datadir:
+#     testnet config:  DATADIR="$HOME/.digibyte/testnet26"
+#     mainnet config:  DATADIR="$HOME/.digibyte"
+#
+# Mainnet chain data lives at the datadir top level; testnet data lives
+# in a subdirectory named for the current testnet reset (testnet26,
+# testnet27, ...) — bump it when the testnet resets.
+DATADIR="$HOME/.digibyte"
+
 # ---- Swap Pressure Threshold (v2.4+) ----
 # Alert when system-wide swap usage exceeds this many MB.
 #
@@ -169,6 +189,9 @@ MENTION_MAX=6
 #   #   SWAP_THRESHOLD_MB=1500                   (dual-daemon baseline)
 #   #   QUORUM_GREEN=12, QUORUM_YELLOW=10        (tighter for production)
 #   #   NETWORK_LABEL="Mainnet"                  (shows in card titles)
+#   #   DATADIR="$HOME/.digibyte"                (named in Low Disk alerts —
+#   #                                             and set the TESTNET config to
+#   #                                             DATADIR="$HOME/.digibyte/testnet26")
 #   #   DISCORD_WEBHOOK="https://..."            (same or different webhook)
 #
 #   # Test:

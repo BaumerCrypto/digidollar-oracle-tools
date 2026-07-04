@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord Alerts (macOS)
-# Version: 2.5.4-macos.1
+# Version: 2.5.5-macos.1
 #
 # macOS port of my oracle-monitor.sh v2.5.3 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
@@ -10,7 +10,7 @@
 # (no Homebrew bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.5.4-macos.1"
+readonly SCRIPT_VERSION="2.5.5-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -51,6 +51,19 @@ readonly SCRIPT_VERSION="2.5.4-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.5-macos.1 — Disk check enhancements, matching Linux v2.5.5 (both
+#          suggested by Aussie Epic). (1) The disk line now shows total
+#          size and used% next to free space — "✅ Disk: 156GB free of
+#          200GB (22% used)" — using df -g column 2 (1G blocks), which
+#          was always in the output but never printed. Falls back to the
+#          old free-only wording if the total can't be parsed. (2) The
+#          Low Disk Space alert now names your DigiByte datadir on its
+#          own line so you know exactly where to clean up, via the new
+#          DATADIR config variable (default "$HOME/Library/Application
+#          Support/DigiByte"). No RPC returns the datadir, so it's
+#          config-declared — dual-instance operators set it per config,
+#          same pattern as NETWORK_LABEL. The path appears only in the
+#          red alert, never the green summary line.
 #   v2.5.4-macos.1 — Full-repo audit fixes (July 2026), matching Linux
 #          v2.5.4. (1) Discord payloads built with jq -n — a quote or
 #          backslash in RPC-derived text could previously break the
@@ -222,6 +235,13 @@ LAUNCHD_LABEL=""
 # on macOS is ~/Library/Application Support/DigiByte — on most Macs that
 # is the same volume as $HOME, so the default is fine.
 DISK_PATH="${HOME}"
+
+# DigiByte datadir named in the Low Disk Space alert (v2.5.5-macos.1) so
+# the operator knows exactly where to clean up. Display-only — the
+# monitor never reads or deletes anything here. Dual-instance operators
+# should set this per config file (see config-macos.template) so each
+# instance's alert names its own datadir.
+DATADIR="${HOME}/Library/Application Support/DigiByte"
 
 # Thresholds — basic health
 MIN_PEERS=3
@@ -576,10 +596,13 @@ check_price() {
 }
 
 # --- Check 6: Disk space ---
-# BSD df has no -B flag. -g reports in 1G blocks; column 4 = available.
+# BSD df has no -B flag. -g reports in 1G blocks; column 2 = total size,
+# column 4 = available.
 check_disk() {
-    local avail_gb
-    avail_gb=$(df -g "$DISK_PATH" 2>/dev/null | tail -1 | awk '{print $4}')
+    local df_line avail_gb total_gb used_pct size_info
+    df_line=$(df -g "$DISK_PATH" 2>/dev/null | tail -1)
+    avail_gb=$(echo "$df_line" | awk '{print $4}')
+    total_gb=$(echo "$df_line" | awk '{print $2}')
 
     if [ -z "$avail_gb" ] || ! [[ "$avail_gb" =~ ^[0-9]+$ ]]; then
         DETAILS+="⚠️ Disk: could not query $DISK_PATH\n"
@@ -587,17 +610,32 @@ check_disk() {
         return
     fi
 
+    # v2.5.5: df column 2 is the volume total in 1G blocks — it was
+    # always in the output, just never printed. Show it plus used% next
+    # to free space. If the total is unparsable, fall back to the old
+    # free-only wording rather than showing garbage.
+    size_info=""
+    if [[ "$total_gb" =~ ^[0-9]+$ ]] && [ "$total_gb" -gt 0 ]; then
+        used_pct=$(( (total_gb - avail_gb) * 100 / total_gb ))
+        size_info=" of ${total_gb}GB (${used_pct}% used)"
+    fi
+
     if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
         if should_alert "low_disk"; then
-            alert_red "🔴 Low Disk Space" "Only ${avail_gb}GB free. Clean up old testnet dirs or logs."
+            # v2.5.5: three-line alert with hard newlines — mobile Discord
+            # clients soft-wrap unpredictably without explicit breaks. The
+            # datadir sits on its own line as a clean copy target. Wording
+            # is generic ("old logs or unused chain data") because this
+            # alert fires on mainnet too, not just testnet.
+            alert_red "🔴 Low Disk Space" "Only ${avail_gb}GB free${size_info}."$'\n'"Clean up old logs or unused chain data in:"$'\n'"${DATADIR%/}/"
         fi
-        DETAILS+="🔴 Disk: ${avail_gb}GB free (LOW!)\n"
+        DETAILS+="🔴 Disk: ${avail_gb}GB free${size_info} (LOW!)\n"
         ISSUES=$((ISSUES + 1))
     else
         if clear_alert "low_disk"; then
-            alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free."
+            alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free${size_info}."
         fi
-        DETAILS+="✅ Disk: ${avail_gb}GB free\n"
+        DETAILS+="✅ Disk: ${avail_gb}GB free${size_info}\n"
     fi
 }
 

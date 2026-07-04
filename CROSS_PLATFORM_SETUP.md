@@ -10,9 +10,9 @@ My [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools
 | macOS | [`oracle-monitor-macos.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor-macos.sh) | [`config-macos.template`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config-macos.template) |
 | Linux (VPS) | [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh) | [`config.template`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config.template) |
 
-All three are logic-identical at v2.5.4: the same 12 health checks, the same heartbeat-based quorum counting, the same anti-flap cooldown + hysteresis, the same DigiDollar BIP9 pre-activation guard, the same headless/Qt-wallet auto-detect, the same Discord embeds. If you've seen my alerts in #oracle-alerts, these produce the same ones. The only differences are the platform plumbing underneath.
+All three are logic-identical at v2.5.5: the same 12 health checks, the same heartbeat-based quorum counting, the same anti-flap cooldown + hysteresis, the same DigiDollar BIP9 pre-activation guard, the same headless/Qt-wallet auto-detect, the same Discord embeds. If you've seen my alerts in #oracle-alerts, these produce the same ones. The only differences are the platform plumbing underneath.
 
-What the monitor watches (all platforms): node process alive, oracle running and signing (`listoracle`), chain sync, peer count, consensus price freshness + degraded-network status, disk space, memory, swap/page-file pressure, service status, node version, NTP clock offset, and network-wide quorum margin with MuSig2 session health. Before DigiDollar activates on your target chain, the oracle-dependent checks automatically downgrade to blue standby INFO lines instead of firing false red alerts — a pre-activation mainnet monitor showing four ℹ️ standby lines is correct behavior, not a bug.
+What the monitor watches (all platforms): node process alive, oracle running and signing (`listoracle`), chain sync, peer count, consensus price freshness + degraded-network status, disk space (free, total, and used%), memory, swap/page-file pressure, service status, node version, NTP clock offset, and network-wide quorum margin with MuSig2 session health. Before DigiDollar activates on your target chain, the oracle-dependent checks automatically downgrade to blue standby INFO lines instead of firing false red alerts — a pre-activation mainnet monitor showing four ℹ️ standby lines is correct behavior, not a bug.
 
 ---
 
@@ -67,7 +67,7 @@ That's every 5 minutes for health checks (alerts only fire on problems and recov
 .\oracle-monitor.ps1 -Watch -RefreshSeconds 30   # or your own interval
 ```
 
-It redraws the full 11-check status block in place until you Ctrl+C. Watch mode never sends Discord alerts and never touches the alert state files, so it's completely safe to leave running alongside the scheduled tasks — the two don't interfere.
+It redraws the full 12-check status block in place until you Ctrl+C. Watch mode never sends Discord alerts and never touches the alert state files, so it's completely safe to leave running alongside the scheduled tasks — the two don't interfere.
 
 ![Watch mode in PowerShell — full status refreshed every 60 seconds](watch-mode-windows.png)
 
@@ -134,10 +134,28 @@ At minimum set `DISCORD_WEBHOOK`, `ORACLE_ID`, `ORACLE_NAME`, and `CLI`. If `dig
 
 All three config files expose the same knobs with the same defaults: alert thresholds (`MIN_PEERS=3`, `MIN_DISK_GB=5`, `MEM_THRESHOLD=90`, `MAX_CHAIN_BEHIND=10`), quorum bands (`QUORUM_GREEN=12`, `QUORUM_YELLOW=10` — red and critical come from the chain's own `oracle_consensus_required`, never hardcoded; suggested testnet override: 10/8), and the anti-flap controls (`QUORUM_COOLDOWN=30` minutes, `QUORUM_HYSTERESIS=3`). Escalation alerts always fire immediately; only recovery alerts are throttled. The full explanation of the quorum bands and anti-flap design is in the main [`README`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/README.md).
 
+New in v2.5.5, all three platforms (both enhancements suggested by Aussie Epic): the disk line shows free/total/used% (`✅ Disk: 156GB free of 200GB (22% used)`), and the Low Disk Space alert names your DigiByte datadir on its own line so you know exactly where to clean up. The path comes from the `DATADIR` config variable — no RPC returns the datadir, so you declare it. Each template ships the platform-correct default: `$HOME/.digibyte` (Linux), `$HOME/Library/Application Support/DigiByte` (macOS), `$env:APPDATA\DigiByte` (Windows). Single-instance operators leave the default. Dual-instance operators (testnet + mainnet on one box) should set it per config file — testnet points at the `testnet26` subdirectory, mainnet at the top level — so the same full disk produces two distinct, actionable cards instead of two ambiguous ones:
+
+```
+Testnet26 — 🔴 Low Disk Space
+Only 3GB free of 200GB (98% used).
+Clean up old logs or unused chain data in:
+/home/YOU/.digibyte/testnet26/
+```
+
+```
+Mainnet — 🔴 Low Disk Space
+Only 3GB free of 200GB (98% used).
+Clean up old logs or unused chain data in:
+/home/YOU/.digibyte/
+```
+
+`NETWORK_LABEL` tells you which daemon fired; `DATADIR` tells you which directory to prune. The testnet subdirectory tracks the current testnet reset (`testnet26`, `testnet27`, ...) — bump it when the testnet resets.
+
 Switching any platform from testnet to mainnet is one config line: drop the `-testnet` argument (`$CLI_ARGS = @()` on Windows, `CLI="digibyte-cli"` on macOS/Linux).
 
 ## A note on parity and testing
 
-I built these as faithful ports, not rewrites. The quorum state machine, the alert text, the band logic, the state-file format — all identical to Linux v2.5.4, so the scripts can be diffed side by side and a fix to one is a mechanical fix to the others. Version strings are `2.5.4-win.1` and `2.5.4-macos.1` to make the lineage explicit. Both ports add a `watch` mode (live refreshing console dashboard) that the Linux original doesn't have yet — it'll come back upstream in the next Linux release. A unified Python version that replaces all three remains on my roadmap as v3.0 (tracked in [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11)).
+I built these as faithful ports, not rewrites. The quorum state machine, the alert text, the band logic, the state-file format — all identical to Linux v2.5.5, so the scripts can be diffed side by side and a fix to one is a mechanical fix to the others. Version strings are `2.5.5-win.1` and `2.5.5-macos.1` to make the lineage explicit. Both ports add a `watch` mode (live refreshing console dashboard) that the Linux original doesn't have yet — it'll come back upstream in the next Linux release. A unified Python version that replaces all three remains on my roadmap as v3.0 (tracked in [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11)).
 
 Testing status, honestly stated: the macOS script's logic has been exercised end-to-end in a harness with mocked macOS commands and canned RC44 RPC responses — every alert path, every recovery, the one-shot dedup, and the full quorum anti-flap state machine (escalation, hysteresis dead zone, cooldown suppression and expiry, empty roster). The PowerShell port follows the same verified logic line for line, has been hand-audited against the known PowerShell 5.1 traps, and its check_daemon/check_services behavior has been verified on a real Windows box via the bundled test harness (9/9 scenarios on Windows PowerShell 5.1). Neither has run against a live node on real Apple/Microsoft hardware — that's where you come in. I run the Linux script in production on my own oracle (slot 17); if you run one of these ports and something misbehaves, [open an issue](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) or ping me on Gitter (digibyte-maxi). Field reports from real Windows/Mac oracle setups are exactly what these need next.

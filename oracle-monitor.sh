@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.5.4
+# Version: 2.5.5
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.5.4"
+readonly SCRIPT_VERSION="2.5.5"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -32,6 +32,21 @@ readonly SCRIPT_VERSION="2.5.4"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.5 — Disk check enhancements (both suggested by Aussie Epic).
+#            (1) The disk line now shows total size and used% next to
+#            free space — "✅ Disk: 156GB free of 200GB (22% used)" —
+#            using the total that df already returned but wasn't printed.
+#            Falls back to the old free-only wording if the total can't
+#            be parsed. (2) The Low Disk Space alert now names your
+#            DigiByte datadir on its own line so you know exactly where
+#            to clean up, via the new DATADIR config variable (default
+#            $HOME/.digibyte). No RPC returns the datadir, so it's
+#            config-declared — dual-instance operators set it PER CONFIG
+#            (testnet: $HOME/.digibyte/testnet26, mainnet:
+#            $HOME/.digibyte), same pattern as SERVICE_NAME and
+#            NETWORK_LABEL, so each instance's alert names its own
+#            datadir. The path appears only in the red alert, never the
+#            green summary line.
 #   v2.5.4 — Full-repo audit fixes (July 2026). (1) Default quorum bands
 #            now actually 12/10 — the v2.5.1 changelog promised the tune
 #            but this script kept 20/12 while both ports and all three
@@ -200,6 +215,13 @@ MAX_CHAIN_BEHIND=10
 # Set this to the mount that holds your DigiByte datadir if it isn't
 # under /home (e.g. DISK_PATH="/mnt/blockchain").
 DISK_PATH="/home"
+
+# DigiByte datadir named in the Low Disk Space alert (v2.5.5) so the
+# operator knows exactly where to clean up. Display-only — the monitor
+# never reads or deletes anything here. Dual-instance operators should
+# set this per config file (see config.template) so each instance's
+# alert names its own datadir.
+DATADIR="$HOME/.digibyte"
 
 # Thresholds — quorum margin (v2.0)
 # These define the alert bands for network-wide oracle liveness.
@@ -544,8 +566,10 @@ check_price() {
 # datadirs on other mounts can be monitored. Numeric guard: a failed df
 # now reads as "could not query" instead of a silent green line.
 check_disk() {
-    local avail_gb
-    avail_gb=$(df -BG "${DISK_PATH:-/home}" 2>/dev/null | tail -1 | awk '{print $4}' | tr -d 'G')
+    local df_line avail_gb total_gb used_pct size_info
+    df_line=$(df -BG "${DISK_PATH:-/home}" 2>/dev/null | tail -1)
+    avail_gb=$(echo "$df_line" | awk '{print $4}' | tr -d 'G')
+    total_gb=$(echo "$df_line" | awk '{print $2}' | tr -d 'G')
 
     if [ -z "$avail_gb" ] || ! [[ "$avail_gb" =~ ^[0-9]+$ ]]; then
         DETAILS+="⚠️ Disk: could not query ${DISK_PATH:-/home}\n"
@@ -553,17 +577,32 @@ check_disk() {
         return
     fi
 
+    # v2.5.5: df column 2 is the filesystem total in 1G blocks — it was
+    # always in the output, just never printed. Show it plus used% next
+    # to free space. If the total is unparsable (nonstandard df), fall
+    # back to the old free-only wording rather than showing garbage.
+    size_info=""
+    if [[ "$total_gb" =~ ^[0-9]+$ ]] && [ "$total_gb" -gt 0 ]; then
+        used_pct=$(( (total_gb - avail_gb) * 100 / total_gb ))
+        size_info=" of ${total_gb}GB (${used_pct}% used)"
+    fi
+
     if [ "$avail_gb" -lt "$MIN_DISK_GB" ]; then
         if should_alert "low_disk"; then
-            alert_red "🔴 Low Disk Space" "Only ${avail_gb}GB free. Clean up old testnet dirs or logs."
+            # v2.5.5: three-line alert with hard newlines — mobile Discord
+            # clients soft-wrap unpredictably without explicit breaks. The
+            # datadir sits on its own line as a clean copy target. Wording
+            # is generic ("old logs or unused chain data") because this
+            # alert fires on mainnet too, not just testnet.
+            alert_red "🔴 Low Disk Space" "Only ${avail_gb}GB free${size_info}."$'\n'"Clean up old logs or unused chain data in:"$'\n'"${DATADIR%/}/"
         fi
-        DETAILS+="🔴 Disk: ${avail_gb}GB free (LOW!)\n"
+        DETAILS+="🔴 Disk: ${avail_gb}GB free${size_info} (LOW!)\n"
         ISSUES=$((ISSUES + 1))
     else
         if clear_alert "low_disk"; then
-            alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free."
+            alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free${size_info}."
         fi
-        DETAILS+="✅ Disk: ${avail_gb}GB free\n"
+        DETAILS+="✅ Disk: ${avail_gb}GB free${size_info}\n"
     fi
 }
 

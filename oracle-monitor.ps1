@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.5.4-win.1
+# Version: 2.5.5-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.5.3 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.5.5 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet — Windows-
 # native commands. Runs on Windows PowerShell 5.1 (preinstalled on Windows
@@ -45,6 +45,17 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.5.5-win.1 — Disk check enhancements, matching Linux v2.5.5 (both
+#          suggested by Aussie Epic). (1) The disk line now shows total
+#          size and used% next to free space — "✅ Disk: 156GB free of
+#          200GB (22% used, drive C:)". Get-PSDrive returns Free and Used
+#          natively; total = Free + Used. (2) The Low Disk Space alert
+#          now names your DigiByte datadir on its own line so you know
+#          exactly where to clean up, via the new $DATADIR config
+#          variable (default "$env:APPDATA\DigiByte"). No RPC returns
+#          the datadir, so it's config-declared — dual-instance operators
+#          set it per config, same pattern as $NETWORK_LABEL. The path
+#          appears only in the red alert, never the green summary line.
 #   v2.5.4-win.1 — Full-repo audit fixes (July 2026), matching Linux
 #          v2.5.4. (1) $NETWORK_LABEL now declared in the defaults block
 #          ("" = auto) so the script is StrictMode-safe and the defaults
@@ -132,7 +143,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.5.4-win.1"
+$SCRIPT_VERSION = "2.5.5-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -201,6 +212,15 @@ $NETWORK_LABEL = ""
 # Drive letter to watch for free disk space (where your DigiByte datadir
 # lives — datadir default is %APPDATA%\DigiByte on drive C).
 $DISK_DRIVE = "C"
+
+# DigiByte datadir named in the Low Disk Space alert (v2.5.5-win.1) so
+# the operator knows exactly where to clean up. Display-only — the
+# monitor never reads or deletes anything here. Keep it on the same
+# drive as $DISK_DRIVE. Dual-instance operators should set this per
+# config file (see config.template.ps1) so each instance's alert names
+# its own datadir. (Declared here so the defaults block is complete and
+# the script runs clean under Set-StrictMode.)
+$DATADIR = "$env:APPDATA\DigiByte"
 
 # Thresholds — basic health
 $MIN_PEERS           = 3
@@ -636,17 +656,40 @@ function Check-Disk {
 
     $availGB = [math]::Floor($drive.Free / 1GB)
 
+    # v2.5.5-win.1: Get-PSDrive returns Free and Used natively —
+    # total = Free + Used. Show total and used% next to free space.
+    # used% is computed from the same rounded GB integers that are
+    # displayed, so the numbers in the line are self-consistent.
+    $totalGB  = [math]::Floor(($drive.Free + $drive.Used) / 1GB)
+    $sizeInfo = ""
+    if ($null -ne $drive.Used -and $totalGB -gt 0) {
+        $usedPct  = [math]::Floor((($totalGB - $availGB) * 100) / $totalGB)
+        $sizeInfo = " of ${totalGB}GB (${usedPct}% used)"
+    }
+
     if ($availGB -lt $MIN_DISK_GB) {
         if (Test-ShouldAlert "low_disk") {
-            Alert-Red "🔴 Low Disk Space" "Only ${availGB}GB free on drive ${DISK_DRIVE}:. Clean up old testnet dirs or logs."
+            # v2.5.5-win.1: three-line alert with hard newlines (`n) —
+            # mobile Discord clients soft-wrap unpredictably without
+            # explicit breaks. The datadir sits on its own line as a
+            # clean copy target. Wording is generic ("old logs or unused
+            # chain data") because this alert fires on mainnet too.
+            $datadirLine = $DATADIR.TrimEnd('\') + '\'
+            Alert-Red "🔴 Low Disk Space" "Only ${availGB}GB free${sizeInfo}.`nClean up old logs or unused chain data in:`n${datadirLine}"
         }
-        $script:Details.Add("🔴 Disk: ${availGB}GB free (LOW!)")
+        $script:Details.Add("🔴 Disk: ${availGB}GB free${sizeInfo} (LOW!)")
         $script:Issues++
     } else {
         if (Clear-AlertState "low_disk") {
-            Alert-Green "✅ Disk Space Recovered" "Disk space back to ${availGB}GB free."
+            Alert-Green "✅ Disk Space Recovered" "Disk space back to ${availGB}GB free${sizeInfo}."
         }
-        $script:Details.Add("✅ Disk: ${availGB}GB free (drive ${DISK_DRIVE}:)")
+        # Summary line keeps the drive letter the Windows version has
+        # always shown, folded into the same parens as used%.
+        if ($sizeInfo -ne "") {
+            $script:Details.Add("✅ Disk: ${availGB}GB free of ${totalGB}GB (${usedPct}% used, drive ${DISK_DRIVE}:)")
+        } else {
+            $script:Details.Add("✅ Disk: ${availGB}GB free (drive ${DISK_DRIVE}:)")
+        }
     }
 }
 

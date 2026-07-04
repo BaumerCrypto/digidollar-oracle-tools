@@ -62,6 +62,26 @@ $SERVICE_NAME = ""
 # %APPDATA%\DigiByte, which normally lives on drive C.
 $DISK_DRIVE = "C"
 
+# ---- DigiByte Datadir Named in Low Disk Alerts (v2.5.5-win.1+) ----
+# The Low Disk Space alert prints this path on its own line so you know
+# exactly where to clean up. Display-only — the monitor never reads or
+# deletes anything here. Keep it on the same drive as $DISK_DRIVE. No
+# RPC returns the datadir, so it's declared in config. Set it per config
+# file, same pattern as $NETWORK_LABEL:
+#
+#   Single-instance (one daemon on this PC) — leave the default:
+#     $DATADIR = "$env:APPDATA\DigiByte"
+#
+#   Dual-instance (testnet + mainnet via -Config) — set each config so
+#   each instance's alert names its own datadir:
+#     testnet config:  $DATADIR = "$env:APPDATA\DigiByte\testnet26"
+#     mainnet config:  $DATADIR = "$env:APPDATA\DigiByte"
+#
+# Mainnet chain data lives at the datadir top level; testnet data lives
+# in a subdirectory named for the current testnet reset (testnet26,
+# testnet27, ...) — bump it when the testnet resets.
+$DATADIR = "$env:APPDATA\DigiByte"
+
 # ---- Alert Thresholds ----
 $MIN_PEERS           = 3     # Minimum peer count before alerting
 $MIN_DISK_GB         = 5     # Minimum free disk space (GB) before alerting
@@ -156,6 +176,9 @@ $NETWORK_LABEL = ""
 #   #   $SWAP_THRESHOLD_MB = 1500                        (dual-daemon baseline)
 #   #   $QUORUM_GREEN     = 12; $QUORUM_YELLOW = 10      (tighter for production)
 #   #   $NETWORK_LABEL    = "Mainnet"                    (shows in card titles)
+#   #   $DATADIR          = "$env:APPDATA\DigiByte"      (named in Low Disk alerts —
+#   #                                                     and set the TESTNET config to
+#   #                                                     "$env:APPDATA\DigiByte\testnet26")
 #   #   $DISCORD_WEBHOOK  = "https://..."                (same or different webhook)
 #
 #   # Test:
