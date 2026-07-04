@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord Alerts
-# Version: 2.5.5
+# Version: 2.5.6
 #
 # Monitors oracle node health and sends Discord webhook notifications
 # when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.5.5"
+readonly SCRIPT_VERSION="2.5.6"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -32,6 +32,16 @@ readonly SCRIPT_VERSION="2.5.5"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.6 — Cosmetic fix. The MuSig2 summary line was emitted with a
+#            three-space indent and no status icon, making it look
+#            "broken" next to every other health line (which lead with
+#            ✅/ℹ️/⚠️). It now carries its own status icon: ✅ when the
+#            session is complete (matching what Discord+terminals show),
+#            ℹ️ when a session is in progress (with the state name inline
+#            so you still see it), ⚠️ when the session can't be parsed.
+#            The redundant "✓" and parenthesized state suffix are dropped
+#            since the icon now carries that meaning. No behavior change,
+#            no alert path change — purely how the line renders.
 #   v2.5.5 — Disk check enhancements (both suggested by Aussie Epic).
 #            (1) The disk line now shows total size and used% next to
 #            free space — "✅ Disk: 156GB free of 200GB (22% used)" —
@@ -801,12 +811,16 @@ check_quorum() {
     musig_nonces=$(echo "$deploy_info" | jq -r '.musig2_session.nonce_count // "?"' 2>/dev/null)
     musig_sigs=$(echo "$deploy_info" | jq -r '.musig2_session.partial_sig_count // "?"' 2>/dev/null)
 
+    # v2.5.6: musig_detail now carries its own status icon so the line
+    # renders consistently alongside the other ✅/ℹ️/⚠️ health lines
+    # instead of floating with a bare three-space indent. Icon captures
+    # session state — no need for the trailing ✓ or "($state)" suffix.
     if [ "$musig_state" = "complete" ]; then
-        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ✓"
+        musig_detail="✅ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_epoch" != "?" ]; then
-        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ($musig_state)"
+        musig_detail="ℹ️ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
     else
-        musig_detail="could not parse session"
+        musig_detail="⚠️ MuSig2: could not parse session"
     fi
 
     # --- Step 2: Count reporting oracles ---
@@ -975,7 +989,7 @@ check_quorum() {
             DETAILS+="✅ Quorum: $reporting/$total_slots reporting (need $consensus_required) — healthy\n"
             ;;
     esac
-    DETAILS+="   MuSig2: $musig_detail\n"
+    DETAILS+="$musig_detail\n"
 }
 
 # ============================================================================

@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord Alerts (macOS)
-# Version: 2.5.5-macos.1
+# Version: 2.5.6-macos.1
 #
 # macOS port of my oracle-monitor.sh v2.5.3 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
@@ -10,7 +10,7 @@
 # (no Homebrew bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.5.5-macos.1"
+readonly SCRIPT_VERSION="2.5.6-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -51,6 +51,13 @@ readonly SCRIPT_VERSION="2.5.5-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.5.6-macos.1 — Cosmetic fix matching Linux v2.5.6. The MuSig2
+#          summary line now carries its own status icon (✅ complete,
+#          ℹ️ in progress, ⚠️ parse failure) so it renders consistently
+#          alongside the other health lines instead of floating with a
+#          bare three-space indent. Redundant "✓" and "($state)" suffix
+#          dropped since the icon carries that meaning. No behavior
+#          change, no alert path change — purely how the line renders.
 #   v2.5.5-macos.1 — Disk check enhancements, matching Linux v2.5.5 (both
 #          suggested by Aussie Epic). (1) The disk line now shows total
 #          size and used% next to free space — "✅ Disk: 156GB free of
@@ -895,12 +902,15 @@ check_quorum() {
     musig_nonces=$(echo "$deploy_info" | jq -r '.musig2_session.nonce_count // "?"' 2>/dev/null)
     musig_sigs=$(echo "$deploy_info" | jq -r '.musig2_session.partial_sig_count // "?"' 2>/dev/null)
 
+    # v2.5.6-macos.1: musig_detail now carries its own status icon so
+    # the line renders consistently alongside the other ✅/ℹ️/⚠️ health
+    # lines instead of floating with a bare three-space indent.
     if [ "$musig_state" = "complete" ]; then
-        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ✓"
+        musig_detail="✅ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_epoch" != "?" ]; then
-        musig_detail="epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs ($musig_state)"
+        musig_detail="ℹ️ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
     else
-        musig_detail="could not parse session"
+        musig_detail="⚠️ MuSig2: could not parse session"
     fi
 
     # --- Step 2: Count reporting oracles ---
@@ -1069,7 +1079,7 @@ check_quorum() {
             DETAILS+="✅ Quorum: $reporting/$total_slots reporting (need $consensus_required) — healthy\n"
             ;;
     esac
-    DETAILS+="   MuSig2: $musig_detail\n"
+    DETAILS+="$musig_detail\n"
 }
 
 # ============================================================================

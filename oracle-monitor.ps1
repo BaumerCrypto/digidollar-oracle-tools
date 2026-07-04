@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.5.5-win.1
+# Version: 2.5.6-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.5.5 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.5.6 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet — Windows-
 # native commands. Runs on Windows PowerShell 5.1 (preinstalled on Windows
@@ -45,6 +45,13 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.5.6-win.1 — Cosmetic fix matching Linux v2.5.6. The MuSig2
+#          summary line now carries its own status icon (✅ complete,
+#          ℹ️ in progress, ⚠️ parse failure) so it renders consistently
+#          alongside the other health lines instead of floating with a
+#          bare three-space indent. Redundant "✓" and "($state)" suffix
+#          dropped since the icon carries that meaning. No behavior
+#          change, no alert path change — purely how the line renders.
 #   v2.5.5-win.1 — Disk check enhancements, matching Linux v2.5.5 (both
 #          suggested by Aussie Epic). (1) The disk line now shows total
 #          size and used% next to free space — "✅ Disk: 156GB free of
@@ -143,7 +150,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.5.5-win.1"
+$SCRIPT_VERSION = "2.5.6-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -963,12 +970,15 @@ function Check-Quorum {
         if ($null -ne $session.PSObject.Properties['partial_sig_count']) { $musigSigs   = $session.partial_sig_count }
     }
 
+    # v2.5.6-win.1: musigDetail now carries its own status icon so the
+    # line renders consistently alongside the other ✅/ℹ️/⚠️ health
+    # lines instead of floating with a bare three-space indent.
     if ($musigState -eq "complete") {
-        $musigDetail = "epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs ✓"
+        $musigDetail = "✅ MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs"
     } elseif ("$musigEpoch" -ne "?") {
-        $musigDetail = "epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs ($musigState)"
+        $musigDetail = "ℹ️ MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
     } else {
-        $musigDetail = "could not parse session"
+        $musigDetail = "⚠️ MuSig2: could not parse session"
     }
 
     # --- Step 2: Count reporting oracles ---
@@ -1162,7 +1172,7 @@ function Check-Quorum {
             $script:Details.Add("✅ Quorum: $reporting/$totalSlots reporting (need $consensusRequired) — healthy")
         }
     }
-    $script:Details.Add("   MuSig2: $musigDetail")
+    $script:Details.Add("$musigDetail")
 }
 
 # ============================================================================
