@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.5
+# Version: 1.6
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -30,7 +30,8 @@
 #   7. Test:  ./oracle-network-status.sh --dry-run
 #   8. Test:  ./oracle-network-status.sh --test
 #   9. Test:  ./oracle-network-status.sh --test-mention
-#  10. Cron:  5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
+#  10. Test:  ./oracle-network-status.sh --endgame-only --dry-run
+#  11. Cron:  5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 #
 # FLAGS:
 #   (none)              Collect data and post to Gitter
@@ -38,12 +39,18 @@
 #   --test              Send a test message to Gitter to verify Matrix API
 #   --test-mention      Send a test mention to verify notifications work
 #   --config /path      Use alternate config file (enables dual-instance)
+#   --endgame-only      Mainnet endgame ticker (v1.6). Posts ONLY if
+#                       LOCKED_IN + <24h to activation, OR ACTIVE + birth
+#                       announcement not yet fired. Silent exit otherwise.
+#                       Designed for hourly cron alongside regular 12hr cron.
 #
 # DUAL-INSTANCE EXAMPLE (testnet + mainnet on one VPS):
-#   # Testnet (default config)
+#   # Testnet (default config, 12hr status pulse)
 #   5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
-#   # Mainnet (custom config)
+#   # Mainnet (custom config, 12hr status pulse)
 #   10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+#   # Mainnet (hourly endgame ticker, silent outside 24h band)
+#   15 * * * *   /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 #
 # DATA SOURCES (RPCs):
 #   getblockchaininfo            — chain identification (testnet/mainnet)
@@ -56,8 +63,36 @@
 #   ~/.oracle-monitor/config             — shared config (CLI, webhook, Matrix token)
 #   ~/.oracle-monitor/oracle-roster.conf — oracle ID to Gitter handle mapping (VPS only)
 #   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
+#   ~/.oracle-monitor/activation_state   — v1.6, one-shot dedup for DD mainnet birth
+#   ~/.oracle-monitor/endgame_last_post  — v1.6, hourly endgame cadence dedup
 #
 # CHANGELOG:
+#   v1.6 — DigiDollar mainnet activation prep (July 2026).
+#          (1) Software section rewrite: shows ALL versions with compliance
+#          icons (accepted list configurable via ACCEPTED_VERSIONS in config).
+#          Dashboard-matching total-operator counts, not fresh-only. rc46
+#          long/short hash variants collapse to one line, similar for
+#          pre-release git-hash suffixes. Compliant versions render with
+#          green check; non-compliant with yellow triangle. (2) New Upgrade
+#          nudge section pings fresh + non-compliant operators via existing
+#          MENTION_MAX cap, reuses mention_state. Stale operators are not
+#          double-pinged. (3) Issue #32 pre-activation guard: when running
+#          against a mainnet daemon whose DigiDollar BIP9 status is not yet
+#          active, the bot posts a compact standby message with countdown
+#          (blocks / time / calendar UTC), not the full network status. Runs
+#          in the LOCKED_IN, STARTED and DEFINED states. Testnet always uses
+#          full status (DD active since block 600). (4) Graceful countdown
+#          formatting: >24h shows days+hours, 1-24h shows hours, <1h shows
+#          ACTIVATION IMMINENT with minutes, 0 blocks shows Awaiting next
+#          block. (5) New --endgame-only flag for hourly countdown cron in
+#          the last 24 hours before activation. Silent exit outside the band
+#          so hourly cron only posts when it matters. (6) One-shot mainnet
+#          birth announcement fires the first cron pass after DD flips to
+#          ACTIVE. State recorded in activation_state file so both endgame
+#          and 12hr crons cooperate without duplicating the announcement.
+#          (7) Prose throughout the bot's output is em-dash free (commas,
+#          colons, periods, parentheses only). Classic list-marker em-dash
+#          preserved in operator lists for continuity with prior posts.
 #   v1.5 — Full-repo audit fixes (July 2026). (1) Header cron examples
 #          use generic /home/YOUR_USER paths. (2) Default quorum bands
 #          brought in line with oracle-monitor.sh v2.5.1+ (12/10, was
@@ -121,28 +156,34 @@ done
 ACTION_FLAG=""
 CONFIG_ARG=""
 
+ENDGAME_ONLY=false
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --config)
             if [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
                 echo "ERROR: --config requires a path argument."
-                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention] [--endgame-only]"
                 exit 1
             fi
             CONFIG_ARG="$2"
             shift 2
             ;;
+        --endgame-only)
+            ENDGAME_ONLY=true
+            shift
+            ;;
         --dry-run|--test|--test-mention)
             if [ -n "$ACTION_FLAG" ]; then
                 echo "ERROR: Cannot combine $ACTION_FLAG and $1."
-                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+                echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention] [--endgame-only]"
                 exit 1
             fi
             ACTION_FLAG="$1"
             shift
             ;;
         *)
-            echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention]"
+            echo "Usage: $0 [--config /path] [--dry-run | --test | --test-mention] [--endgame-only]"
             exit 1
             ;;
     esac
@@ -177,6 +218,31 @@ MENTION_MAX=6
 # Override examples: "Testnet26", "Mainnet", "Testnet"
 NETWORK_LABEL=""
 
+# Accepted software versions (v1.6). Space-separated list of version strings
+# whose oracles are considered compliant with the network's software rules.
+# Matching uses startswith(): "v9.26.4" matches "v9.26.4" AND "v9.26.4-gABC123"
+# (release builds carrying a git hash suffix pass), while "v9.26.0rc46-gABC"
+# does NOT match "v9.26.4" and is flagged as non-compliant.
+#
+# Default rule (Bastian, Gitter 2026-07-11): "any v9.26 will do to run
+# the oracle service." Update per Jared's guidance for mainnet if the
+# rule tightens post-activation.
+#
+# Dual-instance operators override per-config: testnet may accept broader,
+# mainnet may narrow to a specific release once Jared confirms.
+ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4"
+
+# Turn the Upgrade nudge section on/off. If false, non-compliant operators
+# are still flagged in the Software section with the yellow icon, but no
+# @-pings fire. Default true. Some operators may want this off on mainnet
+# during launch stabilization.
+VERSION_NUDGE_ENABLED=true
+
+# DigiByte target block time in seconds (used for endgame countdown).
+# Real network runs slightly ahead of target under high hashrate. Estimate
+# is honest-approximate, not precise.
+BLOCK_TIME_SECS=15
+
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
 # ============================================================================
@@ -199,6 +265,14 @@ MONITOR_DIR=$(dirname "$CONFIG_FILE")
 # Default file paths — roster shared across instances, state per-instance
 ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
 MENTION_STATE_FILE="${MONITOR_DIR}/mention_state"
+
+# v1.6: one-shot birth-announcement dedup for mainnet DD activation.
+# Written after the birth post lands successfully. Any subsequent cron
+# pass sees the file and skips the announcement.
+ACTIVATION_STATE_FILE="${MONITOR_DIR}/activation_state"
+
+# v1.6: last-endgame-post timestamp (soft dedup for hourly cron edge cases).
+ENDGAME_LAST_POST_FILE="${MONITOR_DIR}/endgame_last_post"
 
 # Load config (can override CLI, MATRIX_*, NETWORK_LABEL, ROSTER_FILE, etc.)
 if [ -f "$CONFIG_FILE" ]; then
@@ -302,7 +376,7 @@ case "$ACTION_FLAG" in
         fi
         echo "Sending test message to Gitter..."
         txn_id="test_$(date +%s)"
-        payload=$(jq -n --arg body "🟢 Oracle Network Monitor — test message ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
+        payload=$(jq -n --arg body "🟢 Oracle Network Monitor, test message ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             '{msgtype: "m.text", body: $body}')
         response=$(curl -s -w "\n%{http_code}" -X PUT \
             "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${txn_id}" \
@@ -350,7 +424,7 @@ case "$ACTION_FLAG" in
         txn_id="testmention_$(date +%s)"
         mention_array=$(echo "$test_handle" | jq -R . | jq -s .)
         payload=$(jq -n \
-            --arg body "🟢 Bot account test — please ignore | ${test_handle} testing 12hr Oracle Monitor Bot @ mention feature!" \
+            --arg body "🟢 Bot account test, please ignore | ${test_handle} testing 12hr Oracle Monitor Bot @ mention feature!" \
             --argjson mentions "$mention_array" \
             '{msgtype: "m.text", body: $body, "m.mentions": {user_ids: $mentions}}')
         response=$(curl -s -w "\n%{http_code}" -X PUT \
@@ -455,6 +529,155 @@ post_to_gitter() {
 }
 
 # ============================================================================
+# v1.6 HELPERS: COUNTDOWN, STANDBY, BIRTH ANNOUNCEMENT
+# ============================================================================
+
+# pretty_number: Insert thousands separators (commas) into an integer.
+# Locale-independent: works whether or not en_US.UTF-8 grouping is enabled.
+# Preserves the input if it's not a positive integer.
+pretty_number() {
+    local n="$1"
+    if [ -z "$n" ] || ! [[ "$n" =~ ^[0-9]+$ ]]; then
+        echo "$n"
+        return
+    fi
+    local out=""
+    while [ ${#n} -gt 3 ]; do
+        out=",${n: -3}${out}"
+        n="${n:0:${#n}-3}"
+    done
+    echo "${n}${out}"
+}
+
+# format_countdown_line
+# Emits a single line describing time to activation, band-appropriate.
+# Args:  $1 blocks_remaining   $2 secs_remaining   $3 minutes   $4 hours   $5 days
+# Bands: >24h shows days+hours, 1-24h shows hours, <1h ACTIVATION IMMINENT,
+#        0 blocks shows Awaiting next block.
+format_countdown_line() {
+    local blocks="$1"
+    local secs="$2"
+    local mins="$3"
+    local hrs="$4"
+    local days="$5"
+
+    # Singular/plural helpers
+    local day_word hr_word min_word
+    if [ "$days" -eq 1 ]; then day_word="day"; else day_word="days"; fi
+    if [ "$hrs" -eq 1 ]; then hr_word="hour"; else hr_word="hours"; fi
+    if [ "$mins" -eq 1 ]; then min_word="minute"; else min_word="minutes"; fi
+
+    if [ "$blocks" -le 0 ]; then
+        echo "   ⏳ Awaiting next block, activation on next block..."
+    elif [ "$secs" -lt 60 ]; then
+        # Sub-minute case: about to hit the block, don't render "0 minutes"
+        echo "   ⏰ ACTIVATION IMMINENT, any moment now"
+    elif [ "$secs" -lt 3600 ]; then
+        echo "   ⏰ ACTIVATION IMMINENT, ~${mins} ${min_word}"
+    elif [ "$secs" -lt 86400 ]; then
+        echo "   Time to activation: ~${hrs} ${hr_word}"
+    else
+        echo "   Time to activation: ~${days} ${day_word} ${hrs} ${hr_word}"
+    fi
+}
+
+# build_standby_message
+# Constructs the LOCKED_IN / STARTED / DEFINED standby post body.
+# Uses globals: NETWORK_DISPLAY, TIMESTAMP, TOTAL_SLOTS, QUORUM_REQUIRED,
+# BIP9_STATUS, CURRENT_HEIGHT, ACTIVATION_HEIGHT, BLOCKS_REMAINING,
+# SECS_REMAINING, MINUTES, HOURS, DAYS, ETA_UTC.
+build_standby_message() {
+    local bip9_upper
+    bip9_upper=$(echo "$BIP9_STATUS" | tr '[:lower:]' '[:upper:]')
+
+    local countdown
+    countdown=$(format_countdown_line "$BLOCKS_REMAINING" "$SECS_REMAINING" "$MINUTES" "$HOURS" "$DAYS")
+
+    # Format numbers with thousands separator (locale-independent).
+    local cur_pretty act_pretty rem_pretty
+    cur_pretty=$(pretty_number "$CURRENT_HEIGHT")
+    act_pretty=$(pretty_number "$ACTIVATION_HEIGHT")
+    rem_pretty=$(pretty_number "$BLOCKS_REMAINING")
+
+    local msg
+    msg="🟢 Oracle Network Status, ${NETWORK_DISPLAY:-Mainnet}, ${TIMESTAMP}
+
+📅 DigiDollar Mainnet Activation: PENDING
+   Current stage: ${bip9_upper} (bit ${BIP9_BIT})
+   Current block: ${cur_pretty}
+   Activation block: ${act_pretty}
+   Blocks remaining: ${rem_pretty}
+${countdown}"
+
+    if [ -n "$ETA_UTC" ]; then
+        msg="${msg}
+   Estimated activation: ${ETA_UTC}"
+    fi
+
+    msg="${msg}
+
+Roster: ${TOTAL_SLOTS} slots configured, ${QUORUM_REQUIRED}-of-${TOTAL_SLOTS} quorum threshold
+Signing status: standby, mainnet oracles begin publishing at BIP9 ACTIVE
+
+This bot will resume full network status posts (fresh heartbeats,
+consensus price, MuSig2, upgrade nudges) automatically at activation."
+
+    echo "$msg"
+}
+
+# build_birth_message
+# One-shot mainnet activation announcement, fires on first cron pass after
+# DigiDollar BIP9 flips to ACTIVE. Records Jared and DigiSwarm in the
+# mention arrays so they get m.mentions notifications on this post only.
+# Uses global: ACTIVATION_HEIGHT.
+build_birth_message() {
+    local act_pretty
+    act_pretty=$(pretty_number "$ACTIVATION_HEIGHT")
+
+    # Look up Jared and DigiSwarm handles from the roster.
+    # Fall back to plaintext handles if roster entries not found.
+    local jared_handle digiswarm_handle jared_txt digiswarm_txt
+    jared_handle=$(get_gitter_handle 0)
+    digiswarm_handle=$(get_gitter_handle 15)
+
+    if [ -n "$jared_handle" ]; then
+        record_mention "$jared_handle" "JaredCTate"
+        jared_txt="$jared_handle"
+    else
+        jared_txt="@JaredCTate"
+    fi
+
+    if [ -n "$digiswarm_handle" ]; then
+        record_mention "$digiswarm_handle" "DigiSwarm"
+        digiswarm_txt="$digiswarm_handle"
+    else
+        digiswarm_txt="@DigiSwarm"
+    fi
+
+    cat <<EOF
+🎉 DigiDollar Mainnet, ACTIVATED at Block ${act_pretty} 🎉
+
+Congratulations!! After years of design, code, and community iteration,
+DigiDollar is now live on DigiByte mainnet. A native, USD-pegged,
+DGB-collateralized, oracle-priced, MuSig2-secured stablecoin,
+Decentralized & built directly into the base layer.
+No smart contracts, no custodians, no wrapped tokens.
+
+Deep gratitude to:
+  • ${jared_txt}, the architect, protocol lead, and the many years of consensus work. Thank you ${jared_txt}.
+  • ${digiswarm_txt}, the GOAT of release engineering, from testnet through v9.26.4.
+  • ALL 35 mainnet oracle operators now signing price bundles.
+  • DigiByte miners and pools who upgraded to v9.26.2+, signaled algolock (bit 0) to shut down the Groestl attack, and signaled DigiDollar (bit 23) through to full activation.
+  • Everyone in this room who tested, questioned, and kept us honest, you all deserve a HUGE round of applause 👏
+
+Now we prove it in the wild!
+
+Yours Truly: digibyte-maxi (Oracle slot 17), @BaumerCrypto2.0
+github.com/BaumerCrypto/digidollar-oracle-tools
+EOF
+}
+
+# ============================================================================
 # RPC DATA COLLECTION
 # ============================================================================
 
@@ -494,11 +717,11 @@ if [ $? -ne 0 ] || ! echo "$ORACLES_JSON" | jq -e . >/dev/null 2>&1; then
     if [ "$DRY_RUN" != true ]; then
         # Include network label in error message if available
         if [ -n "$NETWORK_DISPLAY" ]; then
-            NET_ERR="${NETWORK_DISPLAY} — "
+            NET_ERR="${NETWORK_DISPLAY}, "
         else
             NET_ERR=""
         fi
-        post_to_gitter "⚠️ Oracle Network Monitor — ${NET_ERR}$(date -u +'%Y-%m-%d %H:%M UTC')
+        post_to_gitter "⚠️ Oracle Network Monitor, ${NET_ERR}$(date -u +'%Y-%m-%d %H:%M UTC')
 
 Status check failed: could not reach DigiByte daemon. Will retry next cycle."
     fi
@@ -566,6 +789,47 @@ else
     MUSIG2_SIGS=0
 fi
 
+# --- v1.6: current block height + activation height + countdown vars ---
+# Current block from getblockchaininfo (already validated earlier).
+CURRENT_HEIGHT=$(echo "$CHAIN_JSON" | jq -r '.blocks // 0' 2>/dev/null)
+[ -z "$CURRENT_HEIGHT" ] && CURRENT_HEIGHT=0
+
+# Activation height. For LOCKED_IN state, activation happens at the end of
+# the current retarget window. Try .status_next.height first (newer schema),
+# then fall back to computing .since + .statistics.period.
+ACTIVATION_HEIGHT=$(echo "$DEPLOY_JSON" | jq -r '.status_next.height // empty' 2>/dev/null)
+if [ -z "$ACTIVATION_HEIGHT" ] || [ "$ACTIVATION_HEIGHT" = "null" ]; then
+    DD_SINCE=$(echo "$DEPLOY_JSON" | jq -r '.since // 0' 2>/dev/null)
+    DD_PERIOD=$(echo "$DEPLOY_JSON" | jq -r '.statistics.period // 40320' 2>/dev/null)
+    if [ "$DD_SINCE" != "0" ] && [ "$DD_SINCE" != "" ] && [ "$DD_SINCE" != "null" ]; then
+        ACTIVATION_HEIGHT=$((DD_SINCE + DD_PERIOD))
+    else
+        ACTIVATION_HEIGHT=""
+    fi
+fi
+
+# Blocks + time remaining + calendar ETA.
+BLOCKS_REMAINING=0
+SECS_REMAINING=0
+MINUTES=0
+HOURS=0
+DAYS=0
+ETA_UTC=""
+
+if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" != "N/A" ] && [ "$CURRENT_HEIGHT" -gt 0 ]; then
+    BLOCKS_REMAINING=$((ACTIVATION_HEIGHT - CURRENT_HEIGHT))
+    [ "$BLOCKS_REMAINING" -lt 0 ] && BLOCKS_REMAINING=0
+
+    SECS_REMAINING=$((BLOCKS_REMAINING * BLOCK_TIME_SECS))
+    DAYS=$((SECS_REMAINING / 86400))
+    HOURS=$(( (SECS_REMAINING % 86400) / 3600 ))
+    MINUTES=$(( (SECS_REMAINING % 3600) / 60 ))
+
+    NOW_EPOCH=$(date +%s)
+    ETA_EPOCH=$((NOW_EPOCH + SECS_REMAINING))
+    ETA_UTC=$(date -u -d "@${ETA_EPOCH}" '+%Y-%m-%d ~%H:%M UTC' 2>/dev/null || echo "")
+fi
+
 # --- Last bundle signers ---
 if [ $SIGNERS_OK -eq 0 ] && echo "$SIGNERS_JSON" | jq -e . >/dev/null 2>&1; then
     BUNDLE_COUNT=$(echo "$SIGNERS_JSON" | jq -r '.bundle_count // 0')
@@ -587,6 +851,122 @@ else
 fi
 
 # ============================================================================
+# v1.6: MODE BRANCHING (STANDBY / BIRTH / ENDGAME / FULL STATUS)
+# ============================================================================
+#
+# The bot has four operating modes, decided here based on chain, DD BIP9
+# status, activation-state file, and --endgame-only flag.
+#
+#   1. BIRTH mode:    Mainnet + DD ACTIVE + no activation_state file.
+#                     Post one-shot birth announcement, write state file,
+#                     then continue to full status (regular cron path).
+#   2. STANDBY mode:  Mainnet + DD not-yet-ACTIVE.
+#                     Post compact countdown message, exit.
+#   3. ENDGAME mode:  Same trigger conditions as STANDBY, but from the
+#                     hourly --endgame-only cron. Post only when inside the
+#                     24h band; silent exit otherwise. STANDBY (from the
+#                     regular 12hr cron) always posts to keep operators
+#                     informed regardless of band.
+#   4. FULL mode:     Testnet always (DD active since block 600), or
+#                     mainnet after DD activation. Regular network status
+#                     (fresh/quorum/MuSig2/Software/Upgrade/Stale/Inactive).
+#
+# Testnet birth is NOT triggered; testnet has been active since June 2026.
+# Birth is gated on CHAIN_NAME == "main".
+# ============================================================================
+
+TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M UTC')
+
+# Resolve DD status (already parsed as BIP9_STATUS from top-level of
+# getdigidollardeploymentinfo). Consolidate the "active" check here for
+# readability.
+DD_IS_ACTIVE=false
+if [ "$BIP9_STATUS" = "active" ]; then
+    DD_IS_ACTIVE=true
+fi
+
+# --- BIRTH announcement (once, mainnet, first cron pass after ACTIVE) ---
+BIRTH_FIRED=false
+if [ "$DD_IS_ACTIVE" = true ] && [ "$CHAIN_NAME" = "main" ] && [ ! -f "$ACTIVATION_STATE_FILE" ]; then
+    echo "[$(date -u)] DigiDollar mainnet ACTIVE detected, birth announcement not yet fired. Firing now."
+    BIRTH_MESSAGE=$(build_birth_message)
+
+    # Build HTML pill version for the birth post (Jared + DigiSwarm mentions
+    # were recorded in build_birth_message). Otherwise reuse the plain body.
+    if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
+        BIRTH_HTML=$(printf '%s' "$BIRTH_MESSAGE" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/$/<br>/g')
+        for i in "${!ALL_MENTION_IDS[@]}"; do
+            b_handle="${ALL_MENTION_IDS[$i]}"
+            b_display="${ALL_MENTION_NAMES[$i]}"
+            b_escaped_handle=$(printf '%s' "$b_handle" | sed 's/[][\.*^$]/\\&/g')
+            b_display_html=$(printf '%s' "$b_display" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+            b_pill="<a href=\"https://matrix.to/#/${b_handle}\">@${b_display_html}</a>"
+            b_pill_escaped=$(printf '%s' "$b_pill" | sed -e 's/[&\\]/\\&/g')
+            BIRTH_HTML=$(printf '%s' "$BIRTH_HTML" | sed "s|${b_escaped_handle}|${b_pill_escaped}|g")
+        done
+        BIRTH_CSV=$(IFS=','; echo "${ALL_MENTION_IDS[*]}")
+    else
+        BIRTH_HTML=""
+        BIRTH_CSV=""
+    fi
+
+    if post_to_gitter "$BIRTH_MESSAGE" "$BIRTH_HTML" "$BIRTH_CSV"; then
+        # Record the activation height so subsequent cron passes see the
+        # state file and skip the announcement. Only write on real posts;
+        # dry-runs must not touch state.
+        if [ "$DRY_RUN" != true ]; then
+            echo "$ACTIVATION_HEIGHT" > "$ACTIVATION_STATE_FILE"
+            echo "[$(date -u)] Birth announcement posted. activation_state written."
+        fi
+        BIRTH_FIRED=true
+    else
+        echo "[$(date -u)] WARNING: Birth announcement post failed. State file NOT written. Next cron will retry."
+    fi
+
+    # Reset mention arrays so downstream stale/inactive sections don't
+    # inherit the Jared/DigiSwarm mentions.
+    ALL_MENTION_IDS=()
+    ALL_MENTION_NAMES=()
+    MENTIONED_HANDLES=()
+
+    # In --endgame-only mode, exit after firing birth (this is the whole job).
+    if [ "$ENDGAME_ONLY" = true ]; then
+        exit 0
+    fi
+    # Otherwise fall through to the regular full-status post below.
+fi
+
+# --- STANDBY / ENDGAME modes (mainnet, DD not yet active) ---
+if [ "$DD_IS_ACTIVE" != true ] && [ "$CHAIN_NAME" = "main" ]; then
+    # In endgame-only mode, only post when inside the 24h band.
+    if [ "$ENDGAME_ONLY" = true ]; then
+        if [ "$SECS_REMAINING" -le 0 ] || [ "$SECS_REMAINING" -ge 86400 ]; then
+            [ "$DRY_RUN" = true ] && echo "[endgame-only] Outside 24h band (SECS_REMAINING=$SECS_REMAINING). Silent exit."
+            exit 0
+        fi
+    fi
+
+    STANDBY_MESSAGE=$(build_standby_message)
+    post_to_gitter "$STANDBY_MESSAGE" "" ""
+
+    # Soft dedup marker for hourly cron pattern.
+    if [ "$DRY_RUN" != true ]; then
+        date +%s > "$ENDGAME_LAST_POST_FILE" 2>/dev/null || true
+    fi
+    exit 0
+fi
+
+# --- ENDGAME-ONLY on testnet or on already-active mainnet: silent exit ---
+# (Endgame ticker is a mainnet-pre-activation feature. Testnet DD is active
+# since block 600, so there's nothing to count down to. Already-active mainnet
+# has already fired birth above and continues to full-status mode via the
+# regular 12hr cron path, not the hourly endgame cron.)
+if [ "$ENDGAME_ONLY" = true ]; then
+    [ "$DRY_RUN" = true ] && echo "[endgame-only] Not applicable this run (chain=$CHAIN_NAME, dd_active=$DD_IS_ACTIVE). Silent exit."
+    exit 0
+fi
+
+# ============================================================================
 # DETERMINE QUORUM STATUS
 # ============================================================================
 
@@ -600,7 +980,7 @@ elif [ "$FRESH_COUNT" -ge "$QUORUM_REQUIRED" ]; then
     QUORUM_LABEL="critical"
     STATUS_EMOJI="🔴"
 else
-    QUORUM_LABEL="LOST — below quorum"
+    QUORUM_LABEL="LOST, below quorum"
     STATUS_EMOJI="🚨"
 fi
 
@@ -621,43 +1001,174 @@ fi
 # FORMAT MESSAGE
 # ============================================================================
 
-TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M UTC')
+# v1.6: TIMESTAMP is now set earlier in the mode-branching block.
 
-# Build network label segment for header
+# Build network label segment for header (v1.6: comma, not em-dash)
 if [ -n "$NETWORK_DISPLAY" ]; then
-    NET_SEGMENT="${NETWORK_DISPLAY} — "
+    NET_SEGMENT="${NETWORK_DISPLAY}, "
 else
     NET_SEGMENT=""
 fi
 
-# Build the message header
-MESSAGE="${STATUS_EMOJI} Oracle Network Status — ${NET_SEGMENT}${TIMESTAMP}
+# Build the message header (v1.6: em-dashes replaced with commas in prose)
+MESSAGE="${STATUS_EMOJI} Oracle Network Status, ${NET_SEGMENT}${TIMESTAMP}
 
-Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL} — threshold: ${QUORUM_REQUIRED})
+Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL}, threshold: ${QUORUM_REQUIRED})
 Consensus price: \$${PRICE_USD} (status: ${PRICE_STATUS})
 MuSig2: epoch ${MUSIG2_EPOCH}, ${MUSIG2_STATE}, ${MUSIG2_NONCES}/${QUORUM_REQUIRED} nonces, ${MUSIG2_SIGS}/${QUORUM_REQUIRED} sigs
 BIP9: ${BIP9_STATUS} (bit ${BIP9_BIT})
 Last bundle: block ${LAST_BUNDLE_HEIGHT}, signed by ${LAST_BUNDLE_SIGNERS} oracles"
 
-# Add software versions (top 2 by fresh operator count)
-SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r '
-  [.[] | select(.heartbeat_status == "fresh") | .sv = (if .software_version == null or .software_version == "" then "unknown" else .software_version end)] |
-  group_by(.sv) |
-  map({version: .[0].sv, count: length}) |
+# ============================================================================
+# v1.6: SOFTWARE SECTION (all versions, dashboard totals, compliance icons)
+# ============================================================================
+#
+# Groups all oracles by canonical display version (rc46 hash variants
+# collapse to one line), counts total operators per group (matches the
+# DigiByte Stats dashboard exactly), sorts descending by count.
+#
+# Compliance is determined by the ACCEPTED_VERSIONS config list using a
+# startswith() rule so "v9.26.4-g5bcd3a8" matches "v9.26.4".
+# Compliant: ✅  Non-compliant (pre-release / unknown): ⚠️
+#
+# Display canonicalization:
+#   v9.26.4                        -> v9.26.4
+#   v9.26.4-g5bcd3a8               -> v9.26.4                          (release + hash)
+#   v9.26.0rc46-g873d6d068b9fe9... -> v9.26.0rc46 (pre-release)        (long hash)
+#   v9.26.0rc46-873d6d068b9f       -> v9.26.0rc46 (pre-release)        (short hash)
+#   v9.26.1-pre2-g47fa47f9128c...  -> v9.26.1-pre2 (pre-release)       (pre + hash)
+#   null / ""                      -> No version reported
+
+SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+  # Strip -g<hash> and long bare -<hash> suffixes for a canonical form.
+  def canonical:
+    if . == null or . == "" then ""
+    else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
+    end;
+
+  # Compliance: canonical form must exactly match one of the accepted list.
+  def is_compliant($ok):
+    . as $sv |
+    if $sv == null or $sv == "" then false
+    else
+      ($ok | split(" ")) as $list |
+      ($sv | canonical) as $c |
+      any($list[]; . == $c)
+    end;
+
+  # Display label: adds "(pre-release)" tag for rc/pre versions; special
+  # label for unreported version.
+  def display_label:
+    . as $sv |
+    if $sv == null or $sv == "" then "No version reported"
+    else
+      ($sv | canonical) as $c |
+      if ($c | test("rc")) or ($c | test("pre")) then
+        $c + " (pre-release)"
+      else
+        $c
+      end
+    end;
+
+  # Map every oracle to {label, compliant} pairs, group by label, count.
+  [.[] | {
+    label: (.software_version | display_label),
+    compliant: (.software_version | is_compliant($accepted))
+  }] |
+  group_by(.label) |
+  map({
+    label: .[0].label,
+    count: length,
+    compliant: .[0].compliant
+  }) |
   sort_by(-.count) |
-  .[0:2] |
-  to_entries |
   .[] |
-  "  ✅ " +
-  (if (.value.version | length) > 25 then (.value.version[:22] + "...") else .value.version end) +
-  " : \(.value.count) operators"
+  (if .compliant then "  ✅ " else "  ⚠️ " end) +
+  .label +
+  ": " + (.count | tostring) +
+  " operator" + (if .count == 1 then "" else "s" end)
 ')
 
 if [ -n "$SOFTWARE_SECTION" ]; then
     MESSAGE="${MESSAGE}
 
-Software:
+Software (accepted: $(echo "$ACCEPTED_VERSIONS" | sed 's/ / \/ /g')):
 ${SOFTWARE_SECTION}"
+fi
+
+# ============================================================================
+# v1.6: UPGRADE NUDGE SECTION (fresh + non-compliant, roster-handle-aware)
+# ============================================================================
+#
+# Lists FRESH oracles whose canonical version is NOT in ACCEPTED_VERSIONS.
+# Reuses the existing MENTION_MAX cap and mention_state file to avoid
+# spamming operators. Stale/inactive operators are NOT included here (they
+# are already pinged in the Stale/Inactive sections; version-nudging them
+# on top would double-ping the same problem).
+
+if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
+    # Extract fresh + non-compliant IDs, names, and canonical labels.
+    UPGRADE_ROWS=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+      def canonical:
+        if . == null or . == "" then ""
+        else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
+        end;
+      def is_compliant($ok):
+        . as $sv |
+        if $sv == null or $sv == "" then false
+        else
+          ($ok | split(" ")) as $list |
+          ($sv | canonical) as $c |
+          any($list[]; . == $c)
+        end;
+      [.[] |
+        select(.heartbeat_status == "fresh") |
+        select((.software_version | is_compliant($accepted)) | not) |
+        {oid: .oracle_id, name: .name, sv: (.software_version // "")}
+      ] |
+      .[] | "\(.oid)|\(.name // "unknown")|\(.sv)"
+    ')
+
+    if [ -n "$UPGRADE_ROWS" ]; then
+        UPGRADE_SECTION=""
+        UPGRADE_COUNT=0
+
+        while IFS='|' read -r oid oname osv; do
+            [ -z "$oid" ] && continue
+            UPGRADE_COUNT=$((UPGRADE_COUNT + 1))
+
+            line="  — ID ${oid} ${oname}"
+
+            # Roster handle + ping cap (mirrors stale-section pattern).
+            handle=$(get_gitter_handle "$oid")
+            if [ -n "$handle" ]; then
+                count=$(get_mention_count "$oid")
+                if [ "$count" -lt "$MENTION_MAX" ]; then
+                    if ! is_already_mentioned "$handle"; then
+                        line="${line} ${handle}"
+                        record_mention "$handle" "$oname"
+                    fi
+                    if [ "$DRY_RUN" != true ]; then
+                        increment_mention_count "$oid" "$count"
+                    fi
+                fi
+            fi
+
+            if [ -z "$UPGRADE_SECTION" ]; then
+                UPGRADE_SECTION="${line}"
+            else
+                UPGRADE_SECTION="${UPGRADE_SECTION}
+${line}"
+            fi
+        done <<< "$UPGRADE_ROWS"
+
+        if [ "$UPGRADE_COUNT" -gt 0 ]; then
+            MESSAGE="${MESSAGE}
+
+📢 Please upgrade to $(echo "$ACCEPTED_VERSIONS" | awk '{print $1}') or newer:
+${UPGRADE_SECTION}"
+        fi
+    fi
 fi
 
 # ============================================================================
