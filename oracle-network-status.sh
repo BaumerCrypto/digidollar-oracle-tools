@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.6
+# Version: 1.6.1
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -67,6 +67,16 @@
 #   ~/.oracle-monitor/endgame_last_post  — v1.6, hourly endgame cadence dedup
 #
 # CHANGELOG:
+#   v1.6.1 — Sort polish (July 2026). Software section groups by:
+#          (1) Compliant versions first (✅ block, sorted count DESC),
+#          (2) Non-compliant versions with a reported version (⚠️ block,
+#          sorted count DESC), (3) "No version reported" at the very end.
+#          Reads like a report: healthy baseline on top, version-based
+#          deviations in the middle, data-quality bucket at the bottom.
+#          The "No version reported" line inflates on unhealthy networks
+#          (every inactive/unresponsive node lands there regardless of
+#          what they're actually running), so keeping it separate from
+#          real version distribution reads cleaner.
 #   v1.6 — DigiDollar mainnet activation prep (July 2026).
 #          (1) Software section rewrite: shows ALL versions with compliance
 #          icons (accepted list configurable via ACCEPTED_VERSIONS in config).
@@ -1071,6 +1081,14 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
     end;
 
   # Map every oracle to {label, compliant} pairs, group by label, count.
+  # v1.6.1: three-tier sort priority:
+  #   0 = compliant (✅ block), sorted count DESC within
+  #   1 = non-compliant WITH a reported version (⚠️ block), count DESC
+  #   2 = "No version reported" (data-quality bucket), pinned to the end
+  # Reads like a report: healthy baseline on top, deviations in the
+  # middle, unreported at the bottom. The unreported bucket inflates
+  # on unhealthy networks (any inactive node lands there) so pinning
+  # it at the end keeps real version distribution visually clean.
   [.[] | {
     label: (.software_version | display_label),
     compliant: (.software_version | is_compliant($accepted))
@@ -1081,7 +1099,13 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
     count: length,
     compliant: .[0].compliant
   }) |
-  sort_by(-.count) |
+  sort_by(
+    (if .compliant then 0
+     elif .label == "No version reported" then 2
+     else 1
+     end),
+    -.count
+  ) |
   .[] |
   (if .compliant then "  ✅ " else "  ⚠️ " end) +
   .label +
