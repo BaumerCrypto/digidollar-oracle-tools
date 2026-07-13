@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.6.1
+# Version: 1.6.2
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -67,6 +67,36 @@
 #   ~/.oracle-monitor/endgame_last_post  — v1.6, hourly endgame cadence dedup
 #
 # CHANGELOG:
+#   v1.6.2 — Mainnet pre-activation RPC ordering fix (July 2026).
+#          Discovered during v1.6.1 mainnet dry-run: getoracles/
+#          getoracleprice/getoraclesigners error out with "DigiDollar is
+#          not yet active on this blockchain" (code -1) on pre-activation
+#          mainnet daemons, BEFORE reaching the standby-mode branching.
+#          On a real cron pass (not --dry-run) this would have posted
+#          "Status check failed" alerts every 12 hours until activation,
+#          alarming operators when the daemon is fine and DD just isn't
+#          on yet.
+#          FIX: RPC calls split into two phases.
+#          Phase 1 (always-safe, runs every mode): getblockchaininfo,
+#          getdeploymentinfo, getdigidollardeploymentinfo. These populate
+#          BIP9 status, quorum config, MuSig2 session, activation height
+#          math, and network identification.
+#          Phase 2 (DD-required, only if FULL branch selected):
+#          getoracles true, getoracleprice, getoraclesigners 50. These
+#          populate operator heartbeats, consensus price, and recent
+#          bundle signers. STANDBY / BIRTH / ENDGAME-silent modes skip
+#          Phase 2 entirely.
+#          Also: activation height math switched from
+#          getdigidollardeploymentinfo.status_next.height (null pre-
+#          activation) to getdeploymentinfo.deployments.digidollar.bip9.
+#          since + statistics.period (populated pre-activation, BIP9
+#          standard). Fallback chain: getdeploymentinfo -> config
+#          override -> compute from current height / 40320 period -> floor
+#          check against min_activation_height (mainnet 23,627,520,
+#          testnet26 600).
+#          New optional config: ACTIVATION_HEIGHT_OVERRIDE.
+#          Verified on live mainnet 2026-07-12 (block ~23,842,xxx, BIP9
+#          LOCKED_IN): computed activation = 23,869,440, matches digiscope.
 #   v1.6.1 — Sort polish (July 2026). Software section groups by:
 #          (1) Compliant versions first (✅ block, sorted count DESC),
 #          (2) Non-compliant versions with a reported version (⚠️ block,
@@ -252,6 +282,18 @@ VERSION_NUDGE_ENABLED=true
 # Real network runs slightly ahead of target under high hashrate. Estimate
 # is honest-approximate, not precise.
 BLOCK_TIME_SECS=15
+
+# v1.6.2: manual override for activation height. Set only if all automatic
+# resolution paths fail (getdeploymentinfo -> compute-from-window). Leave
+# empty to allow automatic resolution. Format: integer block height.
+# Example on mainnet during LOCKED_IN: ACTIVATION_HEIGHT_OVERRIDE=23869440
+ACTIVATION_HEIGHT_OVERRIDE=""
+
+# v1.6.2: min activation height (BIP9 floor). Reject computed activation
+# values below this as a sanity check. Testnet26 was set to 600, mainnet
+# is 23,627,520. Overridable per-network via config if needed.
+MIN_ACTIVATION_HEIGHT_MAINNET=23627520
+MIN_ACTIVATION_HEIGHT_TESTNET=600
 
 # ============================================================================
 # LOAD EXTERNAL CONFIG (overrides defaults above)
@@ -688,46 +730,41 @@ EOF
 }
 
 # ============================================================================
-# RPC DATA COLLECTION
+# RPC DATA COLLECTION — v1.6.2 TWO-PHASE STRUCTURE
+# ============================================================================
+#
+# Phase 1 (always-safe): RPCs that work on any daemon regardless of DD state.
+#   - getblockchaininfo             chain + current height
+#   - getdeploymentinfo             PRIMARY source for BIP9 math (Bitcoin Core
+#                                   standard, populated pre-activation)
+#   - getdigidollardeploymentinfo   DGB-specific extras: BIP9 status,
+#                                   quorum config, MuSig2 session, oracle seed
+#                                   peers. Returns partial data pre-activation
+#                                   (since/status_next/statistics null but
+#                                   status/bit/quorum config populated).
+#
+# Phase 2 (DD-required): RPCs that error with "DigiDollar is not yet active"
+# on pre-activation daemons. Called ONLY when mode branching selects FULL.
+#   - getoracles true               operator heartbeat list
+#   - getoracleprice                consensus price
+#   - getoraclesigners 50           recent bundle signers
+#
 # ============================================================================
 
-echo "[$(date -u)] Collecting oracle network data..."
+echo "[$(date -u)] Collecting oracle network data (Phase 1: safe RPCs)..."
 
-# --- 0. getblockchaininfo — network identification ---
+# --- Phase 1a. getblockchaininfo — network identification + current height ---
 CHAIN_JSON=$($CLI getblockchaininfo 2>&1)
-# v1.5: validate the JSON parse (jq -e) instead of substring-grepping
-# for "error" — same change applied to every RPC check below.
+# v1.5: validate the JSON parse (jq -e) instead of substring-grepping.
 if [ $? -eq 0 ] && echo "$CHAIN_JSON" | jq -e . >/dev/null 2>&1; then
     CHAIN_NAME=$(echo "$CHAIN_JSON" | jq -r '.chain // ""')
 else
     CHAIN_NAME=""
-fi
-
-# Resolve network display label
-# Priority: NETWORK_LABEL from config > auto-detect from chain field
-if [ -n "$NETWORK_LABEL" ]; then
-    NETWORK_DISPLAY="$NETWORK_LABEL"
-elif [ "$CHAIN_NAME" = "test" ]; then
-    NETWORK_DISPLAY="Testnet"
-elif [ "$CHAIN_NAME" = "main" ]; then
-    NETWORK_DISPLAY="Mainnet"
-elif [ "$CHAIN_NAME" = "regtest" ]; then
-    NETWORK_DISPLAY="Regtest"
-elif [ -n "$CHAIN_NAME" ]; then
-    # Unknown chain value — capitalize first letter
-    NETWORK_DISPLAY=$(echo "$CHAIN_NAME" | sed 's/./\U&/')
-else
-    NETWORK_DISPLAY=""
-fi
-
-# --- 1. getoracles true — per-oracle heartbeat status ---
-ORACLES_JSON=$($CLI getoracles true 2>&1)
-if [ $? -ne 0 ] || ! echo "$ORACLES_JSON" | jq -e . >/dev/null 2>&1; then
-    echo "ERROR: getoracles true failed: $ORACLES_JSON"
+    # Real daemon-down case: post an error alert and exit.
+    echo "ERROR: getblockchaininfo failed. Daemon likely down."
     if [ "$DRY_RUN" != true ]; then
-        # Include network label in error message if available
-        if [ -n "$NETWORK_DISPLAY" ]; then
-            NET_ERR="${NETWORK_DISPLAY}, "
+        if [ -n "$NETWORK_LABEL" ]; then
+            NET_ERR="${NETWORK_LABEL}, "
         else
             NET_ERR=""
         fi
@@ -738,47 +775,49 @@ Status check failed: could not reach DigiByte daemon. Will retry next cycle."
     exit 1
 fi
 
-# --- 2. getoracleprice — consensus price + status ---
-PRICE_JSON=$($CLI getoracleprice 2>&1)
-PRICE_OK=$?
+# Resolve network display label. Priority: NETWORK_LABEL from config >
+# auto-detect from chain field.
+if [ -n "$NETWORK_LABEL" ]; then
+    NETWORK_DISPLAY="$NETWORK_LABEL"
+elif [ "$CHAIN_NAME" = "test" ]; then
+    NETWORK_DISPLAY="Testnet"
+elif [ "$CHAIN_NAME" = "main" ]; then
+    NETWORK_DISPLAY="Mainnet"
+elif [ "$CHAIN_NAME" = "regtest" ]; then
+    NETWORK_DISPLAY="Regtest"
+elif [ -n "$CHAIN_NAME" ]; then
+    NETWORK_DISPLAY=$(echo "$CHAIN_NAME" | sed 's/./\U&/')
+else
+    NETWORK_DISPLAY=""
+fi
 
-# --- 3. getdigidollardeploymentinfo — BIP9 + MuSig2 + quorum config ---
+# --- Phase 1b. getdeploymentinfo — PRIMARY BIP9 source (v1.6.2 NEW) ---
+# This is the Bitcoin Core standard deployment info RPC. Fully populated
+# pre-activation, unlike the DGB-custom getdigidollardeploymentinfo whose
+# .since/.status_next/.statistics fields are null pre-activation. Preferred
+# source for activation-height math.
+DEPLOY_STD_JSON=$($CLI getdeploymentinfo 2>&1)
+DEPLOY_STD_OK=$?
+
+# --- Phase 1c. getdigidollardeploymentinfo — DGB extras ---
+# Returns partial data pre-activation. Still useful for oracle_consensus_required,
+# oracle_total_slots, musig2_session fields.
 DEPLOY_JSON=$($CLI getdigidollardeploymentinfo 2>&1)
 DEPLOY_OK=$?
 
-# --- 4. getoraclesigners 50 — recent bundle signers ---
-SIGNERS_JSON=$($CLI getoraclesigners 50 2>&1)
-SIGNERS_OK=$?
-
 # ============================================================================
-# PARSE RPC DATA
+# PARSE RPC DATA — v1.6.2 PHASE 1 ONLY
+# ============================================================================
+# Phase 2 parse (oracle heartbeats, price, bundles) happens after mode
+# branching, in the FULL flow only. Standby/birth/endgame modes don't need
+# that data and don't fetch it.
 # ============================================================================
 
-# --- Oracle heartbeat counts ---
-TOTAL_ORACLES=$(echo "$ORACLES_JSON" | jq 'length')
-FRESH_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "fresh")] | length')
-STALE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "stale")] | length')
+# --- Current block height (from getblockchaininfo, already validated) ---
+CURRENT_HEIGHT=$(echo "$CHAIN_JSON" | jq -r '.blocks // 0' 2>/dev/null)
+[ -z "$CURRENT_HEIGHT" ] && CURRENT_HEIGHT=0
 
-# Inactive = everything that isn't fresh or stale (none, unknown, null, missing)
-INACTIVE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale")] | length')
-
-# Total offline = not fresh (stale + inactive)
-OFFLINE_COUNT=$((TOTAL_ORACLES - FRESH_COUNT))
-
-# --- Consensus price ---
-if [ $PRICE_OK -eq 0 ] && echo "$PRICE_JSON" | jq -e . >/dev/null 2>&1; then
-    PRICE_USD=$(echo "$PRICE_JSON" | jq -r '.price_usd // "N/A"')
-    PRICE_STATUS=$(echo "$PRICE_JSON" | jq -r '.status // "unknown"')
-    PRICE_STALE=$(echo "$PRICE_JSON" | jq -r '.is_stale // false')
-    ORACLE_COUNT=$(echo "$PRICE_JSON" | jq -r '.oracle_count // 0')
-else
-    PRICE_USD="N/A"
-    PRICE_STATUS="unavailable"
-    PRICE_STALE="true"
-    ORACLE_COUNT=0
-fi
-
-# --- Deployment info ---
+# --- Deployment info (getdigidollardeploymentinfo, tolerates partial data) ---
 if [ $DEPLOY_OK -eq 0 ] && echo "$DEPLOY_JSON" | jq -e . >/dev/null 2>&1; then
     BIP9_STATUS=$(echo "$DEPLOY_JSON" | jq -r '.status // "unknown"')
     BIP9_BIT=$(echo "$DEPLOY_JSON" | jq -r '.bit // "N/A"')
@@ -799,26 +838,81 @@ else
     MUSIG2_SIGS=0
 fi
 
-# --- v1.6: current block height + activation height + countdown vars ---
-# Current block from getblockchaininfo (already validated earlier).
-CURRENT_HEIGHT=$(echo "$CHAIN_JSON" | jq -r '.blocks // 0' 2>/dev/null)
-[ -z "$CURRENT_HEIGHT" ] && CURRENT_HEIGHT=0
+# --- v1.6.2: Activation height resolution (multi-source with fallbacks) ---
+# Priority chain:
+#   1. getdeploymentinfo.deployments.digidollar.bip9 (since + statistics.period)
+#      Bitcoin Core standard, populated pre-activation. Preferred source.
+#   2. ACTIVATION_HEIGHT_OVERRIDE from config (manual override).
+#   3. Computed from current height + assumed 40320 period.
+#   4. Sanity check: if result < min_activation_height floor, use floor as
+#      "at least this" indicator and mark unreliable.
+ACTIVATION_HEIGHT=""
+ACTIVATION_HEIGHT_SOURCE="unresolved"
 
-# Activation height. For LOCKED_IN state, activation happens at the end of
-# the current retarget window. Try .status_next.height first (newer schema),
-# then fall back to computing .since + .statistics.period.
-ACTIVATION_HEIGHT=$(echo "$DEPLOY_JSON" | jq -r '.status_next.height // empty' 2>/dev/null)
-if [ -z "$ACTIVATION_HEIGHT" ] || [ "$ACTIVATION_HEIGHT" = "null" ]; then
-    DD_SINCE=$(echo "$DEPLOY_JSON" | jq -r '.since // 0' 2>/dev/null)
-    DD_PERIOD=$(echo "$DEPLOY_JSON" | jq -r '.statistics.period // 40320' 2>/dev/null)
-    if [ "$DD_SINCE" != "0" ] && [ "$DD_SINCE" != "" ] && [ "$DD_SINCE" != "null" ]; then
-        ACTIVATION_HEIGHT=$((DD_SINCE + DD_PERIOD))
-    else
-        ACTIVATION_HEIGHT=""
+# Source 1: getdeploymentinfo (BIP9 standard)
+if [ $DEPLOY_STD_OK -eq 0 ] && echo "$DEPLOY_STD_JSON" | jq -e '.deployments.digidollar.bip9' >/dev/null 2>&1; then
+    BIP9_SINCE=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.since // empty')
+    BIP9_PERIOD=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.statistics.period // empty')
+    if [ -n "$BIP9_SINCE" ] && [ -n "$BIP9_PERIOD" ] \
+       && [ "$BIP9_SINCE" != "null" ] && [ "$BIP9_PERIOD" != "null" ]; then
+        # For LOCKED_IN: activation = current window end + 1 = since + period.
+        ACTIVATION_HEIGHT=$((BIP9_SINCE + BIP9_PERIOD))
+        ACTIVATION_HEIGHT_SOURCE="getdeploymentinfo"
+    fi
+
+    # If BIP9 status here is more authoritative than DGB extras, prefer it.
+    STD_BIP9_STATUS=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.status // empty')
+    if [ -n "$STD_BIP9_STATUS" ] && [ "$STD_BIP9_STATUS" != "null" ]; then
+        BIP9_STATUS="$STD_BIP9_STATUS"
+    fi
+    STD_BIP9_BIT=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.bit // empty')
+    if [ -n "$STD_BIP9_BIT" ] && [ "$STD_BIP9_BIT" != "null" ]; then
+        BIP9_BIT="$STD_BIP9_BIT"
+    fi
+
+    # Extract min_activation_height for floor sanity check (Bitcoin Core standard).
+    BIP9_MIN_ACTIVATION=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.min_activation_height // empty')
+fi
+
+# Source 2: config override
+if [ -z "$ACTIVATION_HEIGHT" ] && [ -n "$ACTIVATION_HEIGHT_OVERRIDE" ]; then
+    ACTIVATION_HEIGHT="$ACTIVATION_HEIGHT_OVERRIDE"
+    ACTIVATION_HEIGHT_SOURCE="config_override"
+fi
+
+# Source 3: compute from current height + assumed period.
+# window_start = (current / period) * period; activation = window_start + period.
+# Assumes we're already inside the LOCKED_IN window (best-guess for pre-launch).
+if [ -z "$ACTIVATION_HEIGHT" ] && [ "$CURRENT_HEIGHT" -gt 0 ]; then
+    ASSUMED_PERIOD=40320
+    WINDOW_START=$(( (CURRENT_HEIGHT / ASSUMED_PERIOD) * ASSUMED_PERIOD ))
+    ACTIVATION_HEIGHT=$((WINDOW_START + ASSUMED_PERIOD))
+    ACTIVATION_HEIGHT_SOURCE="computed_from_window"
+fi
+
+# Floor sanity check: if computed value is below the network's known
+# min_activation_height, replace with floor and mark unreliable. This
+# catches misconfiguration (period wrong, since wrong) rather than
+# reporting nonsense.
+if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" -gt 0 ]; then
+    # Prefer min_activation_height from getdeploymentinfo if available;
+    # else use hardcoded per-chain floor.
+    FLOOR=""
+    if [ -n "$BIP9_MIN_ACTIVATION" ] && [ "$BIP9_MIN_ACTIVATION" != "null" ]; then
+        FLOOR="$BIP9_MIN_ACTIVATION"
+    elif [ "$CHAIN_NAME" = "main" ]; then
+        FLOOR="$MIN_ACTIVATION_HEIGHT_MAINNET"
+    elif [ "$CHAIN_NAME" = "test" ]; then
+        FLOOR="$MIN_ACTIVATION_HEIGHT_TESTNET"
+    fi
+    if [ -n "$FLOOR" ] && [ "$ACTIVATION_HEIGHT" -lt "$FLOOR" ]; then
+        echo "[$(date -u)] WARNING: computed activation ($ACTIVATION_HEIGHT) below floor ($FLOOR). Using floor as safe fallback."
+        ACTIVATION_HEIGHT="$FLOOR"
+        ACTIVATION_HEIGHT_SOURCE="${ACTIVATION_HEIGHT_SOURCE}_floor_capped"
     fi
 fi
 
-# Blocks + time remaining + calendar ETA.
+# --- Blocks + time remaining + calendar ETA ---
 BLOCKS_REMAINING=0
 SECS_REMAINING=0
 MINUTES=0
@@ -826,7 +920,7 @@ HOURS=0
 DAYS=0
 ETA_UTC=""
 
-if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" != "N/A" ] && [ "$CURRENT_HEIGHT" -gt 0 ]; then
+if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" -gt 0 ] && [ "$CURRENT_HEIGHT" -gt 0 ]; then
     BLOCKS_REMAINING=$((ACTIVATION_HEIGHT - CURRENT_HEIGHT))
     [ "$BLOCKS_REMAINING" -lt 0 ] && BLOCKS_REMAINING=0
 
@@ -838,26 +932,6 @@ if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" != "N/A" ] && [ "$CURRE
     NOW_EPOCH=$(date +%s)
     ETA_EPOCH=$((NOW_EPOCH + SECS_REMAINING))
     ETA_UTC=$(date -u -d "@${ETA_EPOCH}" '+%Y-%m-%d ~%H:%M UTC' 2>/dev/null || echo "")
-fi
-
-# --- Last bundle signers ---
-if [ $SIGNERS_OK -eq 0 ] && echo "$SIGNERS_JSON" | jq -e . >/dev/null 2>&1; then
-    BUNDLE_COUNT=$(echo "$SIGNERS_JSON" | jq -r '.bundle_count // 0')
-    if [ "$BUNDLE_COUNT" -gt 0 ]; then
-        # Most recent bundle (newest first)
-        LAST_BUNDLE_HEIGHT=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].height // "N/A"')
-        LAST_BUNDLE_SIGNERS=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].signer_count // 0')
-        LAST_BUNDLE_EPOCH=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].epoch // "N/A"')
-    else
-        LAST_BUNDLE_HEIGHT="none in window"
-        LAST_BUNDLE_SIGNERS=0
-        LAST_BUNDLE_EPOCH="N/A"
-    fi
-else
-    BUNDLE_COUNT=0
-    LAST_BUNDLE_HEIGHT="unavailable"
-    LAST_BUNDLE_SIGNERS=0
-    LAST_BUNDLE_EPOCH="N/A"
 fi
 
 # ============================================================================
@@ -974,6 +1048,88 @@ fi
 if [ "$ENDGAME_ONLY" = true ]; then
     [ "$DRY_RUN" = true ] && echo "[endgame-only] Not applicable this run (chain=$CHAIN_NAME, dd_active=$DD_IS_ACTIVE). Silent exit."
     exit 0
+fi
+
+# ============================================================================
+# v1.6.2: PHASE 2 RPC COLLECTION (DD-required, FULL mode only)
+# ============================================================================
+# These RPCs error with "DigiDollar is not yet active" on pre-activation
+# mainnet daemons. Only reached when the mode-branching above selected
+# FULL flow, which requires DD_IS_ACTIVE=true. Safe to call here.
+# ============================================================================
+
+echo "[$(date -u)] Collecting oracle network data (Phase 2: DD-required RPCs)..."
+
+# --- Phase 2a. getoracles true — per-oracle heartbeat status ---
+ORACLES_JSON=$($CLI getoracles true 2>&1)
+if [ $? -ne 0 ] || ! echo "$ORACLES_JSON" | jq -e . >/dev/null 2>&1; then
+    echo "ERROR: getoracles true failed unexpectedly: $ORACLES_JSON"
+    if [ "$DRY_RUN" != true ]; then
+        if [ -n "$NETWORK_DISPLAY" ]; then
+            NET_ERR="${NETWORK_DISPLAY}, "
+        else
+            NET_ERR=""
+        fi
+        post_to_gitter "⚠️ Oracle Network Monitor, ${NET_ERR}$(date -u +'%Y-%m-%d %H:%M UTC')
+
+Status check failed: could not reach DigiByte oracle data. Will retry next cycle."
+    fi
+    exit 1
+fi
+
+# --- Phase 2b. getoracleprice — consensus price + status ---
+PRICE_JSON=$($CLI getoracleprice 2>&1)
+PRICE_OK=$?
+
+# --- Phase 2c. getoraclesigners 50 — recent bundle signers ---
+SIGNERS_JSON=$($CLI getoraclesigners 50 2>&1)
+SIGNERS_OK=$?
+
+# ============================================================================
+# PARSE PHASE 2 DATA
+# ============================================================================
+
+# --- Oracle heartbeat counts ---
+TOTAL_ORACLES=$(echo "$ORACLES_JSON" | jq 'length')
+FRESH_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "fresh")] | length')
+STALE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status == "stale")] | length')
+
+# Inactive = everything that isn't fresh or stale (none, unknown, null, missing)
+INACTIVE_COUNT=$(echo "$ORACLES_JSON" | jq '[.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale")] | length')
+
+# Total offline = not fresh (stale + inactive)
+OFFLINE_COUNT=$((TOTAL_ORACLES - FRESH_COUNT))
+
+# --- Consensus price ---
+if [ $PRICE_OK -eq 0 ] && echo "$PRICE_JSON" | jq -e . >/dev/null 2>&1; then
+    PRICE_USD=$(echo "$PRICE_JSON" | jq -r '.price_usd // "N/A"')
+    PRICE_STATUS=$(echo "$PRICE_JSON" | jq -r '.status // "unknown"')
+    PRICE_STALE=$(echo "$PRICE_JSON" | jq -r '.is_stale // false')
+    ORACLE_COUNT=$(echo "$PRICE_JSON" | jq -r '.oracle_count // 0')
+else
+    PRICE_USD="N/A"
+    PRICE_STATUS="unavailable"
+    PRICE_STALE="true"
+    ORACLE_COUNT=0
+fi
+
+# --- Last bundle signers ---
+if [ $SIGNERS_OK -eq 0 ] && echo "$SIGNERS_JSON" | jq -e . >/dev/null 2>&1; then
+    BUNDLE_COUNT=$(echo "$SIGNERS_JSON" | jq -r '.bundle_count // 0')
+    if [ "$BUNDLE_COUNT" -gt 0 ]; then
+        LAST_BUNDLE_HEIGHT=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].height // "N/A"')
+        LAST_BUNDLE_SIGNERS=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].signer_count // 0')
+        LAST_BUNDLE_EPOCH=$(echo "$SIGNERS_JSON" | jq -r '.bundles[0].epoch // "N/A"')
+    else
+        LAST_BUNDLE_HEIGHT="none in window"
+        LAST_BUNDLE_SIGNERS=0
+        LAST_BUNDLE_EPOCH="N/A"
+    fi
+else
+    BUNDLE_COUNT=0
+    LAST_BUNDLE_HEIGHT="unavailable"
+    LAST_BUNDLE_SIGNERS=0
+    LAST_BUNDLE_EPOCH="N/A"
 fi
 
 # ============================================================================
