@@ -10,17 +10,17 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.5 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.5 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption, stale/inactive oracle list with @ mention notifications. `--config /path` flag for dual-instance monitoring (testnet + mainnet). Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.6 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line now carries its own ✅/ℹ️/⚠️ status icon for visual consistency with the other health lines (v2.5.6). External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.6.2 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption with compliance icons per `ACCEPTED_VERSIONS` whitelist (RC46 hash-variant collapse, three-tier sort: compliant on top, non-compliant with version in the middle, "no version reported" at the end), stale/inactive oracle list with @ mention notifications, and an upgrade nudge section for fresh operators running non-compliant versions. `--config /path` flag for dual-instance monitoring (testnet + mainnet). **DigiDollar BIP9 pre-activation guard (v1.6.2)** splits RPC calls into two phases so pre-activation mainnet daemons don't error on DD-required RPCs: Phase 1 (always-safe) resolves BIP9 status, activation-height math from `getdeploymentinfo.bip9.since + statistics.period`, quorum config, MuSig2 session; Phase 2 (DD-required) only fires in FULL mode. Standby/birth/endgame modes skip Phase 2 entirely. `--endgame-only` flag for hourly countdown ticker in the last 24 hours before activation (silent-exit outside the band, so hourly cron only posts when it matters). One-shot birth announcement fires automatically on the first cron pass after DD flips to ACTIVE, with `m.mentions` notifications to Jared (slot 0) and DigiSwarm (slot 15), state-file dedup prevents double-fire. Bot account: `@digidollar-oracle-bot:matrix.org`. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. Both scripts work without it using built-in defaults. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v1.6.2 additions (all optional): `ACCEPTED_VERSIONS` whitelist for the Software section compliance icons, `VERSION_NUDGE_ENABLED` toggle for the upgrade nudge feature, `ACTIVATION_HEIGHT_OVERRIDE` manual escape hatch for the pre-activation countdown math. Both scripts work without any of it using built-in defaults. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.4.1 — SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection. Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide — Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.5-win.1 — full logic parity with Linux v2.5.5. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.6-win.1 — full logic parity with Linux v2.5.6. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
 | [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.5-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.6-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
 | [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. |
 | [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports — installation, config, Task Scheduler/cron, watch mode, troubleshooting. |
 
@@ -91,7 +91,7 @@ Discord embeds — color-coded:
 - 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
 - 🔵 **Blue** — 12-hour status summary, plus ℹ️ INFO lines for pre-activation standby state
 - **Card titles** carry the `NETWORK_LABEL` from your config on *every* alert — health summaries (`Testnet26 Health Summary`), individual checks (`Mainnet — 🔴 Node Down`), and the `--test` alert — so dual-instance operators can tell which daemon fired an alert at a glance without opening the card (v2.5.3)
-- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.5 — digibyte-maxi (ID 17)`)
+- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.6 — digibyte-maxi (ID 17)`)
 
 State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers. Quorum tracking uses a single `quorum_state` file that stores the current band and timestamp, with cooldown and hysteresis to prevent alert flapping during network volatility.
 
@@ -281,49 +281,88 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 - **MuSig2 session** — current epoch, signing state, nonce and signature counts
 - **BIP9 activation** — deployment status and signaling bit
 - **Last bundle** — most recent on-chain price bundle block height and signer count
-- **Software versions** — dominant version among active operators (✅ current vs 🔄 outdated during upgrades)
+- **Software versions** (v1.6+) — all versions with compliance icons per `ACCEPTED_VERSIONS` whitelist. Compliant versions (✅) sorted by count first, non-compliant versions (⚠️) sorted by count next, "No version reported" bucket pinned at the end. RC46 long/short hash-variant clutter collapses to one canonical line per base version.
+- **Upgrade nudge** (v1.6+, 📢) — fresh operators running non-compliant versions get a light @ mention. Same 6-ping cap as the stale/inactive nudges (no spam). Skipped for stale/inactive operators since they're already pinged in those sections.
 - **Stale oracles** (⚠️) — were running, went down (liveness concern). Operators are @ mentioned in Gitter for up to 6 cycles (3 days), then suppressed but still listed.
-- **Inactive oracles** (❌) — have key or wallet issues on this testnet. Same @ mention behavior as stale.
+- **Inactive oracles** (❌) — have key or wallet issues on the current network. Same @ mention behavior as stale.
 
-### Example output
+### Modes (v1.6+)
+
+The bot has four operating modes decided at runtime based on chain, DD BIP9 activation state, and the `--endgame-only` flag:
+
+- **FULL** — regular network status post. Always used on testnet (DD active since block 600). Used on mainnet post-activation. This is what the "What it reports" section above describes.
+- **STANDBY** — mainnet + DD not yet active. Posts a compact countdown with current block, activation block, blocks remaining, day/hour granularity, and calendar UTC ETA. Skips the full status data (which isn't available pre-activation anyway).
+- **BIRTH** — mainnet + DD just flipped to ACTIVE + no prior birth-state file. Fires a one-shot announcement with `m.mentions` notifications to Jared (slot 0) and DigiSwarm (slot 15). State-file dedup prevents double-fire from the endgame vs 12hr cron collision window.
+- **ENDGAME** — silent-exit variant of STANDBY that fires from the hourly `--endgame-only` cron. Only posts when inside the 24h band before activation. Silent exit outside that band so hourly cron doesn't spam.
+
+### Example output (FULL mode, v1.6.2 formatting)
 
 ```
-🟢 Oracle Network Status — Testnet26 — 2026-06-21 23:25 UTC
+🟢 Oracle Network Status, Testnet26, 2026-07-13 00:29 UTC
 
-Fresh Heartbeats: 25/35 (quorum healthy — threshold: 7)
-Consensus price: $0.002718 (status: active)
-MuSig2: epoch 1160, complete, 7/7 nonces, 7/7 sigs
+Fresh Heartbeats: 16/35 (quorum healthy, threshold: 7)
+Consensus price: $0.002529 (status: active)
+MuSig2: epoch 3061, complete, 7/7 nonces, 7/7 sigs
 BIP9: active (bit 23)
-Last bundle: block 46399, signed by 7 oracles
+Last bundle: block 122446, signed by 7 oracles
 
-Software:
-  ✅ v9.26.0rc46-g873d6d068... : 21 operators
-  ✅ v9.26.0rc46-873d6d068b9f : 2 operators
+Software (accepted: v9.26.2 / v9.26.3 / v9.26.4):
+  ✅ v9.26.4: 7 operators
+  ✅ v9.26.3: 5 operators
+  ✅ v9.26.2: 1 operator
+  ⚠️ v9.26.0rc46 (pre-release): 12 operators
+  ⚠️ v9.26.1-pre2 (pre-release): 1 operator
+  ⚠️ No version reported: 9 operators
 
-⚠️ Stale (8):
-  — ID 5 Ycagel
-  — ID 11 hallvardo @hallvardo:gitter.im
-  — ID 13 DigiByteForce @digibyteforce:gitter.im
-  — ID 22 LivingTheLife
-  — ID 23 ChozenOne43 @chozenone43:gitter.im
-  — ID 27 DennisPitallano
-  — ID 30 DigibyteDaily @dailydgb:gitter.im
-  — ID 32 3DogsKanab @3dogskanab:gitter.im
+📢 Please upgrade to v9.26.2 or newer:
+  — ID 9 Ogilvie @ogilvie:gitter.im
+  — ID 18 Anthony @usascholar:gitter.im
+  — ID 26 HashedMax @hashedmax:gitter.im
+  — ID 29 medgborsole3452 @eps8sap:gitter.im
 
-❌ Inactive (2):
-  — ID 31 Peer2Peer
-  — ID 34 Manu_DGB_oracle
+⚠️ Stale (10):
+  — ID 4 Shenger @shenger:gitter.im
+  — ID 5 Ycagel @ycagel-60c7a14b6da03739847edeeb:gitter.im
+  — ID 10 ChopperBrian @chopperbrian-610ed4a86da037398482ada7:gitter.im
+  (...)
+
+❌ Inactive (9):
+  — ID 7 LookInto @lookintomyeyes:gitter.im
+  (...)
+```
+
+### Example output (STANDBY mode, pre-activation mainnet)
+
+```
+🟢 Oracle Network Status, Mainnet, 2026-07-13 00:10 UTC
+
+📅 DigiDollar Mainnet Activation: PENDING
+   Current stage: LOCKED_IN (bit 23)
+   Current block: 23,843,024
+   Activation block: 23,869,440
+   Blocks remaining: 26,416
+   Time to activation: ~4 days 14 hours
+   Estimated activation: 2026-07-17 ~14:12 UTC
+
+Roster: 35 slots configured, 7-of-35 quorum threshold
+Signing status: standby, mainnet oracles begin publishing at BIP9 ACTIVE
+
+This bot will resume full network status posts (fresh heartbeats,
+consensus price, MuSig2, upgrade nudges) automatically at activation.
 ```
 
 ### Data sources
 
 | RPC | What it provides |
 |-----|-----------------|
-| `getblockchaininfo` | Chain identification — auto-detects "test" → Testnet, "main" → Mainnet for header label (v1.4) |
-| `getoracles true` | Per-oracle heartbeat status — active, stale, and offline lists |
-| `getoracleprice` | Consensus price, feed status, oracle count |
-| `getdigidollardeploymentinfo` | BIP9 activation, quorum config, MuSig2 session state |
-| `getoraclesigners 50` | Recent bundle signer participation (50-block window covers at least one full 40-block round) |
+| `getblockchaininfo` | Chain identification — auto-detects "test" → Testnet, "main" → Mainnet for header label (v1.4). Current block height for countdown math (v1.6). |
+| `getdeploymentinfo` | BIP9 standard deployment info — `bip9.since + statistics.period` gives activation-height math that works pre-activation on mainnet (v1.6.2). |
+| `getdigidollardeploymentinfo` | DGB-specific extras — quorum config, MuSig2 session state, BIP9 status. Returns partial data pre-activation but the needed fields are populated. |
+| `getoracles true` | Per-oracle heartbeat status — fresh, stale, and offline lists (FULL mode only, pre-activation returns error). |
+| `getoracleprice` | Consensus price, feed status, oracle count (FULL mode only). |
+| `getoraclesigners 50` | Recent bundle signer participation, 50-block window covers at least one full 40-block round (FULL mode only). |
+
+v1.6.2 splits these into two phases: Phase 1 (`getblockchaininfo`, `getdeploymentinfo`, `getdigidollardeploymentinfo`) always runs. Phase 2 (`getoracles`, `getoracleprice`, `getoraclesigners`) only runs in FULL mode. This prevents pre-activation mainnet daemons from erroring on RPCs that require DD to be active.
 
 ### Requirements
 
@@ -373,20 +412,23 @@ nano ~/.oracle-monitor/oracle-roster.conf
 | `--dry-run` | Collect data, print to terminal, skip Gitter post |
 | `--test` | Send a test message to Gitter to verify Matrix API |
 | `--test-mention` | Send a test @ mention to verify Gitter notifications work |
-| `--config /path` | Use alternate config file — enables dual-instance monitoring (v1.4) |
+| `--config /path` | Use alternate config file, enables dual-instance monitoring (v1.4) |
+| `--endgame-only` | Endgame countdown mode (v1.6.2, mainnet). Posts only if LOCKED_IN + inside the 24h band, or ACTIVE + birth-announcement not yet fired. Silent-exit otherwise. Designed for hourly cron alongside the regular 12hr cron. |
 
 ### Dual-instance monitoring (testnet + mainnet)
 
-When mainnet launches, you can run two independent instances from the same script using `--config`:
+When mainnet launches, run two independent instances from the same script using `--config`:
 
 ```cron
-# Testnet (default config)
+# Testnet 12hr status pulse (default config)
 5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
-# Mainnet (custom config)
+# Mainnet 12hr status pulse (custom config)
 10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+# Mainnet hourly endgame countdown ticker (v1.6.2, silent-exit outside 24h band)
+15 * * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 ```
 
-Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). Setup:
+Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). The endgame ticker cost is negligible outside the 24h band (silent-exit after Phase 1 RPCs). Setup:
 
 ```bash
 mkdir -p ~/.oracle-monitor-mainnet
@@ -397,9 +439,24 @@ ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-rost
 
 `--config` combines with action flags in any order: `--config /path --dry-run` or `--dry-run --config /path`.
 
-### Important: single-operator bot
+### Note on running your own instance
 
-This script is designed for a **single designated community operator** to post to the shared DigiDollar Gitter channel. Running a second instance against the same channel will create duplicate posts. If you want to monitor your own oracle, use `oracle-monitor.sh` with a Discord webhook to your private channel.
+This script is the reference implementation for the Gitter network status bot posting to `#digidollar:gitter.im`. First deployed 2026-06-16 (v1.2, GitHub issue #18), maintained and iterated continuously since. Currently at v1.6.2 with dual-instance testnet + mainnet monitoring running under my authorship.
+
+**ONE bot per network is sufficient to serve the room.** Running a second instance against the same Gitter channel produces duplicate posts, splits @ mention tracking, and confuses operators. My testnet + mainnet instances (using `--config` for dual-instance) currently cover the network and coordinate with Jared and DigiSwarm on cadence and content.
+
+If you want to monitor your own oracle privately, use `oracle-monitor.sh` with a Discord webhook to your own channel. That's the intended pair: `oracle-monitor.sh` for private per-operator alerts, `oracle-network-status.sh` for the shared community status feed.
+
+If you have ideas to improve the reference implementation (compliance rules, new sections, additional RPC data, better formatting), open an issue or PR on this repo. Contributions have shaped every version since v1.2, and I welcome more. Bastian's "any v9.26 will do" rule became the default `ACCEPTED_VERSIONS` list in v1.6. Aussie Epic's suggestions shaped the disk alert phrasing in the monitor. That collaboration is the point.
+
+If you want to run a modified version for personal testing or as a backup:
+
+- Change the author signature line (search for `digibyte-maxi` throughout the file) to your own identity, so nobody thinks your instance is mine
+- Change the Matrix bot account so posts are visibly from a different sender in Gitter
+- Coordinate in `#digidollar:gitter.im` before posting to the shared room, so we don't produce duplicate output
+- Reach out on GitHub issues if you hit ecosystem-specific bugs or field-name changes
+
+The MIT license grants full rights to fork, modify, and redistribute. This coordination note is about ecosystem stewardship, not permission.
 
 ---
 
@@ -411,10 +468,10 @@ This script is designed for a **single designated community operator** to post t
 | DigiByte Core | v9.26.4 (also compatible with v9.26.2, v9.26.3, and RC44/RC45/RC46) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.5.5 |
-| oracle-monitor.ps1 | v2.5.5-win.1 |
-| oracle-monitor-macos.sh | v2.5.5-macos.1 |
-| oracle-network-status.sh | v1.5 |
+| oracle-monitor.sh | v2.5.6 |
+| oracle-monitor.ps1 | v2.5.6-win.1 |
+| oracle-monitor-macos.sh | v2.5.6-macos.1 |
+| oracle-network-status.sh | v1.6.2 |
 
 If you're running a different release and something breaks, please open an issue.
 
