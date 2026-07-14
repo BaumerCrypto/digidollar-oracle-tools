@@ -165,7 +165,39 @@ MATRIX_ROOM_ID=""
 # Roster mapping: ~/.oracle-monitor/oracle-roster.conf (see oracle-roster.template)
 # After MENTION_MAX pings per outage, the @ is suppressed but the oracle
 # stays listed. Count resets when the oracle comes back fresh.
+# v1.6.3: upgrade nudges (fresh operators on non-compliant versions) use the
+# same cap but track separately (u<id> entries in the state file), cleared
+# when the operator upgrades to a compliant version. Setting MENTION_MAX=0
+# turns ALL @ pings off while keeping operators listed by name, a useful
+# temporary lever during launch windows.
 MENTION_MAX=6
+
+# ---- Software Version Compliance (oracle-network-status.sh v1.6+) ----
+# Space-separated list of version strings considered compliant in the
+# Software section. Matching is against the canonical form (release git-hash
+# suffixes stripped), so "v9.26.4" also covers "v9.26.4-gABC123".
+# Compliant versions render with a green check, everything else with a
+# yellow triangle. Default rule (Bastian, Gitter 2026-07-11): any v9.26
+# release will do. Narrow per-network if guidance tightens post-activation.
+# ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4"
+
+# Upgrade nudge toggle. If false, non-compliant operators are still flagged
+# in the Software section but no @ pings fire. Some operators may want this
+# off on mainnet during launch stabilization.
+# VERSION_NUDGE_ENABLED=true
+
+# ---- DigiDollar Activation Countdown (oracle-network-status.sh v1.6.2+) ----
+# Manual override for the activation height, used only if every automatic
+# resolution path fails (getdeploymentinfo since/period math, ACTIVE-state
+# since, DGB-custom since). Leave empty for automatic resolution.
+# ACTIVATION_HEIGHT_OVERRIDE=""
+
+# v1.6.3: inside the final 24h before activation, the 12hr standby pass
+# silent-exits if the hourly --endgame-only ticker posted within this many
+# seconds (prevents duplicate countdowns 5 minutes apart). Default 3540
+# (59 min): covers the 55-minute cron gap plus jitter, while staying under
+# one hour so a broken ticker lets the 12hr standby post as backup.
+# STANDBY_DEDUP_WINDOW_SECS=3540
 
 # ---- Dual-Instance Monitoring (oracle-monitor.sh v2.3+ / oracle-network-status.sh v1.4+) ----
 # Both scripts support --config /path to run against a separate config file.
@@ -201,7 +233,10 @@ MENTION_MAX=6
 #   # Cron (offset by 2 minutes to avoid RPC collision with testnet):
 #   2-59/5 * * * *  /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
 #   0 1,13 * * *    /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
-#   5 */12 * * *    /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   # (offset from the testnet bot's :05 so the two Gitter posts don't collide)
+#   10 */12 * * *   /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   # Hourly endgame countdown ticker (v1.6.2+, silent outside the final 24h):
+#   15 * * * *      /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 #
 # Override these if your roster or state files live somewhere else:
 # ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
