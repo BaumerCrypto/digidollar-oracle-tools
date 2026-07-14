@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.6.2
+# Version: 1.6.3
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -54,6 +54,9 @@
 #
 # DATA SOURCES (RPCs):
 #   getblockchaininfo            — chain identification (testnet/mainnet)
+#   getdeploymentinfo            — BIP9 standard deployment info (activation
+#                                  height math; since+period in LOCKED_IN,
+#                                  since alone in ACTIVE)
 #   getoracles true              — per-oracle heartbeat status (active/offline list)
 #   getoracleprice               — consensus price, status, oracle count
 #   getdigidollardeploymentinfo  — BIP9 status, quorum config, MuSig2 session
@@ -64,9 +67,47 @@
 #   ~/.oracle-monitor/oracle-roster.conf — oracle ID to Gitter handle mapping (VPS only)
 #   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
 #   ~/.oracle-monitor/activation_state   — v1.6, one-shot dedup for DD mainnet birth
-#   ~/.oracle-monitor/endgame_last_post  — v1.6, hourly endgame cadence dedup
+#   ~/.oracle-monitor/endgame_last_post  — v1.6.3, in-band dedup marker (written
+#                                          on successful standby/endgame posts,
+#                                          read by the 12hr standby pass)
 #
 # CHANGELOG:
+#   v1.6.3 — Three audit fixes (July 2026, pre-mainnet-activation).
+#          (1) CRITICAL, birth announcement block number: in BIP9 ACTIVE
+#          state getdeploymentinfo drops the statistics object entirely
+#          and bip9.since IS the activation height (verified live on
+#          testnet26: status=active, since=600, statistics=null). The
+#          v1.6.2 resolution chain required since+period, failed in
+#          ACTIVE, and fell through to computed_from_window, which
+#          reports the NEXT retarget boundary (true activation + 40,320)
+#          in the one-shot birth post. Now: ACTIVE uses since directly,
+#          LOCKED_IN keeps since+period. New fallback (Source 1b) reads
+#          top-level .since from getdigidollardeploymentinfo when the
+#          standard RPC is unavailable while active.
+#          (2) Upgrade-nudge ping cap: the fresh-oracle reset loop
+#          cleared the shared mention counter every run BEFORE the nudge
+#          section read it, so the MENTION_MAX cap never engaged (fresh
+#          non-compliant operators would be pinged every 12 hours
+#          forever, not 6 times). Upgrade nudges now track in a u<id>
+#          namespace inside the same state file, cleared only when the
+#          operator is fresh AND compliant (an upgrade earns a fresh
+#          budget for any future regression). Stale/inactive ping
+#          budgets are unchanged and unaffected.
+#          (3) In-band duplicate suppression: inside the final 24h band
+#          the 12hr standby cron posted a countdown 5 minutes after the
+#          hourly endgame ticker (near-duplicates at 00:10/00:15 and
+#          12:10/12:15). The standby pass now silent-exits when the
+#          endgame_last_post marker is younger than
+#          STANDBY_DEDUP_WINDOW_SECS (default 3540, 59 minutes). The
+#          marker was previously written but never read; it is now
+#          written only on successful posts, by both paths. If the
+#          hourly ticker breaks (marker older than the window), the
+#          12hr standby posts as backup.
+#          Also: dry-run prints the resolved activation height and its
+#          source on every mode, stale/inactive operator names render
+#          "unknown" instead of "null" when unreported, and
+#          getdeploymentinfo joins the header RPC list (missed in the
+#          v1.6.2 header).
 #   v1.6.2 — Mainnet pre-activation RPC ordering fix (July 2026).
 #          Discovered during v1.6.1 mainnet dry-run: getoracles/
 #          getoracleprice/getoraclesigners error out with "DigiDollar is
@@ -282,6 +323,15 @@ VERSION_NUDGE_ENABLED=true
 # Real network runs slightly ahead of target under high hashrate. Estimate
 # is honest-approximate, not precise.
 BLOCK_TIME_SECS=15
+
+# v1.6.3: in-band dedup window. Inside the final 24h before activation the
+# 12hr standby pass silent-exits if the hourly endgame ticker posted within
+# this many seconds. Default 3540 (59 min): the ticker fires at :15 and the
+# standby at :10, a 55-minute (3300s) gap, so 3540 comfortably covers cron
+# jitter and script runtime while staying under 3600, which means a broken
+# or stalled hourly ticker (marker older than one hour) lets the 12hr
+# standby post as backup.
+STANDBY_DEDUP_WINDOW_SECS=3540
 
 # v1.6.2: manual override for activation height. Set only if all automatic
 # resolution paths fail (getdeploymentinfo -> compute-from-window). Leave
@@ -853,14 +903,9 @@ ACTIVATION_HEIGHT_SOURCE="unresolved"
 if [ $DEPLOY_STD_OK -eq 0 ] && echo "$DEPLOY_STD_JSON" | jq -e '.deployments.digidollar.bip9' >/dev/null 2>&1; then
     BIP9_SINCE=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.since // empty')
     BIP9_PERIOD=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.statistics.period // empty')
-    if [ -n "$BIP9_SINCE" ] && [ -n "$BIP9_PERIOD" ] \
-       && [ "$BIP9_SINCE" != "null" ] && [ "$BIP9_PERIOD" != "null" ]; then
-        # For LOCKED_IN: activation = current window end + 1 = since + period.
-        ACTIVATION_HEIGHT=$((BIP9_SINCE + BIP9_PERIOD))
-        ACTIVATION_HEIGHT_SOURCE="getdeploymentinfo"
-    fi
 
     # If BIP9 status here is more authoritative than DGB extras, prefer it.
+    # (v1.6.3: extracted BEFORE the height math, which now branches on it.)
     STD_BIP9_STATUS=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.status // empty')
     if [ -n "$STD_BIP9_STATUS" ] && [ "$STD_BIP9_STATUS" != "null" ]; then
         BIP9_STATUS="$STD_BIP9_STATUS"
@@ -872,6 +917,37 @@ if [ $DEPLOY_STD_OK -eq 0 ] && echo "$DEPLOY_STD_JSON" | jq -e '.deployments.dig
 
     # Extract min_activation_height for floor sanity check (Bitcoin Core standard).
     BIP9_MIN_ACTIVATION=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.bip9.min_activation_height // empty')
+
+    # v1.6.3 CRITICAL FIX: the height math must branch on deployment state.
+    # In ACTIVE state, Core drops the statistics object entirely and
+    # bip9.since IS the activation height (verified live on testnet26:
+    # status=active, since=600, statistics=null). The old since+period
+    # requirement failed in ACTIVE and fell through to computed_from_window,
+    # which reports the NEXT retarget boundary (activation + 40,320). That
+    # wrong number would have headlined the one-shot birth announcement.
+    if [ "$STD_BIP9_STATUS" = "active" ] \
+       && [ -n "$BIP9_SINCE" ] && [ "$BIP9_SINCE" != "null" ]; then
+        # ACTIVE: since is the height at which ACTIVE began = activation height.
+        ACTIVATION_HEIGHT="$BIP9_SINCE"
+        ACTIVATION_HEIGHT_SOURCE="getdeploymentinfo_since_active"
+    elif [ -n "$BIP9_SINCE" ] && [ -n "$BIP9_PERIOD" ] \
+       && [ "$BIP9_SINCE" != "null" ] && [ "$BIP9_PERIOD" != "null" ]; then
+        # LOCKED_IN: activation = current window end + 1 = since + period.
+        ACTIVATION_HEIGHT=$((BIP9_SINCE + BIP9_PERIOD))
+        ACTIVATION_HEIGHT_SOURCE="getdeploymentinfo"
+    fi
+fi
+
+# Source 1b (v1.6.3): DD reports active but the standard RPC gave us no
+# height (RPC failed or fields missing). getdigidollardeploymentinfo carries
+# a top-level .since that mirrors BIP9 and populates post-activation. Belt
+# for the birth announcement: never announce a window-math guess while active.
+if [ -z "$ACTIVATION_HEIGHT" ] && [ "$BIP9_STATUS" = "active" ]; then
+    DGB_SINCE=$(echo "$DEPLOY_JSON" | jq -r '.since // empty' 2>/dev/null)
+    if [ -n "$DGB_SINCE" ] && [ "$DGB_SINCE" != "null" ] && [[ "$DGB_SINCE" =~ ^[0-9]+$ ]]; then
+        ACTIVATION_HEIGHT="$DGB_SINCE"
+        ACTIVATION_HEIGHT_SOURCE="digidollardeploymentinfo_since_active"
+    fi
 fi
 
 # Source 2: config override
@@ -932,6 +1008,13 @@ if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" -gt 0 ] && [ "$CURRENT_
     NOW_EPOCH=$(date +%s)
     ETA_EPOCH=$((NOW_EPOCH + SECS_REMAINING))
     ETA_UTC=$(date -u -d "@${ETA_EPOCH}" '+%Y-%m-%d ~%H:%M UTC' 2>/dev/null || echo "")
+fi
+
+# v1.6.3: surface the resolution result in dry-run on EVERY mode. This is
+# the debug line that would have caught the ACTIVE-state math bug in the
+# Session 31 testnet dry-run (FULL mode never displays activation height).
+if [ "$DRY_RUN" = true ]; then
+    echo "[DRY RUN] Activation height: ${ACTIVATION_HEIGHT:-unresolved} (source: ${ACTIVATION_HEIGHT_SOURCE}), blocks remaining: ${BLOCKS_REMAINING}"
 fi
 
 # ============================================================================
@@ -1028,14 +1111,34 @@ if [ "$DD_IS_ACTIVE" != true ] && [ "$CHAIN_NAME" = "main" ]; then
             [ "$DRY_RUN" = true ] && echo "[endgame-only] Outside 24h band (SECS_REMAINING=$SECS_REMAINING). Silent exit."
             exit 0
         fi
+    else
+        # v1.6.3: in-band duplicate suppression for the 12hr standby pass.
+        # Inside the final 24h the hourly endgame ticker (:15) already posts
+        # a countdown; the 12hr standby (:10) landing 55 minutes later was a
+        # near-duplicate. Skip when the marker is younger than the window.
+        # A marker older than the window (ticker broken/stalled) lets the
+        # 12hr standby post as backup. Applies in dry-run too so dry-run
+        # output matches what a real pass would do.
+        if [ "$SECS_REMAINING" -gt 0 ] && [ "$SECS_REMAINING" -lt 86400 ] && [ -f "$ENDGAME_LAST_POST_FILE" ]; then
+            LAST_POST_TS=$(cat "$ENDGAME_LAST_POST_FILE" 2>/dev/null)
+            if [[ "$LAST_POST_TS" =~ ^[0-9]+$ ]]; then
+                MARKER_AGE=$(( $(date +%s) - LAST_POST_TS ))
+                if [ "$MARKER_AGE" -ge 0 ] && [ "$MARKER_AGE" -lt "$STANDBY_DEDUP_WINDOW_SECS" ]; then
+                    echo "[$(date -u)] Standby suppressed: endgame ticker posted ${MARKER_AGE}s ago (< ${STANDBY_DEDUP_WINDOW_SECS}s window, marker: $ENDGAME_LAST_POST_FILE). Silent exit."
+                    exit 0
+                fi
+            fi
+        fi
     fi
 
     STANDBY_MESSAGE=$(build_standby_message)
-    post_to_gitter "$STANDBY_MESSAGE" "" ""
-
-    # Soft dedup marker for hourly cron pattern.
-    if [ "$DRY_RUN" != true ]; then
-        date +%s > "$ENDGAME_LAST_POST_FILE" 2>/dev/null || true
+    # v1.6.3: dedup marker written only when the post actually landed
+    # (was unconditional). Written by both the 12hr standby and the hourly
+    # endgame ticker, since both flow through this shared post path.
+    if post_to_gitter "$STANDBY_MESSAGE" "" ""; then
+        if [ "$DRY_RUN" != true ]; then
+            date +%s > "$ENDGAME_LAST_POST_FILE" 2>/dev/null || true
+        fi
     fi
     exit 0
 fi
@@ -1157,10 +1260,43 @@ fi
 # Any oracle that's currently fresh should have its ping count cleared
 # (so if they go stale again later, they get a new round of pings)
 # v1.5: skipped in --dry-run — dry-run must not touch mention state.
+# v1.6.3: this loop resets the plain <id> entries (stale/inactive budgets)
+# ONLY. Upgrade-nudge budgets live in the u<id> namespace below and are
+# untouched here: "^9|" does not match "u9|". The v1.6.2 bug was that the
+# upgrade nudge shared the plain <id> counter, which this loop wiped every
+# run (upgrade targets are fresh by definition), so its MENTION_MAX cap
+# never engaged and fresh non-compliant operators were pinged every cycle.
 if [ -f "$MENTION_STATE_FILE" ] && [ "$DRY_RUN" != true ]; then
     while read -r fresh_id; do
         reset_mention_count "$fresh_id"
     done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "fresh") | .oracle_id')
+fi
+
+# v1.6.3: clear u<id> upgrade-nudge counters only for operators who are
+# fresh AND running a compliant version. Upgrading earns a fresh budget
+# for any future regression. Fresh non-compliant operators keep counting
+# toward MENTION_MAX; non-fresh operators keep their u-counter as-is
+# (they're handled by the stale/inactive flow until they return).
+if [ -f "$MENTION_STATE_FILE" ] && [ "$DRY_RUN" != true ]; then
+    while read -r ok_id; do
+        reset_mention_count "u${ok_id}"
+    done < <(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+      def canonical:
+        if . == null or . == "" then ""
+        else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
+        end;
+      def is_compliant($ok):
+        . as $sv |
+        if $sv == null or $sv == "" then false
+        else
+          ($ok | split(" ")) as $list |
+          ($sv | canonical) as $c |
+          any($list[]; . == $c)
+        end;
+      .[] |
+      select(.heartbeat_status == "fresh") |
+      select(.software_version | is_compliant($accepted)) |
+      .oracle_id')
 fi
 
 # ============================================================================
@@ -1320,16 +1456,19 @@ if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
             line="  — ID ${oid} ${oname}"
 
             # Roster handle + ping cap (mirrors stale-section pattern).
+            # v1.6.3: counts tracked as u<id> so the fresh-oracle reset loop
+            # (which clears plain <id> stale budgets) can't wipe them. Same
+            # state file, same MENTION_MAX cap, separate namespace.
             handle=$(get_gitter_handle "$oid")
             if [ -n "$handle" ]; then
-                count=$(get_mention_count "$oid")
+                count=$(get_mention_count "u${oid}")
                 if [ "$count" -lt "$MENTION_MAX" ]; then
                     if ! is_already_mentioned "$handle"; then
                         line="${line} ${handle}"
                         record_mention "$handle" "$oname"
                     fi
                     if [ "$DRY_RUN" != true ]; then
-                        increment_mention_count "$oid" "$count"
+                        increment_mention_count "u${oid}" "$count"
                     fi
                 fi
             fi
@@ -1384,7 +1523,7 @@ if [ "$STALE_COUNT" -gt 0 ]; then
             STALE_SECTION="${STALE_SECTION}
 ${line}"
         fi
-    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "stale") | "\(.oracle_id)|\(.name)"')
+    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status == "stale") | "\(.oracle_id)|\(.name // "unknown")"')
 
     MESSAGE="${MESSAGE}
 
@@ -1423,7 +1562,7 @@ if [ "$INACTIVE_COUNT" -gt 0 ]; then
             INACTIVE_SECTION="${INACTIVE_SECTION}
 ${line}"
         fi
-    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale") | "\(.oracle_id)|\(.name)"')
+    done < <(echo "$ORACLES_JSON" | jq -r '.[] | select(.heartbeat_status != "fresh" and .heartbeat_status != "stale") | "\(.oracle_id)|\(.name // "unknown")"')
 
     MESSAGE="${MESSAGE}
 
