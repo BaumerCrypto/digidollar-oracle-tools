@@ -107,7 +107,7 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 
 ![Quorum Alerts](Discord_alert-Quorum2.jpg)
 
-_Both images will be refreshed post-DigiDollar BIP9 mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29). The current images still represent the day-to-day healthy-oracle state most operators see; the update after activation will capture the stable long-term post-activation mainnet cards._
+_The Quorum1 image is a current v2.5.6 Testnet26 health summary — the day-to-day view most operators see. The Quorum2 image (quorum state transitions) is older and will be refreshed when an organic quorum event provides a fresh capture, likely post-mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29)._
 
 ### Requirements
 
@@ -223,6 +223,10 @@ Only 3GB free of 200GB (98% used).
 Clean up old logs or unused chain data in:
 /home/YOU/.digibyte/
 ```
+
+**Testnet26 dual-instance Low Disk alert — escalation and recovery pair with `NETWORK_LABEL` prefix and `DATADIR` path call-out:**
+
+![Discord Low Disk alert pair with datadir call-out](Discord_alert-LowDisk-Datadir.jpg)
 
 Same disk, same numbers — but each card tells you which daemon fired (`NETWORK_LABEL`, v2.5.3) and exactly which directory to prune (`DATADIR`, v2.5.5). Both v2.5.5 disk enhancements were suggested by Aussie Epic. Mainnet chain data lives at the datadir top level; testnet data lives in a subdirectory named for the current testnet reset (`testnet26`, `testnet27`, ...) — bump your testnet `DATADIR` when the testnet resets.
 
