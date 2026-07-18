@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.6.3
+# Version: 1.6.5
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -72,6 +72,28 @@
 #                                          read by the 12hr standby pass)
 #
 # CHANGELOG:
+#   v1.6.5 — Widened-window fallback for last-bundle display (July 2026).
+#          Fixes rare "Last bundle: block none in window, signed by 0 oracles"
+#          on the FULL card during a live, healthy signing network. Root cause:
+#          getoraclesigners 50 is a fixed 50-block lookback, so at collection
+#          time it can slice between bundles (typical bundle cadence ~40 blocks
+#          per MuSig2 epoch) and return an empty window even when signing is
+#          fine — a display artifact, not a signing failure. Fix: if the
+#          50-block query returns bundle_count=0, retry once with 500-block
+#          lookback before rendering "none in window." Diagnosed against live
+#          mainnet post-activation (bundles were healthy at cadence ~1 per 12
+#          blocks in 500 window). Silent-degrade preserved: still says "none
+#          in window" only when it truly is quiet.
+#   v1.6.4 — DD economy line on the FULL card (July 2026, post-activation).
+#          New Phase 2d: getdigidollarstats (node-level RPC, no
+#          digidollarstatsindex needed; UTXO-scan totals, fine at 12h).
+#          Card gains one line: DD minted, DGB locked, collateralization.
+#          Silent-degrade: any RPC/parse miss omits the line, never blocks
+#          the post. FIELD MAP marked VERIFY AT DEPLOY; dry-run prints raw
+#          JSON head + parsed values so the map can be finalized from one
+#          paste. Per-tier lock breakdown NOT included: no network-wide
+#          RPC exposes it (needs digidollarstatsindex or an indexer);
+#          tracked in GitHub issue. Idea credit: Bastian in Gitter.
 #   v1.6.3 — Three audit fixes (July 2026, pre-mainnet-activation).
 #          (1) CRITICAL, birth announcement block number: in BIP9 ACTIVE
 #          state getdeploymentinfo drops the statistics object entirely
@@ -1188,6 +1210,40 @@ PRICE_OK=$?
 SIGNERS_JSON=$($CLI getoraclesigners 50 2>&1)
 SIGNERS_OK=$?
 
+# v1.6.5: widened-window fallback. If the 50-block window happens to slice
+# between bundles (bundles land ~every 40 blocks per MuSig2 epoch, so this
+# is a real edge case, not paranoia), retry once with a 500-block lookback
+# before rendering "none in window." Preserves silent-degrade: if 500 is
+# also empty, the network really is quiet and the honest line stands.
+SIGNERS_WIDENED=false
+if [ $SIGNERS_OK -eq 0 ] && echo "$SIGNERS_JSON" | jq -e . >/dev/null 2>&1; then
+    _bcount_50=$(echo "$SIGNERS_JSON" | jq -r '.bundle_count // 0')
+    if [ "$_bcount_50" = "0" ]; then
+        SIGNERS_JSON_WIDE=$($CLI getoraclesigners 500 2>&1)
+        SIGNERS_OK_WIDE=$?
+        if [ $SIGNERS_OK_WIDE -eq 0 ] && echo "$SIGNERS_JSON_WIDE" | jq -e . >/dev/null 2>&1; then
+            _bcount_500=$(echo "$SIGNERS_JSON_WIDE" | jq -r '.bundle_count // 0')
+            if [ "$_bcount_500" != "0" ]; then
+                SIGNERS_JSON="$SIGNERS_JSON_WIDE"
+                SIGNERS_WIDENED=true
+            fi
+        fi
+    fi
+fi
+if [ "$DRY_RUN" = true ]; then
+    echo "[DRY RUN] signers window: widened=${SIGNERS_WIDENED} (v1.6.5 fallback: retry with 500-block lookback if 50-block returned bundle_count=0)"
+fi
+
+# --- Phase 2d. getdigidollarstats — DD economy totals (v1.6.4) ---
+# Node-level RPC (since v9.26.2), no digidollarstatsindex required: the
+# index only serves historical per-height queries; current totals come
+# from a UTXO-set scan inside the RPC. Fine at 12h cadence.
+# Silent-degrade by design: if the RPC is missing, errors, or the field
+# map below doesn't match, DD_ECON_OK stays false and the economy line
+# is simply omitted from the card. Never blocks the post.
+DDSTATS_JSON=$($CLI getdigidollarstats 2>&1)
+DDSTATS_OK=$?
+
 # ============================================================================
 # PARSE PHASE 2 DATA
 # ============================================================================
@@ -1233,6 +1289,67 @@ else
     LAST_BUNDLE_HEIGHT="unavailable"
     LAST_BUNDLE_SIGNERS=0
     LAST_BUNDLE_EPOCH="N/A"
+fi
+
+# --- DD economy totals (v1.6.4) ---
+# FIELD MAP, VERIFY AT DEPLOY: run `getdigidollarstats` on the live
+# daemon once and confirm these three jq paths against real output,
+# then delete the candidates that don't apply. The alternatives below
+# cover the likely namings from src/index/digidollarstatsindex
+# (total_dd_supply, total_collateral) and cents-vs-usd variants seen
+# in test output. Any miss leaves DD_ECON_OK=false and the line is
+# omitted, so an unverified deploy degrades to the current card.
+DD_ECON_OK=false
+DD_SUPPLY_DISPLAY=""
+DD_LOCKED_DISPLAY=""
+DD_COLLAT_DISPLAY=""
+if [ $DDSTATS_OK -eq 0 ] && echo "$DDSTATS_JSON" | jq -e . >/dev/null 2>&1; then
+    # Supply: prefer explicit USD field; else cents/100; else raw.
+    DD_SUPPLY_USD=$(echo "$DDSTATS_JSON" | jq -r '(.total_dd_supply_usd // .dd_supply_usd // empty)')
+    if [ -z "$DD_SUPPLY_USD" ]; then
+        DD_SUPPLY_CENTS=$(echo "$DDSTATS_JSON" | jq -r '(.total_dd_supply_cents // .dd_supply_cents // .total_dd_supply // empty)')
+        if [ -n "$DD_SUPPLY_CENTS" ]; then
+            DD_SUPPLY_USD=$(awk -v c="$DD_SUPPLY_CENTS" 'BEGIN{printf "%.2f", c/100}')
+        fi
+    fi
+    # Collateral: whole DGB preferred; satoshi variant divided down.
+    DD_LOCKED_DGB=$(echo "$DDSTATS_JSON" | jq -r '(.total_collateral_dgb // .total_collateral // empty)')
+    if [ -z "$DD_LOCKED_DGB" ]; then
+        DD_LOCKED_SATS=$(echo "$DDSTATS_JSON" | jq -r '(.total_collateral_sats // .total_collateral_satoshis // empty)')
+        if [ -n "$DD_LOCKED_SATS" ]; then
+            DD_LOCKED_DGB=$(awk -v s="$DD_LOCKED_SATS" 'BEGIN{printf "%.2f", s/100000000}')
+        fi
+    fi
+    # Health / collateralization percent.
+    DD_COLLAT_PCT=$(echo "$DDSTATS_JSON" | jq -r '(.health_percentage // .system_health_percent // .health_percent // .collateral_ratio_percent // .system_collateral_ratio // .system_health // empty)')
+
+    if [ -n "$DD_SUPPLY_USD" ] && [ -n "$DD_LOCKED_DGB" ]; then
+        DD_ECON_OK=true
+        # Portable thousands-separator formatter: integer part gets commas
+        # via sed, decimal part preserved as-is. Works regardless of locale
+        # (awk %'d needs LC_NUMERIC set, printf ' varies by shell — sed is
+        # deterministic).
+        _fmt_thousands() {
+            # $1 = numeric string like "3800.32" or "5169495.17769483"
+            local n="$1" int frac
+            int="${n%%.*}"
+            if [ "$n" = "$int" ]; then frac=""; else frac=".${n#*.}"; fi
+            # Reverse, insert comma every 3 digits, reverse back
+            int=$(echo "$int" | rev | sed 's/\([0-9]\{3\}\)/\1,/g' | rev | sed 's/^,//')
+            echo "${int}${frac}"
+        }
+        DD_SUPPLY_DISPLAY=$(_fmt_thousands "$(printf '%.2f' "$DD_SUPPLY_USD" 2>/dev/null || echo "$DD_SUPPLY_USD")")
+        DD_LOCKED_DISPLAY=$(_fmt_thousands "$(printf '%.0f' "$DD_LOCKED_DGB" 2>/dev/null || echo "$DD_LOCKED_DGB")")
+        if [ -n "$DD_COLLAT_PCT" ]; then
+            DD_COLLAT_DISPLAY=" (${DD_COLLAT_PCT}% collateralized)"
+        fi
+    fi
+fi
+# Dry-run discovery aid: surface the raw JSON head so the field map can
+# be finalized from a single dry-run paste. Never printed on live runs.
+if [ "$DRY_RUN" = true ]; then
+    echo "[DRY RUN] getdigidollarstats raw (first 400 chars): $(printf '%s' "$DDSTATS_JSON" | head -c 400)"
+    echo "[DRY RUN] DD economy parsed: ok=${DD_ECON_OK} supply_usd=${DD_SUPPLY_USD:-none} locked_dgb=${DD_LOCKED_DGB:-none} collat_pct=${DD_COLLAT_PCT:-none}"
 fi
 
 # ============================================================================
@@ -1320,6 +1437,13 @@ Consensus price: \$${PRICE_USD} (status: ${PRICE_STATUS})
 MuSig2: epoch ${MUSIG2_EPOCH}, ${MUSIG2_STATE}, ${MUSIG2_NONCES}/${QUORUM_REQUIRED} nonces, ${MUSIG2_SIGS}/${QUORUM_REQUIRED} sigs
 BIP9: ${BIP9_STATUS} (bit ${BIP9_BIT})
 Last bundle: block ${LAST_BUNDLE_HEIGHT}, signed by ${LAST_BUNDLE_SIGNERS} oracles"
+
+# v1.6.4: DD economy line — only when getdigidollarstats parsed cleanly.
+# One line, health-summary density; digibyte.io/ddstats has the full view.
+if [ "$DD_ECON_OK" = true ]; then
+    MESSAGE="${MESSAGE}
+DD economy: \$${DD_SUPPLY_DISPLAY} DD minted, ${DD_LOCKED_DISPLAY} DGB locked${DD_COLLAT_DISPLAY}"
+fi
 
 # ============================================================================
 # v1.6: SOFTWARE SECTION (all versions, dashboard totals, compliance icons)
