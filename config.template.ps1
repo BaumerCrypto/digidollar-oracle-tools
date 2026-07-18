@@ -164,6 +164,18 @@ $MAX_CHAIN_BEHIND    = 10    # Blocks behind before alerting
 # and set the threshold ~200-500 MB above the CurrentUsage value.
 $SWAP_THRESHOLD_MB   = 100
 
+# ---- Swap Pressure Gating (v2.6.2) ----
+# A filled page file is NOT the same as memory pressure. After a heavy
+# transient the OS can leave a lot parked in the page file long after the
+# pressure ended — a stale fill, not a live problem. v2.6.2 only raises the
+# swap alert when RAM usage is at or above $SWAP_MEM_HEADROOM_PCT. (Windows
+# has no PSI, the Linux stall meter, so RAM headroom is the sole signal.)
+# If quiet, the fill shows as an informational "stale" line, not an alert.
+# If RAM% can't be measured the monitor fails safe and alerts as before.
+# Raise this toward 80-85 for a quieter alert on a busy-but-healthy box;
+# lower it to be warned earlier.
+$SWAP_MEM_HEADROOM_PCT = 70   # only alert on filled page file when RAM% >= this
+
 # ---- NTP Check ----
 # Clock offset is measured with one `w32tm /stripchart` sample against
 # this server. Locale-independent — works even when the Windows Time

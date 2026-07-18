@@ -166,6 +166,18 @@ MAX_CHAIN_BEHIND=10     # Blocks behind before alerting
 # and set the threshold ~200-500 MB above the "used" value you see.
 SWAP_THRESHOLD_MB=100
 
+# ---- Swap Pressure Gating (v2.6.2) ----
+# A filled swap is NOT the same as memory pressure. After a heavy transient
+# (a reindex, a verify) the OS can leave GBs parked in swap long after the
+# pressure ended — a stale fill, not a live problem. v2.6.2 only raises the
+# swap alert when RAM usage is at or above SWAP_MEM_HEADROOM_PCT. (macOS has
+# no PSI, the Linux stall meter, so RAM headroom is the sole signal here.)
+# If both are quiet the fill shows as an informational "stale" line, not an
+# alert. If RAM% can't be measured the monitor fails safe and alerts as it
+# did before. Raise this toward 80-85 for a quieter alert on a busy-but-
+# healthy Mac; lower it to be warned earlier.
+SWAP_MEM_HEADROOM_PCT=70   # only alert on filled swap when RAM% >= this
+
 # ---- NTP Check ----
 # One `sntp` query measures your real clock offset against this server.
 # Offsets beyond NTP_MAX_OFFSET trigger a desync warning. Oracle bundle

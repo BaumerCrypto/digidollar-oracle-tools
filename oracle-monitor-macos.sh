@@ -1,9 +1,9 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
-# Version: 2.6.1-macos.1
+# Version: 2.6.2-macos.1
 #
-# macOS port of my oracle-monitor.sh v2.6.1 (Linux). Same checks, same quorum
+# macOS port of my oracle-monitor.sh v2.6.2 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
 # guard, same auto-detect for headless vs Qt wallet, same email-plus-Discord
 # dual-channel alerts, same daily update check — BSD/macOS-native commands.
@@ -11,7 +11,7 @@
 # bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.6.1-macos.1"
+readonly SCRIPT_VERSION="2.6.2-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -55,6 +55,31 @@ readonly SCRIPT_VERSION="2.6.1-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.6.2-macos.1 — Three operator-suggested fixes (two cosmetic, one
+#            alert-logic). Matches Linux v2.6.2.
+#            (1) VERSION LINE CLEANUP. check_version now strips the
+#            bitcoin-legacy /Name:Version/ user-agent wrapper that
+#            getnetworkinfo → .subversion returns. Line goes from
+#            "ℹ️  /DigiByte:9.26.4/" to "ℹ️  DigiByte: v9.26.4" — the
+#            slashes are meaningful to network peers but noise to
+#            operators reading a health summary. Handles rc builds and
+#            hash suffixes correctly (/DigiByte:9.26.0rc46/ →
+#            DigiByte: v9.26.0rc46).
+#            (2) EMAIL TIME LINE IN UTC. Time: line in email body now
+#            uses UTC ('date -u') instead of macOS-local timezone ('date').
+#            Matches Discord timestamp convention (UTC internally, client
+#            renders local). Operators no longer need to mentally convert
+#            timezones. No config change; automatic.
+#            (3) SWAP ALERT NOW PRESSURE-GATED (caught by Aussie Epic on
+#            Linux). A filled swap is no longer treated as memory pressure
+#            on its own — after a heavy transient the OS can leave GBs
+#            parked in swap long after the pressure ended. check_swap now
+#            only raises the yellow alert when RAM usage >= SWAP_MEM_HEADROOM_PCT
+#            (macOS has no PSI, so RAM headroom is the sole signal). A
+#            stale fill shows as an ℹ️ line and no longer inflates the
+#            warning count. If RAM% can't be measured it fails safe and
+#            alerts as v2.4 did. New config: SWAP_MEM_HEADROOM_PCT
+#            (default 70). Real pressure still alerts exactly as before.
 #   v2.6.1-macos.1 — Cosmetic fix matching Linux v2.6.1 (caught by Aussie
 #            Epic). ⚠️ (U+26A0 + VS16) and ℹ️ (U+2139 + VS16) render as
 #            single-width text glyphs in most terminals — the VS16
@@ -338,6 +363,13 @@ MIN_DISK_GB=5
 STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from RPC
 MEM_THRESHOLD=90
 SWAP_THRESHOLD_MB=100
+# v2.6.2-macos.1 — Swap "pressure" is only real when RAM is actually
+# tight. A filled swap can be a stale leftover from a past heavy event
+# (a reindex or verify) that macOS never released. SWAP_MEM_HEADROOM_PCT
+# gates the swap alert: only alert when RAM usage is at/above this %.
+# macOS has no PSI, so RAM headroom is the sole pressure signal; if it
+# can't be measured the monitor fails safe and alerts.
+SWAP_MEM_HEADROOM_PCT=70
 MAX_CHAIN_BEHIND=10
 
 # NTP check — measures actual clock offset against a time server with one
@@ -565,7 +597,7 @@ send_email() {
     local full_body
     full_body="${body}
 
-Time: $(date '+%Y-%m-%d %H:%M:%S %Z')
+Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 $(build_footer)"
 
     # RFC 2822 message via temp file → curl --upload-file
@@ -932,12 +964,18 @@ check_memory() {
     fi
 }
 
-# --- Check 12: Swap pressure (v2.4) ---
-# Fires a yellow alert when swap usage exceeds SWAP_THRESHOLD_MB.
-# On a memory-tight box, any meaningful swap usage signals real pressure —
-# the exact condition that silently killed daemons during the PRE stale
-# incident (June 2026, on Linux). macOS reports dynamic swap via
-# `sysctl vm.swapusage`, output format:
+# --- Check 12: Swap pressure (v2.4; pressure-gated in v2.6.2) ---
+# v2.4 fired a yellow alert whenever swap usage exceeded SWAP_THRESHOLD_MB.
+# v2.6.2 fixes a false positive Aussie Epic hit on Linux: a filled swap is
+# NOT the same as memory pressure. After a heavy transient (a reindex, a
+# verify pass) the OS can leave several GB parked in swap long after the
+# pressure ended — stale, not a live problem. When swap is filled we now
+# gate the alert on *current* pressure via RAM headroom: only alert when
+# RAM usage >= SWAP_MEM_HEADROOM_PCT. macOS has no PSI (the Linux stall
+# meter), so RAM headroom is the sole signal here; if it can't be measured
+# we fail safe and alert as v2.4 did.
+#
+# macOS reports dynamic swap via `sysctl vm.swapusage`, output format:
 #   vm.swapusage: total = 2048.00M  used = 512.30M  free = 1535.70M  (encrypted)
 # We parse the numeric part of the "total = X.XXM" and "used = X.XXM" tokens
 # and round to whole MB for the threshold comparison. macOS reports zero
@@ -973,17 +1011,62 @@ check_swap() {
         return
     fi
 
-    if [ "$swap_used_mb" -gt "$SWAP_THRESHOLD_MB" ]; then
-        if should_alert "swap_pressure"; then
-            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB. Memory pressure detected — check running processes."
-        fi
-        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure!)\n"
-        WARNINGS=$((WARNINGS + 1))
-    else
+    # Swap at/below threshold — definitively fine. Clear any prior alert.
+    if [ "$swap_used_mb" -le "$SWAP_THRESHOLD_MB" ]; then
         if clear_alert "swap_pressure"; then
             alert_green "✅ Swap Pressure Cleared" "Swap usage back to ${swap_used_mb}MB of ${swap_total_mb}MB."
         fi
         DETAILS+="✅ Swap: ${swap_used_mb}MB / ${swap_total_mb}MB\n"
+        return
+    fi
+
+    # Swap is filled. Compute RAM used% (same method as check_memory) and
+    # decide whether the fill reflects real current pressure.
+    local page_size total_bytes vm free_pages inactive_pages spec_pages mem_pct
+    page_size=$(sysctl -n hw.pagesize 2>/dev/null)
+    total_bytes=$(sysctl -n hw.memsize 2>/dev/null)
+    vm=$(vm_stat 2>/dev/null)
+    free_pages=$(echo "$vm"     | awk '/Pages free/        {gsub(/\./,"",$3); print $3}')
+    inactive_pages=$(echo "$vm" | awk '/Pages inactive/    {gsub(/\./,"",$3); print $3}')
+    spec_pages=$(echo "$vm"     | awk '/Pages speculative/ {gsub(/\./,"",$3); print $3}')
+    [ -z "$free_pages" ] && free_pages=0
+    [ -z "$inactive_pages" ] && inactive_pages=0
+    [ -z "$spec_pages" ] && spec_pages=0
+    mem_pct=""
+    if [ -n "$page_size" ] && [ -n "$total_bytes" ] && [ -n "$vm" ]; then
+        mem_pct=$(echo "$page_size $total_bytes $free_pages $inactive_pages $spec_pages" | \
+            awk '{avail=($3+$4+$5)*$1; used=$2-avail; printf "%.0f", used/$2*100}')
+    fi
+
+    local pressure=0 have_signal=0 reason="" stale_note=""
+    if [ -n "$mem_pct" ] && [ "$mem_pct" -ge 0 ] 2>/dev/null; then
+        have_signal=1
+        stale_note="RAM ${mem_pct}%"
+        if [ "$mem_pct" -ge "$SWAP_MEM_HEADROOM_PCT" ] 2>/dev/null; then
+            pressure=1
+            reason="RAM ${mem_pct}%"
+        fi
+    fi
+
+    if [ "$pressure" -eq 1 ]; then
+        if should_alert "swap_pressure"; then
+            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB with active memory pressure (${reason}). Check running processes."
+        fi
+        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure! — ${reason})\n"
+        WARNINGS=$((WARNINGS + 1))
+    elif [ "$have_signal" -eq 0 ]; then
+        # RAM% unmeasurable — fail safe, alert as v2.4 did.
+        if should_alert "swap_pressure"; then
+            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB (pressure signal unavailable). Check running processes."
+        fi
+        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (filled; pressure unverifiable)\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        # Filled but stale — no active pressure. Clear any prior alert.
+        if clear_alert "swap_pressure"; then
+            alert_green "✅ Swap Pressure Cleared" "Swap still at ${swap_used_mb}MB of ${swap_total_mb}MB but no active pressure (${stale_note}). Likely a stale fill from a past reindex/verify."
+        fi
+        DETAILS+="ℹ️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (stale — ${stale_note})\n"
     fi
 }
 
@@ -1045,6 +1128,10 @@ check_version() {
     local version
     version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion 2>/dev/null)
     if [ -n "$version" ] && [ "$version" != "null" ]; then
+        # v2.6.2-macos.1: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
+        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
+        # to network peers but noise to operators reading a health summary.
+        version=$(echo "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
         DETAILS+="ℹ️  $version\n"
     fi
 }

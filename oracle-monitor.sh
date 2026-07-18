@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.6.1
+# Version: 2.6.2
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.6.1"
+readonly SCRIPT_VERSION="2.6.2"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +35,38 @@ readonly SCRIPT_VERSION="2.6.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.6.2 — Three operator-suggested fixes (two cosmetic, one alert-logic).
+#            (1) VERSION LINE CLEANUP. check_version now strips the
+#            bitcoin-legacy /Name:Version/ user-agent wrapper that
+#            getnetworkinfo → .subversion returns. Line goes from
+#            "ℹ️  /DigiByte:9.26.4/" to "ℹ️  DigiByte: v9.26.4" — the
+#            slashes are meaningful to network peers but noise to
+#            operators reading a health summary. Matches the format
+#            oracle-network-status.sh has always used in the Gitter
+#            Software section. Handles rc builds and hash suffixes
+#            correctly (/DigiByte:9.26.0rc46/ → DigiByte: v9.26.0rc46).
+#            (2) EMAIL TIME LINE IN UTC. Time: line in email body now
+#            uses UTC ('date -u') instead of VPS-local timezone ('date').
+#            Matches Discord/Slack card timestamp convention (both use
+#            UTC internally, client renders to viewer-local). Operators
+#            on VPS in different timezones than their home no longer
+#            need to mentally convert CEST/PST/AEST — UTC is universal
+#            reference. No config change; automatic.
+#            (3) SWAP ALERT NOW PRESSURE-GATED (caught by Aussie Epic).
+#            A filled swap is no longer treated as memory pressure on its
+#            own. After a -reindex (or any heavy transient) the kernel can
+#            page GBs out to swap and never page them back in; on a box
+#            later upgraded from 16GB to 32GB RAM that left a permanent red
+#            swap alert while RAM sat at 40% and nothing was stalling.
+#            check_swap now only raises the yellow alert when there is
+#            *current* pressure, judged by two independent signals (either
+#            one fires): Linux PSI (/proc/pressure/memory "some avg10" >
+#            PSI_SWAP_THRESHOLD) or RAM usage >= SWAP_MEM_HEADROOM_PCT.
+#            A stale fill shows as an ℹ️ line ("stale — RAM 40%, PSI 0.00")
+#            and no longer inflates the warning count. If neither signal
+#            can be measured it fails safe and alerts as v2.4 did. New
+#            config: SWAP_MEM_HEADROOM_PCT (default 70), PSI_SWAP_THRESHOLD
+#            (default 5.0). Real pressure still alerts exactly as before.
 #   v2.6.1 — Cosmetic fix (caught by Aussie Epic). ⚠️ (U+26A0 + VS16)
 #            and ℹ️ (U+2139 + VS16) render as single-width text glyphs
 #            in most terminals — the VS16 selector requests emoji
@@ -301,6 +333,17 @@ MIN_DISK_GB=5
 STALE_PRICE_MINUTES=30
 MEM_THRESHOLD=90
 SWAP_THRESHOLD_MB=100
+# v2.6.2 — Swap "pressure" is only real when RAM is actually tight. A
+# filled swap can be a stale leftover from a past -reindex/verify/backup
+# that the kernel never paged back in (common after a RAM upgrade). These
+# two thresholds gate the swap alert on genuine *current* pressure:
+#   SWAP_MEM_HEADROOM_PCT — only alert when RAM usage is at/above this %.
+#   PSI_SWAP_THRESHOLD    — Linux only. /proc/pressure/memory "some avg10"
+#                           above this = real stalls happening now. Either
+#                           signal firing raises the alert; if neither can
+#                           be measured the monitor fails safe and alerts.
+SWAP_MEM_HEADROOM_PCT=70
+PSI_SWAP_THRESHOLD="5.0"
 MAX_CHAIN_BEHIND=10
 
 # Path whose filesystem is watched for free disk space (v2.5.4).
@@ -536,7 +579,7 @@ send_email() {
     local full_body
     full_body="${body}
 
-Time: $(date '+%Y-%m-%d %H:%M:%S %Z')
+Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 $(build_footer)"
 
     # RFC 2822 message via temp file → curl --upload-file
@@ -865,12 +908,25 @@ check_memory() {
     fi
 }
 
-# --- Check 12: Swap pressure (v2.4) ---
-# Fires a yellow alert when swap usage exceeds SWAP_THRESHOLD_MB.
-# On a properly configured box with swappiness=10, any meaningful swap
-# usage signals real memory pressure — the exact condition that silently
-# killed daemons during the PRE stale incident (June 2026). Companion to
-# the OOM protection in the hardening guide.
+# --- Check 12: Swap pressure (v2.4; pressure-gated in v2.6.2) ---
+# v2.4 fired a yellow alert whenever swap usage exceeded SWAP_THRESHOLD_MB.
+# v2.6.2 fixes a false positive Aussie Epic hit: a filled swap is NOT the
+# same as memory pressure. After a -reindex (or any heavy transient) the
+# kernel can page several GB out to swap and never page it back in — the
+# fill just sits there, stale, long after the pressure ended. On a box
+# later upgraded from 16GB to 32GB RAM this produced a permanent red swap
+# alert while RAM sat at 40% used and nothing was actually stalling.
+#
+# So when swap is filled we now gate the alert on *current* pressure using
+# two independent signals — either one firing raises the alert:
+#   (1) PSI — /proc/pressure/memory "some avg10" > PSI_SWAP_THRESHOLD.
+#       Linux 4.20+ gold standard: real stall time (%) in the last 10s.
+#   (2) RAM headroom — RAM usage >= SWAP_MEM_HEADROOM_PCT.
+#       Backstop for the (rare) kernel without PSI.
+# If both signals are quiet, the fill is stale: shown as an ℹ️ line, not a
+# warning, and any prior swap alert is cleared. If neither signal can be
+# measured we fail safe and alert exactly as v2.4 did. Companion to the
+# OOM protection in the hardening guide.
 check_swap() {
     local swap_total_mb swap_used_mb
     swap_total_mb=$(free -m | awk '/Swap:/ {print $2}')
@@ -882,17 +938,62 @@ check_swap() {
         return
     fi
 
-    if [ "$swap_used_mb" -gt "$SWAP_THRESHOLD_MB" ]; then
-        if should_alert "swap_pressure"; then
-            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB. Memory pressure detected — check running processes."
-        fi
-        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure!)\n"
-        WARNINGS=$((WARNINGS + 1))
-    else
+    # Swap at/below threshold — definitively fine. Clear any prior alert.
+    if [ "$swap_used_mb" -le "$SWAP_THRESHOLD_MB" ]; then
         if clear_alert "swap_pressure"; then
             alert_green "✅ Swap Pressure Cleared" "Swap usage back to ${swap_used_mb}MB of ${swap_total_mb}MB."
         fi
         DETAILS+="✅ Swap: ${swap_used_mb}MB / ${swap_total_mb}MB\n"
+        return
+    fi
+
+    # Swap is filled. Decide whether it reflects real *current* pressure.
+    local mem_pct pressure=0 have_signal=0 reason="" psi_avg10="" stale_note=""
+
+    # Signal 1: RAM headroom. RAM "used" already excludes buff/cache in
+    # modern `free`, so this is genuinely-used memory, not disk cache.
+    mem_pct=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+    if [ -n "$mem_pct" ] && [ "$mem_pct" -ge 0 ] 2>/dev/null; then
+        have_signal=1
+        stale_note="RAM ${mem_pct}%"
+        if [ "$mem_pct" -ge "$SWAP_MEM_HEADROOM_PCT" ] 2>/dev/null; then
+            pressure=1
+            reason="RAM ${mem_pct}%"
+        fi
+    fi
+
+    # Signal 2: PSI (Linux 4.20+). "some avg10" is a float like 0.00/12.34.
+    if [ -r /proc/pressure/memory ]; then
+        psi_avg10=$(awk '/^some/ {for (i=1;i<=NF;i++) if ($i ~ /^avg10=/) {sub(/avg10=/,"",$i); print $i; exit}}' /proc/pressure/memory 2>/dev/null)
+        if [ -n "$psi_avg10" ]; then
+            have_signal=1
+            stale_note="${stale_note:+$stale_note, }PSI ${psi_avg10}"
+            if awk "BEGIN{exit !($psi_avg10 > $PSI_SWAP_THRESHOLD)}" 2>/dev/null; then
+                pressure=1
+                reason="${reason:+$reason, }PSI some avg10=${psi_avg10}"
+            fi
+        fi
+    fi
+
+    if [ "$pressure" -eq 1 ]; then
+        if should_alert "swap_pressure"; then
+            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB with active memory pressure (${reason}). Check running processes."
+        fi
+        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure! — ${reason})\n"
+        WARNINGS=$((WARNINGS + 1))
+    elif [ "$have_signal" -eq 0 ]; then
+        # No pressure signal measurable — fail safe, alert as v2.4 did.
+        if should_alert "swap_pressure"; then
+            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB (pressure signal unavailable). Check running processes."
+        fi
+        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (filled; pressure unverifiable)\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        # Filled but stale — no active pressure. Clear any prior alert.
+        if clear_alert "swap_pressure"; then
+            alert_green "✅ Swap Pressure Cleared" "Swap still at ${swap_used_mb}MB of ${swap_total_mb}MB but no active pressure (${stale_note}). Likely a stale fill from a past reindex/verify."
+        fi
+        DETAILS+="ℹ️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (stale — ${stale_note})\n"
     fi
 }
 
@@ -940,6 +1041,10 @@ check_version() {
     local version
     version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion 2>/dev/null)
     if [ -n "$version" ] && [ "$version" != "null" ]; then
+        # v2.6.2: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
+        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
+        # to network peers but noise to operators reading a health summary.
+        version=$(echo "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
         DETAILS+="ℹ️  $version\n"
     fi
 }

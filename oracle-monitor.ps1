@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.6.1-win.1
+# Version: 2.6.2-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.6.1 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.6.2 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet, same
 # email-plus-Discord dual-channel alerts, same daily update check — all
@@ -50,6 +50,32 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.6.2-win.1 — Three operator-suggested fixes (two cosmetic, one
+#            alert-logic). Matches Linux v2.6.2.
+#            (1) VERSION LINE CLEANUP. Check-Version now strips the
+#            bitcoin-legacy /Name:Version/ user-agent wrapper that
+#            getnetworkinfo → .subversion returns. Line goes from
+#            "ℹ️  /DigiByte:9.26.4/" to "ℹ️  DigiByte: v9.26.4" — the
+#            slashes are meaningful to network peers but noise to
+#            operators reading a health summary. Handles rc builds and
+#            hash suffixes correctly (/DigiByte:9.26.0rc46/ →
+#            DigiByte: v9.26.0rc46).
+#            (2) EMAIL TIME LINE IN UTC. Time: line in email body now
+#            uses UTC ((Get-Date).ToUniversalTime()) instead of the
+#            Windows-local timezone (Get-Date zzz). Matches Discord
+#            timestamp convention (UTC internally, client renders local).
+#            No config change; automatic.
+#            (3) SWAP ALERT NOW PRESSURE-GATED (caught by Aussie Epic on
+#            Linux). A filled page file / swap is no longer treated as
+#            memory pressure on its own — after a heavy transient the OS
+#            can leave a lot parked in the page file long after the
+#            pressure ended. Check-Swap now only raises the yellow alert
+#            when RAM usage >= $SWAP_MEM_HEADROOM_PCT (Windows has no PSI,
+#            so RAM headroom is the sole signal). A stale fill shows as an
+#            ℹ️ line and no longer inflates the warning count. If RAM%
+#            can't be measured it fails safe and alerts as v2.4 did. New
+#            config: $SWAP_MEM_HEADROOM_PCT (default 70). Real pressure
+#            still alerts exactly as before.
 #   v2.6.1-win.1 — Cosmetic fix matching Linux v2.6.1 (caught by Aussie
 #            Epic). ⚠️ (U+26A0 + VS16) and ℹ️ (U+2139 + VS16) render as
 #            single-width text glyphs in most terminals — the VS16
@@ -215,7 +241,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.6.1-win.1"
+$SCRIPT_VERSION = "2.6.2-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -326,6 +352,12 @@ $MIN_DISK_GB         = 5
 $STALE_PRICE_MINUTES = 30    # Reserved for future use — staleness currently from RPC
 $MEM_THRESHOLD       = 90
 $SWAP_THRESHOLD_MB   = 100   # v2.4 — page-file usage MB threshold
+# v2.6.2-win.1 — Page-file fill is only real pressure when RAM is tight.
+# A filled page file can be a stale leftover from a past heavy event.
+# Only alert when RAM usage is at/above this %. Windows has no PSI, so
+# RAM headroom is the sole pressure signal; if it can't be measured the
+# monitor fails safe and alerts.
+$SWAP_MEM_HEADROOM_PCT = 70
 $MAX_CHAIN_BEHIND    = 10
 
 # NTP check — measures actual clock offset against a time server using
@@ -638,7 +670,7 @@ function Send-Email {
 
     # Body: alert text + timestamp + the same footer the Discord cards
     # carry (including the update line when one is available)
-    $fullBody = "${Body}`n`nTime: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')`n$(Build-Footer)"
+    $fullBody = "${Body}`n`nTime: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')) UTC`n$(Build-Footer)"
 
     $mail = $null
     $smtp = $null
@@ -1028,11 +1060,16 @@ function Check-Memory {
     }
 }
 
-# --- Check 12: Swap pressure (v2.4) ---
-# Fires a yellow alert when page-file usage exceeds $SWAP_THRESHOLD_MB.
-# On Windows with a healthy amount of RAM, sustained page-file use
-# signals real memory pressure — the exact condition that silently
-# killed daemons during the PRE stale incident (June 2026, on Linux).
+# --- Check 12: Swap pressure (v2.4; pressure-gated in v2.6.2) ---
+# v2.4 fired a yellow alert whenever page-file usage exceeded
+# $SWAP_THRESHOLD_MB. v2.6.2 fixes a false positive Aussie Epic hit on
+# Linux: a filled page file / swap is NOT the same as memory pressure.
+# After a heavy transient the OS can leave a lot parked in the page file
+# long after the pressure ended — stale, not a live problem. When the
+# page file is filled we now gate the alert on *current* pressure via RAM
+# headroom: only alert when RAM usage >= $SWAP_MEM_HEADROOM_PCT. Windows
+# has no PSI (the Linux stall meter), so RAM headroom is the sole signal;
+# if it can't be measured we fail safe and alert as v2.4 did.
 # Uses Get-CimInstance Win32_PageFileUsage which reports CurrentUsage
 # and AllocatedBaseSize in MB. Sums across multiple page files if the
 # system has more than one (unusual but supported).
@@ -1059,17 +1096,55 @@ function Check-Swap {
         return
     }
 
-    if ($swapUsedMb -gt $SWAP_THRESHOLD_MB) {
-        if (Test-ShouldAlert "swap_pressure") {
-            Alert-Yellow "⚠️  Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB. Memory pressure detected — check running processes."
-        }
-        $script:Details.Add("⚠️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (pressure!)")
-        $script:Warnings++
-    } else {
+    # Page-file use at/below threshold — definitively fine. Clear any prior alert.
+    if ($swapUsedMb -le $SWAP_THRESHOLD_MB) {
         if (Clear-AlertState "swap_pressure") {
             Alert-Green "✅ Swap Pressure Cleared" "Page file usage back to ${swapUsedMb}MB of ${swapTotalMb}MB."
         }
         $script:Details.Add("✅ Swap: ${swapUsedMb}MB / ${swapTotalMb}MB")
+        return
+    }
+
+    # Page file is filled. Gate on real current pressure via RAM headroom
+    # (same RAM% method as Check-Memory).
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $memPct = $null
+    if ($null -ne $os -and $os.TotalVisibleMemorySize) {
+        $memPct = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
+    }
+
+    $pressure   = $false
+    $haveSignal = $false
+    $reason     = ""
+    $staleNote  = ""
+    if ($null -ne $memPct) {
+        $haveSignal = $true
+        $staleNote  = "RAM ${memPct}%"
+        if ($memPct -ge $SWAP_MEM_HEADROOM_PCT) {
+            $pressure = $true
+            $reason   = "RAM ${memPct}%"
+        }
+    }
+
+    if ($pressure) {
+        if (Test-ShouldAlert "swap_pressure") {
+            Alert-Yellow "⚠️  Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB with active memory pressure (${reason}). Check running processes."
+        }
+        $script:Details.Add("⚠️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (pressure! — ${reason})")
+        $script:Warnings++
+    } elseif (-not $haveSignal) {
+        # RAM% unmeasurable — fail safe, alert as v2.4 did.
+        if (Test-ShouldAlert "swap_pressure") {
+            Alert-Yellow "⚠️  Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB (pressure signal unavailable). Check running processes."
+        }
+        $script:Details.Add("⚠️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (filled; pressure unverifiable)")
+        $script:Warnings++
+    } else {
+        # Filled but stale — no active pressure. Clear any prior alert.
+        if (Clear-AlertState "swap_pressure") {
+            Alert-Green "✅ Swap Pressure Cleared" "Page file still at ${swapUsedMb}MB of ${swapTotalMb}MB but no active pressure (${staleNote}). Likely a stale fill from a past heavy job."
+        }
+        $script:Details.Add("ℹ️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (stale — ${staleNote})")
     }
 }
 
@@ -1146,6 +1221,12 @@ function Check-Version {
     }
 
     if (-not [string]::IsNullOrEmpty($verLine)) {
+        # v2.6.2-win.1: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
+        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
+        # to network peers but noise to operators reading a health summary.
+        if ($verLine -match '^/([^:]+):(.+)/$') {
+            $verLine = "$($Matches[1]): v$($Matches[2])"
+        }
         $script:Details.Add("ℹ️  $verLine")
     }
 }

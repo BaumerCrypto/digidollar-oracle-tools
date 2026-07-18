@@ -137,6 +137,24 @@ DATADIR="$HOME/.digibyte"
 # 24h of stable operation and set threshold ~200-500 MB above baseline.
 SWAP_THRESHOLD_MB=100
 
+# ---- Swap Pressure Gating (v2.6.2) ----
+# A filled swap is NOT the same as memory pressure. After a -reindex (or any
+# heavy transient) the kernel can page GBs out to swap and never page them
+# back in — a stale fill that sits there long after the pressure ended,
+# especially after a RAM upgrade. v2.6.2 only raises the swap alert when
+# there is *current* pressure, judged by two independent signals (either one
+# fires):
+#   (1) Linux PSI — /proc/pressure/memory "some avg10" above PSI_SWAP_THRESHOLD
+#       (real stall time %, last 10s; kernel 4.20+).
+#   (2) RAM headroom — RAM usage at or above SWAP_MEM_HEADROOM_PCT.
+# If both are quiet the fill is shown as an informational "stale" line, not
+# an alert. If neither signal can be measured the monitor fails safe and
+# alerts as it did before. Raise SWAP_MEM_HEADROOM_PCT toward 80-85 if you
+# want the swap alert quieter on a busy-but-healthy box; lower it if you want
+# to be warned earlier.
+SWAP_MEM_HEADROOM_PCT=70   # only alert on filled swap when RAM% >= this
+PSI_SWAP_THRESHOLD="5.0"   # Linux PSI "some avg10" above this = live pressure
+
 # ---- Systemd Service Name (v2.5+) ----
 # Name of the systemd service that runs the digibyted daemon this monitor
 # instance watches. Defaults to digibyted.service.
