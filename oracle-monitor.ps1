@@ -1,13 +1,15 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
-# oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord Alerts (Windows)
-# Version: 2.5.6-win.1
+# oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
+# Version: 2.6.1-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.5.6 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.6.1 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
-# pre-activation guard, same auto-detect for headless vs Qt wallet — Windows-
-# native commands. Runs on Windows PowerShell 5.1 (preinstalled on Windows
-# 10/11) and PowerShell 7+. No jq needed — PowerShell parses JSON natively.
+# pre-activation guard, same auto-detect for headless vs Qt wallet, same
+# email-plus-Discord dual-channel alerts, same daily update check — all
+# Windows-native commands. Runs on Windows PowerShell 5.1 (preinstalled on
+# Windows 10/11) and PowerShell 7+. No jq needed — PowerShell parses JSON
+# natively.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
 #
@@ -20,13 +22,15 @@
 #   2. Create the config folder and copy the template:
 #        mkdir $env:USERPROFILE\.oracle-monitor
 #        copy config.template.ps1 $env:USERPROFILE\.oracle-monitor\config.ps1
-#   3. Edit config.ps1: set your Discord webhook URL and oracle settings
-#      (especially $CLI_PATH if digibyte-cli.exe is not on your PATH).
+#   3. Edit config.ps1: set your Discord webhook URL, oracle settings
+#      (especially $CLI_PATH if digibyte-cli.exe is not on your PATH), and
+#      (optionally) email settings — see the EMAIL section in the template.
 #   4. Allow local scripts to run (one time, current user only):
 #        Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-#   5. Test it:        .\oracle-monitor.ps1 -DryRun
-#   6. Test webhook:   .\oracle-monitor.ps1 -Test
-#   7. Schedule it (run both from an elevated or normal prompt):
+#   5. Test it:             .\oracle-monitor.ps1 -DryRun
+#   6. Test webhook:        .\oracle-monitor.ps1 -Test
+#   7. Test email (if enabled):  .\oracle-monitor.ps1 -TestEmail
+#   8. Schedule it (run both from an elevated or normal prompt):
 #        schtasks /Create /SC MINUTE /MO 5 /TN "OracleMonitor" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Users\YOUR_USER\OracleMonitor\oracle-monitor.ps1"
 #        schtasks /Create /SC HOURLY /MO 12 /TN "OracleMonitorSummary" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Users\YOUR_USER\OracleMonitor\oracle-monitor.ps1 -Summary"
 #      Then in Task Scheduler (taskschd.msc) open each task's Conditions tab
@@ -35,19 +39,76 @@
 #
 # FLAGS:
 #   (none)         Normal health check — alerts only on problems/recovery
-#   -Summary       Full status summary — always sends to Discord
-#   -DryRun        Runs all checks, prints to terminal, skips Discord, no state changes
+#   -Summary       Full status summary — always sends to Discord + email
+#   -DryRun        Runs all checks, prints to terminal, skips Discord + email, no state changes
 #   -Watch         Live console dashboard — refreshes the full status every 60s
 #                  (-Watch -RefreshSeconds 30 for 30s). Never alerts, never
 #                  touches state: safe to leave a PowerShell window open with
 #                  this running alongside the scheduled tasks.
 #   -Test          Sends a test embed to Discord to verify webhook
+#   -TestEmail     Sends a test email to verify SMTP settings
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.6.1-win.1 — Cosmetic fix matching Linux v2.6.1 (caught by Aussie
+#            Epic). ⚠️ (U+26A0 + VS16) and ℹ️ (U+2139 + VS16) render as
+#            single-width text glyphs in most terminals — the VS16
+#            selector requests emoji presentation but is honored
+#            inconsistently — while ✅ 🔴 💀 render as double-width
+#            emoji. Net effect in the health summary: every ⚠️/ℹ️
+#            line's label sat one column left of the ✅/🔴 line labels,
+#            giving the summary a subtle-but-persistent "some lines
+#            look squished" appearance. Every ⚠️ and ℹ️ prefix now
+#            carries a second space so all status lines line up at the
+#            same column regardless of the terminal's emoji-width
+#            handling. Applies to Details summary lines, alert titles,
+#            and the top status header ("⚠️  N Warnings"). No logic
+#            change; no alert path change — purely how the output
+#            renders. In Discord and email the double-space is visually
+#            harmless (both render these as full-width emoji so the
+#            extra space reads as intentional padding). Also: the
+#            update-available footer URL now includes the https://
+#            scheme so email clients (including Outlook desktop and
+#            corporate gateways that only linkify explicit-scheme URLs)
+#            auto-linkify it universally. One-character change in
+#            Build-Footer.
+#   v2.6.0-win.1 — Two features, one release. Matches Linux v2.6.0 line by line.
+#            (1) EMAIL NOTIFICATIONS (closes #17). New Send-Email fires
+#            on the same triggers as Discord — red/yellow/green state
+#            changes plus the 12-hour summary — via .NET's built-in
+#            System.Net.Mail.SmtpClient (no external module needed;
+#            ships in every PowerShell 5.1). Config-driven: $EMAIL_ENABLED,
+#            $EMAIL_TO, $SMTP_SERVER, $SMTP_PORT, $SMTP_USER, $SMTP_PASS,
+#            $SMTP_FROM. Port 587 = STARTTLS via EnableSsl (Gmail/Outlook/
+#            Brevo default and the recommended setting for PS 5.1). Port
+#            465 (implicit TLS) is not natively supported by .NET's
+#            SmtpClient in PS 5.1 — use 587 instead. Gmail requires an
+#            App Password (2FA -> App passwords), never the account
+#            password. Subjects carry severity ([ALERT]/[WARNING]/
+#            [RESOLVED]/[INFO]) and the $NETWORK_LABEL prefix (dual-
+#            instance parity with v2.5.3-win.1 Discord titles, applied
+#            at the Send-Email chokepoint). New -TestEmail flag verifies
+#            SMTP settings with inline diagnostics for the common
+#            failure modes. Backup channel if Discord is down; primary
+#            channel for operators who don't use Discord/Slack/Telegram.
+#            (2) UPDATE CHECK. New Check-ForUpdate fetches this script's
+#            own published header from the GitHub main branch
+#            (raw.githubusercontent.com), extracts the published
+#            $SCRIPT_VERSION, and compares via [System.Version] on the
+#            base (with -win.N suffix as a tie-breaker). When a newer
+#            version exists, every Discord card and email gains a second
+#            footer line: "⬆️ vX.Y.Z available — <repo url>". No new
+#            repo files — the version source IS the shipped script
+#            header, so it can never drift from what operators actually
+#            download. $UPDATE_CHECK="yes" by default; silent on every
+#            failure mode (no network, timeout, offline, parse failure
+#            -> footer simply stays one line, monitor unaffected).
+#            Result cached per-instance for $UPDATE_CHECK_TTL seconds
+#            (default 86400 = one GitHub fetch per day per instance).
+#            Never fetches and never writes cache in -DryRun.
 #   v2.5.6-win.1 — Cosmetic fix matching Linux v2.5.6. The MuSig2
 #          summary line now carries its own status icon (✅ complete,
-#          ℹ️ in progress, ⚠️ parse failure) so it renders consistently
+#          ℹ️  in progress, ⚠️  parse failure) so it renders consistently
 #          alongside the other health lines instead of floating with a
 #          bare three-space indent. Redundant "✓" and "($state)" suffix
 #          dropped since the icon carries that meaning. No behavior
@@ -90,7 +151,7 @@
 #          specific process name. Full parity with Linux v2.5.2.
 #   v2.5.1-win.1 — Add $SCRIPT_VERSION constant + $NETWORK_LABEL in the
 #          Discord card titles, dry-run header, watch header, and -Test
-#          output. Tune default quorum bands from 20/12 → 12/10 (v2.0
+#          output. Tune default quorum bands from 20/12 -> 12/10 (v2.0
 #          defaults fired yellow at 15/35 fresh — 2x the hard 7-of-35
 #          floor). Quorum counting stays on heartbeat_status=="fresh"
 #          from v2.2.
@@ -101,7 +162,7 @@
 #          route through Send-Summary, so the pre-flight lives in both
 #          paths). Check-Oracle, Check-Price, Check-Services, Check-Quorum
 #          all downgrade "no data" to standby INFO instead of red while
-#          $DdActive=false. Check-Version now reads getnetworkinfo →
+#          $DdActive=false. Check-Version now reads getnetworkinfo ->
 #          .subversion via RPC instead of `digibyted --version` (which
 #          failed for Qt-wallet operators with no digibyted.exe on PATH).
 #   v2.4-win.1 — Add swap pressure detection (Check #12). Fires a yellow
@@ -131,13 +192,16 @@
 #          configurable ($DAEMON_PROCESS) for Qt vs headless.
 #
 #   Linux lineage this port tracks (see oracle-monitor.sh for details):
-#   v2.5.2 — headless/Qt auto-detect       v2.5.1 — version + label + footer
-#   v2.5 — DD BIP9 guard (#27)             v2.4 — swap pressure (#26)
-#   v2.3 — --config dual-instance (#23)    v2.2 — heartbeat_status quorum
-#   v2.1.1 — hysteresis fix                v2.1 — anti-flap
-#   v2.0 — quorum margin (#6)              v1.5 — listoracle RPC (#22)
-#   v1.4 — warning/error enum (#21)        v1.3 — RC44 status enum
-#   v1.2 — config file, dry-run            v1.1 — degraded consensus, NTP
+#   v2.6.1 — cosmetic spacing fix           v2.6.0 — email + update-check (#17)
+#   v2.5.6 — MuSig2 status icon             v2.5.5 — disk total+used% + DATADIR
+#   v2.5.4 — full-repo audit fixes          v2.5.3 — NETWORK_LABEL chokepoint
+#   v2.5.2 — headless/Qt auto-detect        v2.5.1 — version + label + footer
+#   v2.5 — DD BIP9 guard (#27)              v2.4 — swap pressure (#26)
+#   v2.3 — --config dual-instance (#23)     v2.2 — heartbeat_status quorum
+#   v2.1.1 — hysteresis fix                 v2.1 — anti-flap
+#   v2.0 — quorum margin (#6)               v1.5 — listoracle RPC (#22)
+#   v1.4 — warning/error enum (#21)         v1.3 — RC44 status enum
+#   v1.2 — config file, dry-run             v1.1 — degraded consensus, NTP
 #   v1.0 — initial release
 ###############################################################################
 
@@ -145,18 +209,20 @@ param(
     [switch]$Summary,
     [switch]$DryRun,
     [switch]$Test,
+    [switch]$TestEmail,
     [switch]$Watch,
     [int]$RefreshSeconds = 60,
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.5.6-win.1"
+$SCRIPT_VERSION = "2.6.1-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
-$__actionFlags = @($Summary, $DryRun, $Test, $Watch) | Where-Object { $_ }
+# v2.6.0-win.1: -TestEmail joins the set.
+$__actionFlags = @($Summary, $DryRun, $Test, $TestEmail, $Watch) | Where-Object { $_ }
 if (@($__actionFlags).Count -gt 1) {
-    Write-Output "ERROR: Use only one of -Summary, -DryRun, -Test, -Watch."
+    Write-Output "ERROR: Use only one of -Summary, -DryRun, -Test, -TestEmail, -Watch."
     exit 1
 }
 
@@ -166,6 +232,8 @@ if (@($__actionFlags).Count -gt 1) {
 
 # Discord requires TLS 1.2+. Windows PowerShell 5.1 on older builds defaults
 # to TLS 1.0 and the webhook POST fails silently without this line.
+# The SMTP send in v2.6.0-win.1 shares the same requirement — Brevo/Gmail
+# reject STARTTLS handshakes below TLS 1.2.
 try {
     [Net.ServicePointManager]::SecurityProtocol = `
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -182,6 +250,29 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 # Discord webhook URL — get this from your Discord server settings
 # Server Settings > Integrations > Webhooks > New Webhook > Copy URL
 $DISCORD_WEBHOOK = ""
+
+# Email notifications (v2.6.0-win.1) — set $EMAIL_ENABLED=$true in the
+# config to activate. Fires on the same triggers as Discord. Uses .NET's
+# built-in System.Net.Mail.SmtpClient — nothing extra to install. See
+# config.template.ps1 for Gmail App Password setup and other providers.
+# Port 587 (STARTTLS) is the recommended and default setting on Windows —
+# .NET's SmtpClient in PS 5.1 does not natively support port 465
+# (implicit TLS). Brevo, Gmail, Outlook all default to 587.
+$EMAIL_ENABLED = $false
+$EMAIL_TO      = ""                      # Recipient address
+$SMTP_SERVER   = "smtp.gmail.com"
+$SMTP_PORT     = 587                     # 587 = STARTTLS (only supported mode on PS 5.1)
+$SMTP_USER     = ""                      # SMTP login (usually your full email address)
+$SMTP_PASS     = ""                      # Gmail: 16-char App Password — NOT your account password
+$SMTP_FROM     = ""                      # "Display Name <you@example.com>" — empty = use SMTP_USER
+
+# Update check (v2.6.0-win.1) — compares this script's version against
+# the copy published on GitHub main once per $UPDATE_CHECK_TTL seconds.
+# When a newer version exists, Discord cards and emails gain a second
+# footer line. Silent on any failure. Set $UPDATE_CHECK="no" to disable.
+$UPDATE_CHECK     = "yes"
+$UPDATE_CHECK_URL = "https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.ps1"
+$UPDATE_CHECK_TTL = 86400
 
 # Oracle settings
 $ORACLE_ID   = 0
@@ -223,7 +314,7 @@ $DISK_DRIVE = "C"
 # DigiByte datadir named in the Low Disk Space alert (v2.5.5-win.1) so
 # the operator knows exactly where to clean up. Display-only — the
 # monitor never reads or deletes anything here. Keep it on the same
-# drive as $DISK_DRIVE. Dual-instance operators should set this per
+# drive as $DISK_DRIVE. Dual-instance operators should set it per
 # config file (see config.template.ps1) so each instance's alert names
 # its own datadir. (Declared here so the defaults block is complete and
 # the script runs clean under Set-StrictMode.)
@@ -302,6 +393,120 @@ New-Item -ItemType Directory -Force -Path $STATE_DIR | Out-Null
 $script:DRY_RUN = [bool]$DryRun
 
 # ============================================================================
+# UPDATE CHECK (v2.6.0-win.1)
+# ============================================================================
+# Fetches the published script header from GitHub main and compares
+# $SCRIPT_VERSION. The version source is the shipped file itself — no
+# separate VERSION file to drift. Cached per instance ($STATE_DIR) for
+# $UPDATE_CHECK_TTL seconds. Memoized per run. Every failure mode is
+# silent: the footer just stays one line and the monitor is unaffected.
+# Never called in -DryRun (callers sit inside Build-Footer, which is
+# only reached from Send-Discord / Send-Email / Send-Summary in non-dry-
+# run paths), so dry-run never fetches and never writes the cache file.
+
+$script:UpdateAvailable = ""
+$script:UpdateChecked   = $false
+
+function Check-ForUpdate {
+    if ($script:UpdateChecked) { return }
+    $script:UpdateChecked = $true
+    if ("$UPDATE_CHECK" -ne "yes") { return }
+
+    $cacheFile = Join-Path $STATE_DIR "update_check_cache"
+    $now       = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $remoteVer = ""
+    $cachedTs  = $null
+    $ttl       = if ($UPDATE_CHECK_TTL) { [long]$UPDATE_CHECK_TTL } else { 86400 }
+
+    # Serve from cache while fresh (line 1 = epoch of last attempt,
+    # line 2 = version found, empty on a failed fetch)
+    if (Test-Path $cacheFile) {
+        try {
+            $lines = @(Get-Content $cacheFile -ErrorAction SilentlyContinue)
+            $parsed = [long]0
+            if ($lines.Count -ge 1 -and [long]::TryParse("$($lines[0])".Trim(), [ref]$parsed)) {
+                $cachedTs = $parsed
+                if (($now - $cachedTs) -lt $ttl) {
+                    if ($lines.Count -ge 2) {
+                        $remoteVer = "$($lines[1])".Trim()
+                    }
+                }
+            }
+        } catch { }
+    }
+
+    # Cache miss or expired — fetch the published header (5s cap so a
+    # GitHub outage can't stall a scheduled run). Cache the attempt
+    # either way: a failed fetch caches empty, which stays silent and
+    # defers the retry to the next TTL window instead of hammering on
+    # failure.
+    $needFetch = $true
+    if ($null -ne $cachedTs -and ($now - $cachedTs) -lt $ttl) {
+        $needFetch = $false
+    }
+
+    if ($needFetch) {
+        try {
+            $resp = Invoke-WebRequest -Uri $UPDATE_CHECK_URL -TimeoutSec 5 `
+                -UseBasicParsing -ErrorAction Stop
+            $lines = @($resp.Content -split "`r?`n")
+            foreach ($line in $lines) {
+                if ($line -match '^\s*\$SCRIPT_VERSION\s*=\s*"([^"]+)"') {
+                    $remoteVer = $Matches[1]
+                    break
+                }
+            }
+        } catch {
+            $remoteVer = ""
+        }
+
+        try {
+            "$now`n$remoteVer" | Set-Content -Path $cacheFile -Encoding ASCII -ErrorAction SilentlyContinue
+        } catch { }
+    }
+
+    # Newer only. Version strings look like "2.6.0-win.1". Split off the
+    # -win.N suffix; compare the numeric base with [System.Version], then
+    # use the suffix as a tie-breaker. Running a dev version ahead of
+    # the published one correctly stays silent.
+    if (-not [string]::IsNullOrEmpty($remoteVer) -and $remoteVer -ne $SCRIPT_VERSION) {
+        $localBase  = ($SCRIPT_VERSION -replace '-.*$', '')
+        $remoteBase = ($remoteVer -replace '-.*$', '')
+        $localSuffix  = 0
+        $remoteSuffix = 0
+        if ($SCRIPT_VERSION -match '-win\.(\d+)$') { $localSuffix  = [int]$Matches[1] }
+        if ($remoteVer     -match '-win\.(\d+)$') { $remoteSuffix = [int]$Matches[1] }
+
+        $newer = $false
+        try {
+            $lv = [System.Version]$localBase
+            $rv = [System.Version]$remoteBase
+            if ($rv -gt $lv) {
+                $newer = $true
+            } elseif ($rv -eq $lv -and $remoteSuffix -gt $localSuffix) {
+                $newer = $true
+            }
+        } catch {
+            # Version parse failed — fall back to plain string compare
+            if ($remoteVer -gt $SCRIPT_VERSION) { $newer = $true }
+        }
+
+        if ($newer) { $script:UpdateAvailable = $remoteVer }
+    }
+}
+
+# Footer for Discord cards and emails — one line normally, two when an
+# update is available. Single chokepoint so every card and email agrees.
+function Build-Footer {
+    Check-ForUpdate
+    $footer = "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"
+    if (-not [string]::IsNullOrEmpty($script:UpdateAvailable)) {
+        $footer = "$footer`n⬆️ v$($script:UpdateAvailable) available — https://github.com/BaumerCrypto/digidollar-oracle-tools"
+    }
+    return $footer
+}
+
+# ============================================================================
 # CLI WRAPPER
 # ============================================================================
 
@@ -330,7 +535,7 @@ function Invoke-DGBCli {
 }
 
 # ============================================================================
-# DISCORD NOTIFICATION FUNCTIONS
+# NOTIFICATION FUNCTIONS — DISCORD + EMAIL
 # ============================================================================
 
 function Send-Discord {
@@ -360,13 +565,15 @@ function Send-Discord {
         return
     }
 
+    # v2.6.0-win.1: footer via Build-Footer — gains a second line when a
+    # newer published version exists.
     $payload = @{
         embeds = @(
             @{
                 title       = $Title
                 description = $Message
                 color       = $Color
-                footer      = @{ text = "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" }
+                footer      = @{ text = (Build-Footer) }
                 timestamp   = $timestamp
             }
         )
@@ -381,10 +588,107 @@ function Send-Discord {
     } catch { }   # webhook hiccup must never kill the monitor run
 }
 
-function Alert-Red    { param($t, $m) Send-Discord -Color 16711680 -Title $t -Message $m }
-function Alert-Yellow { param($t, $m) Send-Discord -Color 16776960 -Title $t -Message $m }
-function Alert-Green  { param($t, $m) Send-Discord -Color 65280    -Title $t -Message $m }
-function Alert-Blue   { param($t, $m) Send-Discord -Color 3447003  -Title $t -Message $m }
+# ----------------------------------------------------------------------------
+# Send-Email (v2.6.0-win.1, closes #17) — plain-text email via .NET's
+# System.Net.Mail.SmtpClient (no external module needed; ships in every
+# PS 5.1). Same triggers as Discord. Port 587 STARTTLS is the only
+# reliably supported mode in PS 5.1 — .NET's SmtpClient does not natively
+# handle port 465 (implicit TLS). Brevo, Gmail, Outlook all default to 587.
+# NETWORK_LABEL prefixes the subject at this single chokepoint, matching
+# the v2.5.3-win.1 Discord title pattern, so dual-instance operators can
+# tell which daemon fired the email from the subject line alone.
+# Returns $true on success, $false on failure (used by -TestEmail).
+# ----------------------------------------------------------------------------
+
+function Send-Email {
+    param(
+        [string]$Subject,
+        [string]$Body
+    )
+
+    # $EMAIL_ENABLED may be either the boolean $true or the string "true"
+    # (both are valid PowerShell truthy in the config file; the bash
+    # parity check accepts either).
+    if (-not ($EMAIL_ENABLED -eq $true -or "$EMAIL_ENABLED" -eq "true")) {
+        return $false
+    }
+
+    # v2.5.3-win.1 parity: label the subject for dual-instance operators
+    if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
+        $Subject = "$NETWORK_LABEL — $Subject"
+    }
+
+    if ($script:DRY_RUN) {
+        $toDisplay = if ([string]::IsNullOrEmpty($EMAIL_TO)) { "<not set>" } else { $EMAIL_TO }
+        Write-Host "[$(Get-Date)] EMAIL would send to ${toDisplay}: $Subject"
+        return $true
+    }
+
+    # Essential fields — silently skip if not configured (mirrors the
+    # empty-DISCORD_WEBHOOK behavior; -TestEmail diagnoses loudly)
+    if ([string]::IsNullOrEmpty($EMAIL_TO) -or `
+        [string]::IsNullOrEmpty($SMTP_USER) -or `
+        [string]::IsNullOrEmpty($SMTP_PASS)) {
+        return $false
+    }
+
+    # Resolve display From. Handles both "Display Name <addr>" and bare
+    # "addr" formats; System.Net.Mail.MailAddress parses either.
+    $fromDisplay = if ([string]::IsNullOrEmpty($SMTP_FROM)) { "Oracle Monitor <$SMTP_USER>" } else { $SMTP_FROM }
+
+    # Body: alert text + timestamp + the same footer the Discord cards
+    # carry (including the update line when one is available)
+    $fullBody = "${Body}`n`nTime: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')`n$(Build-Footer)"
+
+    $mail = $null
+    $smtp = $null
+    $ok   = $false
+    try {
+        $mail = New-Object System.Net.Mail.MailMessage
+        $mail.From = New-Object System.Net.Mail.MailAddress($fromDisplay)
+        $mail.To.Add($EMAIL_TO) | Out-Null
+        $mail.Subject         = $Subject
+        $mail.SubjectEncoding = [System.Text.Encoding]::UTF8
+        $mail.Body            = $fullBody
+        $mail.BodyEncoding    = [System.Text.Encoding]::UTF8
+        $mail.IsBodyHtml      = $false
+
+        $smtp = New-Object System.Net.Mail.SmtpClient($SMTP_SERVER, [int]$SMTP_PORT)
+        $smtp.EnableSsl   = $true      # STARTTLS on 587 (Brevo/Gmail/Outlook)
+        $smtp.Credentials = New-Object System.Net.NetworkCredential($SMTP_USER, $SMTP_PASS)
+        $smtp.Timeout     = 30000      # 30s, matches Linux curl --max-time 30
+
+        $smtp.Send($mail)
+        $ok = $true
+    } catch {
+        $ok = $false
+    } finally {
+        if ($null -ne $mail) { $mail.Dispose() }
+        if ($null -ne $smtp) { $smtp.Dispose() }
+    }
+    return $ok
+}
+
+# v2.6.0-win.1: each wrapper fires both channels on the same event. Email
+# subjects carry the severity so inbox scanning works without opening.
+# Return values suppressed via Out-Null so callers that consume return
+# values (Check-Daemon) don't see the boolean from Send-Email.
+function Alert-Red    { param($t, $m)
+    Send-Discord -Color 16711680 -Title $t -Message $m
+    Send-Email -Subject "[ALERT] $t" -Body $m | Out-Null
+}
+function Alert-Yellow { param($t, $m)
+    Send-Discord -Color 16776960 -Title $t -Message $m
+    Send-Email -Subject "[WARNING] $t" -Body $m | Out-Null
+}
+function Alert-Green  { param($t, $m)
+    Send-Discord -Color 65280 -Title $t -Message $m
+    Send-Email -Subject "[RESOLVED] $t" -Body $m | Out-Null
+}
+function Alert-Blue   { param($t, $m)
+    Send-Discord -Color 3447003 -Title $t -Message $m
+    Send-Email -Subject "[INFO] $t" -Body $m | Out-Null
+}
 
 # Only alert once per issue until it clears.
 # In -DryRun mode: always returns "should alert" but does NOT touch state files.
@@ -520,7 +824,7 @@ function Check-Chain {
     $raw = Invoke-DGBCli -RpcArgs @("getblockchaininfo")
 
     if ([string]::IsNullOrEmpty($raw)) {
-        $script:Details.Add("⚠️ Chain: could not query")
+        $script:Details.Add("⚠️  Chain: could not query")
         $script:Warnings++
         return
     }
@@ -528,7 +832,7 @@ function Check-Chain {
     $info = $null
     try { $info = $raw | ConvertFrom-Json } catch { }
     if ($null -eq $info) {
-        $script:Details.Add("⚠️ Chain: could not query")
+        $script:Details.Add("⚠️  Chain: could not query")
         $script:Warnings++
         return
     }
@@ -542,9 +846,9 @@ function Check-Chain {
 
     if ($behind -gt $MAX_CHAIN_BEHIND) {
         if (Test-ShouldAlert "chain_behind") {
-            Alert-Yellow "⚠️ Chain Behind" "Node is $behind blocks behind (block $blocks / header $headers)."
+            Alert-Yellow "⚠️  Chain Behind" "Node is $behind blocks behind (block $blocks / header $headers)."
         }
-        $script:Details.Add("⚠️ Chain: $behind blocks behind ($blocks / $headers)")
+        $script:Details.Add("⚠️  Chain: $behind blocks behind ($blocks / $headers)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "chain_behind") {
@@ -559,23 +863,23 @@ function Check-Peers {
     $raw = Invoke-DGBCli -RpcArgs @("getconnectioncount")
 
     if ([string]::IsNullOrEmpty($raw)) {
-        $script:Details.Add("⚠️ Peers: could not query")
+        $script:Details.Add("⚠️  Peers: could not query")
         $script:Warnings++
         return
     }
 
     $peerCount = 0
     if (-not [int]::TryParse($raw.Trim(), [ref]$peerCount)) {
-        $script:Details.Add("⚠️ Peers: could not query")
+        $script:Details.Add("⚠️  Peers: could not query")
         $script:Warnings++
         return
     }
 
     if ($peerCount -lt $MIN_PEERS) {
         if (Test-ShouldAlert "low_peers") {
-            Alert-Yellow "⚠️ Low Peers" "Only $peerCount peers connected (minimum: $MIN_PEERS)."
+            Alert-Yellow "⚠️  Low Peers" "Only $peerCount peers connected (minimum: $MIN_PEERS)."
         }
-        $script:Details.Add("⚠️ Peers: $peerCount (low!)")
+        $script:Details.Add("⚠️  Peers: $peerCount (low!)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "low_peers") {
@@ -598,7 +902,7 @@ function Check-Price {
             $script:Details.Add("ℹ️  Price: pending (DigiDollar deployment: $($script:DdStatus))")
             return
         }
-        $script:Details.Add("⚠️ Price: could not query")
+        $script:Details.Add("⚠️  Price: could not query")
         $script:Warnings++
         return
     }
@@ -606,7 +910,7 @@ function Check-Price {
     $info = $null
     try { $info = $raw | ConvertFrom-Json } catch { }
     if ($null -eq $info) {
-        $script:Details.Add("⚠️ Price: could not query")
+        $script:Details.Add("⚠️  Price: could not query")
         $script:Warnings++
         return
     }
@@ -625,20 +929,20 @@ function Check-Price {
     # Check 5a: Stale price (v1.0)
     if ($isStale) {
         if (Test-ShouldAlert "stale_price") {
-            Alert-Yellow "⚠️ Stale Price" "Oracle consensus price is stale. Last price: `$$priceUsd"
+            Alert-Yellow "⚠️  Stale Price" "Oracle consensus price is stale. Last price: `$$priceUsd"
         }
-        $script:Details.Add("⚠️ Price: STALE — `$$priceUsd")
+        $script:Details.Add("⚠️  Price: STALE — `$$priceUsd")
         $script:Warnings++
     # Check 5b: Error status — real problem, alert operator (v1.4)
     } elseif ($status -eq "error") {
         if (Test-ShouldAlert "degraded_consensus") {
-            Alert-Yellow "⚠️ Degraded Consensus" "Network status: $status | Price: `$$priceUsd | Oracles: $oracleCount. Network aggregation is failing."
+            Alert-Yellow "⚠️  Degraded Consensus" "Network status: $status | Price: `$$priceUsd | Oracles: $oracleCount. Network aggregation is failing."
         }
-        $script:Details.Add("⚠️ Price: `$$priceUsd (status: $status, oracles: $oracleCount)")
+        $script:Details.Add("⚠️  Price: `$$priceUsd (status: $status, oracles: $oracleCount)")
         $script:Warnings++
     # Check 5c: Warning status — network notice, no Discord alert (v1.4)
     } elseif ($status -eq "warning") {
-        $script:Details.Add("⚠️ Price: `$$priceUsd (status: $status, oracles: $oracleCount)")
+        $script:Details.Add("⚠️  Price: `$$priceUsd (status: $status, oracles: $oracleCount)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "stale_price") {
@@ -656,7 +960,7 @@ function Check-Disk {
     $drive = Get-PSDrive -Name $DISK_DRIVE -ErrorAction SilentlyContinue
 
     if ($null -eq $drive -or $null -eq $drive.Free) {
-        $script:Details.Add("⚠️ Disk: could not query drive $DISK_DRIVE")
+        $script:Details.Add("⚠️  Disk: could not query drive $DISK_DRIVE")
         $script:Warnings++
         return
     }
@@ -705,7 +1009,7 @@ function Check-Memory {
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
 
     if ($null -eq $os -or -not $os.TotalVisibleMemorySize) {
-        $script:Details.Add("⚠️ Memory: could not query")
+        $script:Details.Add("⚠️  Memory: could not query")
         $script:Warnings++
         return
     }
@@ -714,9 +1018,9 @@ function Check-Memory {
 
     if ($memPct -gt $MEM_THRESHOLD) {
         if (Test-ShouldAlert "high_memory") {
-            Alert-Yellow "⚠️ High Memory" "Memory usage at ${memPct}%."
+            Alert-Yellow "⚠️  High Memory" "Memory usage at ${memPct}%."
         }
-        $script:Details.Add("⚠️ Memory: ${memPct}% used")
+        $script:Details.Add("⚠️  Memory: ${memPct}% used")
         $script:Warnings++
     } else {
         Clear-AlertState "high_memory" | Out-Null
@@ -757,9 +1061,9 @@ function Check-Swap {
 
     if ($swapUsedMb -gt $SWAP_THRESHOLD_MB) {
         if (Test-ShouldAlert "swap_pressure") {
-            Alert-Yellow "⚠️ Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB. Memory pressure detected — check running processes."
+            Alert-Yellow "⚠️  Swap Pressure" "Page file usage: ${swapUsedMb}MB of ${swapTotalMb}MB. Memory pressure detected — check running processes."
         }
-        $script:Details.Add("⚠️ Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (pressure!)")
+        $script:Details.Add("⚠️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (pressure!)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "swap_pressure") {
@@ -818,7 +1122,7 @@ function Check-Services {
     if ($oracleStatus -eq "true") {
         $script:Details.Add("✅ Oracle process: running")
     } else {
-        $script:Details.Add("⚠️ Oracle process: $oracleStatus")
+        $script:Details.Add("⚠️  Oracle process: $oracleStatus")
         $script:Warnings++
     }
 }
@@ -869,7 +1173,7 @@ function Check-Ntp {
         # Could not measure (no network / UDP 123 blocked / w32tm missing).
         # Surface in summary as a warning but don't fire a Discord alert —
         # matches the "could not query" pattern of the other checks.
-        $script:Details.Add("⚠️ NTP: could not verify (w32tm query failed)")
+        $script:Details.Add("⚠️  NTP: could not verify (w32tm query failed)")
         $script:Warnings++
         return
     }
@@ -878,9 +1182,9 @@ function Check-Ntp {
 
     if ($absOffset -gt $NTP_MAX_OFFSET_SECONDS) {
         if (Test-ShouldAlert "ntp_desync") {
-            Alert-Yellow "⚠️ NTP Desync" "System clock is off by $([math]::Round($offset, 3))s vs $NTP_SERVER. Oracle timestamps may drift. Run: w32tm /resync (elevated prompt)."
+            Alert-Yellow "⚠️  NTP Desync" "System clock is off by $([math]::Round($offset, 3))s vs $NTP_SERVER. Oracle timestamps may drift. Run: w32tm /resync (elevated prompt)."
         }
-        $script:Details.Add("⚠️ NTP: offset $([math]::Round($offset, 3))s (NOT synchronized)")
+        $script:Details.Add("⚠️  NTP: offset $([math]::Round($offset, 3))s (NOT synchronized)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "ntp_desync") {
@@ -935,7 +1239,7 @@ function Check-Quorum {
     $rawDeploy = Invoke-DGBCli -RpcArgs @("getdigidollardeploymentinfo")
 
     if ([string]::IsNullOrEmpty($rawDeploy)) {
-        $script:Details.Add("⚠️ Quorum: could not query deployment info")
+        $script:Details.Add("⚠️  Quorum: could not query deployment info")
         $script:Warnings++
         return
     }
@@ -943,7 +1247,7 @@ function Check-Quorum {
     $deploy = $null
     try { $deploy = $rawDeploy | ConvertFrom-Json } catch { }
     if ($null -eq $deploy) {
-        $script:Details.Add("⚠️ Quorum: could not query deployment info")
+        $script:Details.Add("⚠️  Quorum: could not query deployment info")
         $script:Warnings++
         return
     }
@@ -971,14 +1275,14 @@ function Check-Quorum {
     }
 
     # v2.5.6-win.1: musigDetail now carries its own status icon so the
-    # line renders consistently alongside the other ✅/ℹ️/⚠️ health
+    # line renders consistently alongside the other ✅/ℹ️/⚠️  health
     # lines instead of floating with a bare three-space indent.
     if ($musigState -eq "complete") {
         $musigDetail = "✅ MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs"
     } elseif ("$musigEpoch" -ne "?") {
-        $musigDetail = "ℹ️ MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
+        $musigDetail = "ℹ️  MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
     } else {
-        $musigDetail = "⚠️ MuSig2: could not parse session"
+        $musigDetail = "⚠️  MuSig2: could not parse session"
     }
 
     # --- Step 2: Count reporting oracles ---
@@ -989,7 +1293,7 @@ function Check-Quorum {
             $script:Details.Add("ℹ️  Quorum: standby (DigiDollar deployment: $($script:DdStatus))")
             return
         }
-        $script:Details.Add("⚠️ Quorum: could not query oracles")
+        $script:Details.Add("⚠️  Quorum: could not query oracles")
         $script:Warnings++
         return
     }
@@ -1005,7 +1309,7 @@ function Check-Quorum {
     $rosterEmpty = ($rawOracles.Trim() -eq "[]")
 
     if ((-not $rosterEmpty) -and ($null -eq $oracles -or $oracles.Count -eq 0)) {
-        $script:Details.Add("⚠️ Quorum: could not query oracles")
+        $script:Details.Add("⚠️  Quorum: could not query oracles")
         $script:Warnings++
         return
     }
@@ -1025,7 +1329,7 @@ function Check-Quorum {
     } elseif (-not $hasField) {
         # Fallback: field name mismatch — use roster count (mirrors Linux v2.2)
         $reporting = $rosterCount
-        $script:Details.Add("⚠️ Quorum: could not count reporting oracles (heartbeat_status field missing?) — using roster count")
+        $script:Details.Add("⚠️  Quorum: could not count reporting oracles (heartbeat_status field missing?) — using roster count")
         $script:Warnings++
     } else {
         $reporting = @($oracles | Where-Object { $_.heartbeat_status -eq "fresh" }).Count
@@ -1130,7 +1434,7 @@ function Check-Quorum {
                     Alert-Red "🔴 Quorum At Edge" "Only $reporting/$totalSlots oracles reporting (need $consensusRequired). Network at risk if more drop."
                 }
                 "yellow" {
-                    Alert-Yellow "⚠️ Quorum Getting Thin" "$reporting/$totalSlots oracles reporting (need $consensusRequired). Comfortable is ${QUORUM_GREEN}+."
+                    Alert-Yellow "⚠️  Quorum Getting Thin" "$reporting/$totalSlots oracles reporting (need $consensusRequired). Comfortable is ${QUORUM_GREEN}+."
                 }
             }
         } else {
@@ -1165,7 +1469,7 @@ function Check-Quorum {
             $script:Issues++
         }
         "yellow" {
-            $script:Details.Add("⚠️ Quorum: $reporting/$totalSlots reporting (need $consensusRequired) — getting thin")
+            $script:Details.Add("⚠️  Quorum: $reporting/$totalSlots reporting (need $consensusRequired) — getting thin")
             $script:Warnings++
         }
         "green" {
@@ -1202,7 +1506,7 @@ function Send-Summary {
         $status = "🔴 $($script:Issues) Issues Detected"
     } elseif ($script:Warnings -gt 0) {
         $color  = 16776960  # yellow
-        $status = "⚠️ $($script:Warnings) Warnings"
+        $status = "⚠️  $($script:Warnings) Warnings"
     }
 
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -1224,16 +1528,28 @@ function Send-Summary {
         Write-Output "======================================="
         Write-Output $desc
         Write-Output "======================================="
+        # v2.6.0-win.1: no webhook configured but email is → still email
+        # the summary (email-only operators are the point of #17).
+        # Dry-run is handled inside Send-Email (prints, sends nothing).
+        if ((-not $script:DRY_RUN) -and ($EMAIL_ENABLED -eq $true -or "$EMAIL_ENABLED" -eq "true")) {
+            Send-Email -Subject "$status — Health Summary" -Body $desc | Out-Null
+        }
         return
     }
 
+    # v2.6.0-win.1: email fires alongside the Discord card. Send-Email
+    # prefixes NETWORK_LABEL itself (chokepoint), so the subject passed
+    # here is label-free to avoid doubling.
+    Send-Email -Subject "$status — Health Summary" -Body $desc | Out-Null
+
+    # v2.6.0-win.1: footer via Build-Footer — two lines when an update exists.
     $payload = @{
         embeds = @(
             @{
                 title       = "$status — $label Health Summary"
                 description = $desc
                 color       = $color
-                footer      = @{ text = "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" }
+                footer      = @{ text = (Build-Footer) }
                 timestamp   = $timestamp
             }
         )
@@ -1311,6 +1627,41 @@ if ($Test) {
     # $NETWORK_LABEL) — no more doubled label in the card.
     Alert-Blue "🔧 Test Alert" "Oracle monitor is configured and working! $(Get-Date)"
     Write-Output "Check your Discord channel."
+    if ($EMAIL_ENABLED -eq $true -or "$EMAIL_ENABLED" -eq "true") {
+        Write-Output "(Email is enabled — a test email was sent too. To test email alone: .\oracle-monitor.ps1 -TestEmail)"
+    }
+} elseif ($TestEmail) {
+    Write-Output "Testing email configuration..."
+    if (-not ($EMAIL_ENABLED -eq $true -or "$EMAIL_ENABLED" -eq "true")) {
+        Write-Output "ERROR: `$EMAIL_ENABLED is not set to `$true."
+        Write-Output "       Set it in: $CONFIG_FILE"
+        exit 1
+    }
+    if ([string]::IsNullOrEmpty($EMAIL_TO) -or `
+        [string]::IsNullOrEmpty($SMTP_USER) -or `
+        [string]::IsNullOrEmpty($SMTP_PASS)) {
+        Write-Output "ERROR: `$EMAIL_TO, `$SMTP_USER, and `$SMTP_PASS must all be set."
+        Write-Output "       Configure them in: $CONFIG_FILE"
+        exit 1
+    }
+    if ([int]$SMTP_PORT -eq 465) {
+        Write-Output "WARNING: port 465 (implicit TLS) is not natively supported by .NET's SmtpClient in PowerShell 5.1."
+        Write-Output "         Most providers (Brevo, Gmail, Outlook) accept port 587 STARTTLS — change `$SMTP_PORT to 587 in the config."
+    }
+    Write-Output "Sending test email to $EMAIL_TO via ${SMTP_SERVER}:${SMTP_PORT}..."
+    if (Send-Email -Subject "🔧 Test Email" -Body "Oracle monitor email alerts are configured and working.") {
+        Write-Output "✓ Test email sent — check your inbox (and spam folder)."
+    } else {
+        Write-Output "✗ Send failed. Check SMTP settings in: $CONFIG_FILE"
+        Write-Output "  Common issues:"
+        Write-Output "    - Gmail: `$SMTP_PASS must be an App Password, not your account password"
+        Write-Output "      (Google Account > Security > 2-Step Verification, then App passwords)"
+        Write-Output "    - Outlook/365: `$SMTP_SERVER=`"smtp.office365.com`", `$SMTP_PORT=587"
+        Write-Output "    - Wrong `$SMTP_PORT for your provider (587=STARTTLS)"
+        Write-Output "    - Windows Firewall blocking outbound port ${SMTP_PORT} for powershell.exe"
+        Write-Output "    - Corporate proxy: PS 5.1's SmtpClient does not honor proxy settings — talk to your admin"
+        exit 1
+    }
 } elseif ($Watch) {
     # Live console dashboard — full status block, refreshed in place.
     # Runs in dry-run mode internally: never sends Discord alerts and never

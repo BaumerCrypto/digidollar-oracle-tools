@@ -1,4 +1,4 @@
-﻿# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
+# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
 #
 # This file is dot-sourced by oracle-monitor.ps1 (v2.5.4-win.1+) at startup.
 # Edit values below to override the built-in defaults.
@@ -12,9 +12,65 @@
 #
 # Docs: https://github.com/BaumerCrypto/digidollar-oracle-tools
 
-# ---- Discord Webhook (required for alerts) ----
+# ---- Discord Webhook (required for oracle-monitor.ps1 alerts) ----
 # Get from: Server Settings > Integrations > Webhooks > Copy URL
 $DISCORD_WEBHOOK = "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+
+# ---- Email Notifications (oracle-monitor.ps1 v2.6.0-win.1+) ----
+# Sends the same alerts as Discord to an email address — red/yellow/green
+# state changes plus the 12-hour summary. Works as a backup channel if
+# Discord goes down, or as the ONLY channel if you don't use Discord at
+# all (leave $DISCORD_WEBHOOK at the placeholder and the summary still
+# emails). Uses .NET's built-in System.Net.Mail.SmtpClient — nothing
+# extra to install; ships in every PowerShell 5.1.
+#
+# GMAIL SETUP (most common):
+#   1. Turn on 2-Step Verification:  Google Account > Security
+#   2. Create an App Password:       Google Account > Security > App passwords
+#      (search "App passwords" in the account search bar if you can't
+#      find it — Google hides it until 2-Step Verification is on)
+#   3. Name it "Oracle Monitor", click Generate, copy the 16-character
+#      password (shown once, spaces don't matter)
+#   4. $SMTP_USER = your full Gmail address
+#      $SMTP_PASS = that App Password — NEVER your real account password
+#
+# OUTLOOK / OFFICE 365:
+#   $SMTP_SERVER = "smtp.office365.com"   $SMTP_PORT = 587
+#   $SMTP_USER = your address, $SMTP_PASS = account password (or an App
+#   Password if your account has MFA)
+#
+# BREVO (recommended if your ISP blocks SMTP submission from residential IPs):
+#   $SMTP_SERVER = "smtp-relay.brevo.com"  $SMTP_PORT = 587
+#   $SMTP_USER = your Brevo SMTP login (looks like xyz@smtp-brevo.com)
+#   $SMTP_PASS = your Brevo Standard SMTP key
+#   Free tier: 300 emails/day — plenty for oracle alerts.
+#
+# OTHER PROVIDERS: set $SMTP_SERVER/$SMTP_PORT per their docs.
+#   Port 587 = STARTTLS (only reliably supported mode in PS 5.1)
+#   Port 465 = implicit TLS (NOT supported natively — use 587 instead)
+#
+# Note: .NET's SmtpClient in PowerShell 5.1 does not natively support
+# port 465 (implicit TLS). Every major provider offers 587 STARTTLS as
+# an alternative — use it.
+#
+# TEST: .\oracle-monitor.ps1 -TestEmail
+#
+$EMAIL_ENABLED = $false
+$EMAIL_TO      = "you@example.com"
+$SMTP_SERVER   = "smtp.gmail.com"
+$SMTP_PORT     = 587
+$SMTP_USER     = "your-address@gmail.com"
+$SMTP_PASS     = "xxxxxxxxxxxxxxxx"
+$SMTP_FROM     = "Oracle Monitor <your-address@gmail.com>"
+
+# ---- Update Check (oracle-monitor.ps1 v2.6.0-win.1+) ----
+# Once a day the monitor compares its own version against the copy
+# published on GitHub main. When a newer version exists, every Discord
+# card and email gains a footer line: "⬆️ vX.Y.Z available". Silent on
+# any failure (offline, timeout, GitHub down) — the monitor itself is
+# never affected. Set $UPDATE_CHECK = "no" to disable entirely.
+$UPDATE_CHECK = "yes"
+# $UPDATE_CHECK_TTL = 86400    # seconds between GitHub fetches (default 1 day)
 
 # ---- Oracle Identity ----
 $ORACLE_ID   = 0
@@ -152,6 +208,8 @@ $QUORUM_HYSTERESIS = 3
 #   "🔧 Mainnet Test Alert"
 #   "🔭 Mainnet Monitor — watch mode (refreshes every 60s, Ctrl+C to exit)"
 #
+# Also prefixes the Subject: line on emails (v2.6.0-win.1+), same chokepoint.
+#
 # Leave empty for the generic "Oracle" label.
 $NETWORK_LABEL = ""
 
@@ -162,8 +220,9 @@ $NETWORK_LABEL = ""
 #
 # How it works:
 #   - Each instance reads its own config file (CLI path, webhook, thresholds)
-#   - State files (quorum_state, daemon_down, etc.) auto-separate by the
-#     config file's parent directory — Split-Path -Parent derives $STATE_DIR
+#   - State files (quorum_state, daemon_down, update_check_cache, etc.)
+#     auto-separate by the config file's parent directory — Split-Path
+#     -Parent derives $STATE_DIR
 #
 # Setup example — adding a mainnet instance alongside testnet:
 #
@@ -175,11 +234,13 @@ $NETWORK_LABEL = ""
 #   #   $CLI_ARGS         = @()                          (no -testnet)
 #   #   $SWAP_THRESHOLD_MB = 1500                        (dual-daemon baseline)
 #   #   $QUORUM_GREEN     = 12; $QUORUM_YELLOW = 10      (tighter for production)
-#   #   $NETWORK_LABEL    = "Mainnet"                    (shows in card titles)
+#   #   $NETWORK_LABEL    = "Mainnet"                    (shows in card titles + email subjects)
 #   #   $DATADIR          = "$env:APPDATA\DigiByte"      (named in Low Disk alerts —
 #   #                                                     and set the TESTNET config to
 #   #                                                     "$env:APPDATA\DigiByte\testnet26")
 #   #   $DISCORD_WEBHOOK  = "https://..."                (same or different webhook)
+#   #   $EMAIL_TO         = "you@example.com"            (same or different address —
+#   #                                                     subject prefix distinguishes them)
 #
 #   # Test:
 #   .\oracle-monitor.ps1 -Config $env:USERPROFILE\.oracle-monitor-mainnet\config.ps1 -DryRun

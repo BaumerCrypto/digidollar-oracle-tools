@@ -19,6 +19,50 @@
 # Get from: Server Settings > Integrations > Webhooks > Copy URL
 DISCORD_WEBHOOK="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
 
+# ---- Email Notifications (oracle-monitor.sh v2.6.0+) ----
+# Sends the same alerts as Discord to an email address — red/yellow/green
+# state changes plus the 12-hour summary. Works as a backup channel if
+# Discord goes down, or as the ONLY channel if you don't use Discord at
+# all (leave DISCORD_WEBHOOK at the placeholder and the summary still
+# emails). Uses curl's built-in SMTP — nothing extra to install.
+#
+# GMAIL SETUP (most common):
+#   1. Turn on 2-Step Verification:  Google Account > Security
+#   2. Create an App Password:       Google Account > Security > App passwords
+#      (search "App passwords" in the account search bar if you can't
+#      find it — Google hides it until 2-Step Verification is on)
+#   3. Name it "Oracle Monitor", click Generate, copy the 16-character
+#      password (shown once, spaces don't matter)
+#   4. SMTP_USER = your full Gmail address
+#      SMTP_PASS = that App Password — NEVER your real account password
+#
+# OUTLOOK / OFFICE 365:
+#   SMTP_SERVER="smtp.office365.com"   SMTP_PORT=587
+#   SMTP_USER = your address, SMTP_PASS = account password (or an App
+#   Password if your account has MFA)
+#
+# OTHER PROVIDERS: set SMTP_SERVER/SMTP_PORT per their docs.
+#   Port 587 = STARTTLS (most providers)   Port 465 = implicit TLS (legacy)
+#
+# TEST: ./oracle-monitor.sh --test-email
+#
+EMAIL_ENABLED=false
+EMAIL_TO="you@example.com"
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT=587
+SMTP_USER="your-address@gmail.com"
+SMTP_PASS="xxxx xxxx xxxx xxxx"
+SMTP_FROM="Oracle Monitor <your-address@gmail.com>"
+
+# ---- Update Check (oracle-monitor.sh v2.6.0+) ----
+# Once a day the monitor compares its own version against the copy
+# published on GitHub main. When a newer version exists, every Discord
+# card and email gains a footer line: "⬆️ vX.Y.Z available". Silent on
+# any failure (offline, timeout, GitHub down) — the monitor itself is
+# never affected. Set UPDATE_CHECK="no" to disable entirely.
+UPDATE_CHECK="yes"
+# UPDATE_CHECK_TTL=86400    # seconds between GitHub fetches (default 1 day)
+
 # ---- Oracle Identity ----
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"

@@ -10,19 +10,19 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.5.6 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Discord webhook alerts with red/yellow/green embeds, `NETWORK_LABEL` in card titles, footer version stamp. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line now carries its own ✅/ℹ️/⚠️ status icon for visual consistency with the other health lines (v2.5.6). External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.6.3 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. Network label in header (auto-detected or config override). Reports: fresh heartbeats, quorum health, consensus price, MuSig2 session, BIP9 activation, last bundle signers, software version adoption with compliance icons per `ACCEPTED_VERSIONS` whitelist (RC46 hash-variant collapse, three-tier sort: compliant on top, non-compliant with version in the middle, "no version reported" at the end), stale/inactive oracle list with @ mention notifications, and an upgrade nudge section for fresh operators running non-compliant versions. `--config /path` flag for dual-instance monitoring (testnet + mainnet). **DigiDollar BIP9 pre-activation guard (v1.6.2)** splits RPC calls into two phases so pre-activation mainnet daemons don't error on DD-required RPCs: Phase 1 (always-safe) resolves BIP9 status, activation-height math from `getdeploymentinfo.bip9.since + statistics.period`, quorum config, MuSig2 session; Phase 2 (DD-required) only fires in FULL mode. Standby/birth/endgame modes skip Phase 2 entirely. `--endgame-only` flag for hourly countdown ticker in the last 24 hours before activation (silent-exit outside the band, so hourly cron only posts when it matters). One-shot birth announcement fires automatically on the first cron pass after DD flips to ACTIVE, with `m.mentions` notifications to Jared (slot 0) and DigiSwarm (slot 15), state-file dedup prevents double-fire. **v1.6.3 audit fixes:** in BIP9 ACTIVE state `bip9.since` alone is the activation height (Core drops `statistics` once active, verified live on testnet26), so the birth announcement now reports the true activation block instead of the next retarget boundary; upgrade-nudge ping counts moved to a `u<id>` namespace so the fresh-oracle reset can't wipe them each cycle (the 6-ping cap now actually engages); and the 12hr standby defers to the hourly endgame ticker inside the final 24h (59-minute dedup window) so the room gets one countdown per hour, not two five minutes apart. Bot account: `@digidollar-oracle-bot:matrix.org`. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.6.1 — 12 checks (daemon, oracle, chain sync, peers, price freshness, consensus status, disk, memory, swap pressure, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu — no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.6.5 — posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. See file for full description. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only — never push to GitHub. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v1.6.2 additions (all optional): `ACCEPTED_VERSIONS` whitelist for the Software section compliance icons, `VERSION_NUDGE_ENABLED` toggle for the upgrade nudge feature, `ACTIVATION_HEIGHT_OVERRIDE` manual escape hatch for the pre-activation countdown math. Both scripts work without any of it using built-in defaults. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.4.1 — SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection. Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide — Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.5.6-win.1 — full logic parity with Linux v2.5.6. PS 5.1 and PS 7 compatible, zero dependencies (native JSON parsing). Includes watch mode (`-Watch`) and `-Config` for dual-instance monitoring. Ships UTF-8 with BOM. |
-| [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.5.6-macos.1 — stock bash 3.2 compatible, jq is the only dependency. Includes watch mode (`--watch`) and `--config` for dual-instance monitoring. |
-| [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. |
-| [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports — installation, config, Task Scheduler/cron, watch mode, troubleshooting. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.6.1-win.1 — full logic parity with Linux v2.6.1, including the v2.6.0 email + auto update-check features and the v2.6.1 cosmetic spacing fix. PS 5.1 and PS 7 compatible, zero external dependencies (native JSON parsing, .NET's built-in `System.Net.Mail.SmtpClient` for email). Includes watch mode (`-Watch`), `-Config` for dual-instance monitoring, and `-TestEmail` for SMTP diagnostics. Ships UTF-8 with BOM. |
+| [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. v2.6.0-win.1: email + update-check sections mirror the Linux template. |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.6.1-macos.1 — stock bash 3.2 compatible, jq is the only dependency (curl SMTP support ships with modern macOS). Full logic parity with Linux v2.6.1 (v2.6.0 email + update-check + v2.6.1 spacing fix). Includes watch mode (`--watch`), `--config` for dual-instance monitoring, and `--test-email` for SMTP diagnostics. |
+| [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. v2.6.0-macos.1: email + update-check sections mirror the Linux template. |
+| [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports — installation, config, Task Scheduler/cron, watch mode, email SMTP setup per platform, troubleshooting. |
 
 ### Testing
 
@@ -36,21 +36,21 @@ The Windows and macOS ports ship with parallel isolated test harnesses for verif
 Neither harness sends Discord alerts, touches state files, or runs against a real node — they're safe to run on any box, even without DigiByte installed.
 
 More tools will be added as the DigiDollar testnet matures toward mainnet activation.
-**Roadmap:** See [open issues](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) for planned features — mainnet migration, bundle signer detection, cross-platform support, and more.
+**Roadmap:** See [open issues](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) for planned features — bundle signer detection, oracle deselection alerts, price deviation alerts, and more.
 
 ---
 
 ## Platform support
 
-The monitor runs natively on all three major platforms. Same 12 checks, same DigiDollar BIP9 pre-activation guard, same quorum state machine, same anti-flap logic, same Qt/headless auto-detect, same Discord card format — only the platform plumbing differs.
+The monitor runs natively on all three major platforms. Same 12 checks, same DigiDollar BIP9 pre-activation guard, same quorum state machine, same anti-flap logic, same Qt/headless auto-detect, same Discord card format, and — as of v2.6.0 — the same dual-channel email + Discord alerts and the same daily update-check. Only the platform plumbing underneath differs.
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
-| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.5.6 |
-| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.5.6-win.1 |
-| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.5.6-macos.1 |
+| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.6.1 |
+| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.6.1-win.1 |
+| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.6.1-macos.1 |
 
-Windows needs no dependencies at all (PowerShell parses JSON natively). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with. Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
+Windows needs no dependencies at all (PowerShell parses JSON natively; .NET's built-in `SmtpClient` handles email). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with (curl SMTP support ships with modern macOS). Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
 
 ---
 
@@ -72,6 +72,34 @@ Windows needs no dependencies at all (PowerShell parses JSON natively). macOS ne
 - NTP time synchronization
 - **Quorum margin tracking** — counts online oracles via `getoracles true` using `heartbeat_status` (stable across MuSig2 round transitions, matches dashboard's "Online Heartbeats" metric), compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries
 
+### v2.6.0: email notifications + auto update-check
+
+**Email notifications (closes #17).** Every red/yellow/green state change and the 12-hour summary now fires on Discord AND email, off the same triggers. Off by default — flip `EMAIL_ENABLED=true` in your config and set `EMAIL_TO`/`SMTP_SERVER`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`. Sends via `curl`'s built-in SMTP (no `mailx`, no `postfix`, no `sendmail` — stock Ubuntu ships SMTP-capable curl). Subjects carry the severity (`[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]`) so inbox scanning works without opening cards, and the `NETWORK_LABEL` prefix (dual-instance parity with the v2.5.3 Discord titles) means testnet + mainnet emails from one VPS never look ambiguous. Port 587 STARTTLS by default (Gmail/Outlook/Brevo), port 465 implicit TLS supported for legacy setups.
+
+Two setup notes: Gmail requires an App Password (2FA → App passwords; never your account password), and if your ISP blocks SMTP submission from datacenter IPs (SaskTel's Contabo range gets `535 5.7.0 "Authentication disabled due to threshold limitation"`, for example), route through a relay like Brevo, Mailjet, or SendGrid — their free tiers each cover 300+ alerts a day, plenty for oracle monitoring. Full per-platform setup instructions in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md).
+
+New flag: `./oracle-monitor.sh --test-email` verifies your SMTP settings with inline diagnostics for the common failure modes (wrong App Password, wrong port, ISP block, missing curl SMTP support).
+
+**Auto update-check.** The monitor now fetches its own published header from `raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.sh` once per day (per instance, cached in `STATE_DIR`), compares the published `SCRIPT_VERSION` against what's running, and — when a newer version exists — adds a second footer line to every Discord card and email: `⬆️ vX.Y.Z available — https://github.com/BaumerCrypto/digidollar-oracle-tools`. Silent on every failure mode (no curl, timeout, offline, parse fail): the footer stays one line and the monitor itself is completely unaffected. Set `UPDATE_CHECK="no"` to disable. Never fetches and never writes the cache in `--dry-run` (v2.5.4 dry-run-touches-nothing discipline).
+
+**v2.6.1 cosmetic fix (caught by Aussie Epic).** ⚠️ (U+26A0 + VS16) and ℹ️ (U+2139 + VS16) render as single-width text glyphs in most terminals — the VS16 selector requests emoji presentation but is honored inconsistently — while ✅ 🔴 💀 render as double-width emoji. Net effect in the health summary: every ⚠️/ℹ️ line's label sat one column left of the ✅/🔴 line labels, giving the summary a subtle "some lines look squished" appearance. Every ⚠️ and ℹ️ prefix now carries a second space so all status lines line up at the same column regardless of the terminal's emoji-width handling. No logic change; purely how the terminal `--dry-run` and `--watch` output renders. Discord and email are visually unaffected (both render these as full-width emoji so the extra space just reads as padding). Shipped cross-platform as `2.6.1` / `2.6.1-win.1` / `2.6.1-macos.1`.
+
+### Email alert examples
+
+**Testnet26 Health Summary — red status with issues detected:**
+
+![Email alert — Testnet26 Health Summary red](email-alert-testnet.jpg)
+
+**Mainnet Health Summary — green all-clear (pre-activation standby pattern):**
+
+![Email alert — Mainnet Health Summary green](email-alert-mainnet.jpg)
+
+**Mainnet Health Summary with auto update-check footer active — same green card as above, plus the second footer line the monitor adds when a newer published version exists on GitHub:**
+
+![Email alert — Mainnet with update-available footer](email-alert-mainnet-update.jpg)
+
+All three cards carry the `NETWORK_LABEL` subject prefix, the severity tag, and the same footer stamp as the Discord cards. When a newer version exists on GitHub main, the footer gains its second line automatically (the `⬆️ vX.Y.Z available — https://github.com/BaumerCrypto/digidollar-oracle-tools` line) — no config change needed. The `https://` scheme is included so email clients auto-linkify the URL universally, including Outlook desktop and corporate gateways that only linkify explicit-scheme URLs (v2.6.1).
+
 ### DigiDollar activation status handling
 
 Before DigiDollar BIP9 activates on your target chain, the oracle RPCs (`listoracle`, `getoracleprice`, `getoracles`) return no data — the deployment simply isn't live yet. Without special handling, a monitor pointed at a mainnet node right now would fire red alerts every 5 minutes for oracle down, price unknown, and quorum unavailable, even though nothing is actually broken.
@@ -84,18 +112,18 @@ This is why a pre-activation mainnet monitor shows an all-green health summary w
 
 ### What it sends
 
-Discord embeds — color-coded:
+Discord embeds and (v2.6.0+) plain-text emails — color-coded / severity-tagged:
 
-- 🔴 **Red** — critical (daemon down, oracle stopped, chain stuck, quorum at edge or lost)
-- 🟡 **Yellow** — warnings (low peers, low disk, stale price, degraded consensus, NTP desync, quorum getting thin, swap pressure)
-- 🟢 **Green** — recovery confirmations (quorum healthy, margin improving)
-- 🔵 **Blue** — 12-hour status summary, plus ℹ️ INFO lines for pre-activation standby state
-- **Card titles** carry the `NETWORK_LABEL` from your config on *every* alert — health summaries (`Testnet26 Health Summary`), individual checks (`Mainnet — 🔴 Node Down`), and the `--test` alert — so dual-instance operators can tell which daemon fired an alert at a glance without opening the card (v2.5.3)
-- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.5.6 — digibyte-maxi (ID 17)`)
+- 🔴 **Red** / `[ALERT]` — critical (daemon down, oracle stopped, chain stuck, quorum at edge or lost)
+- 🟡 **Yellow** / `[WARNING]` — warnings (low peers, low disk, stale price, degraded consensus, NTP desync, quorum getting thin, swap pressure)
+- 🟢 **Green** / `[RESOLVED]` — recovery confirmations (quorum healthy, margin improving)
+- 🔵 **Blue** / `[INFO]` — 12-hour status summary, plus ℹ️ INFO lines for pre-activation standby state
+- **Card titles and email Subject lines** carry the `NETWORK_LABEL` from your config on *every* alert — health summaries (`Testnet26 Health Summary`), individual checks (`Mainnet — 🔴 Node Down`), and the `--test` alert — so dual-instance operators can tell which daemon fired an alert at a glance without opening the card (v2.5.3, mirrored into emails at the `send_email` chokepoint in v2.6.0)
+- **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.6.1 — digibyte-maxi (ID 17)`). When an update is available, the footer gains a second line: `⬆️ v2.6.2 available — https://github.com/BaumerCrypto/digidollar-oracle-tools` (v2.6.0)
 
 State files in `~/.oracle-monitor/` prevent the same alert firing every 5 minutes — you get notified once when something breaks and once again when it recovers. Quorum tracking uses a single `quorum_state` file that stores the current band and timestamp, with cooldown and hysteresis to prevent alert flapping during network volatility.
 
-All timestamps inside alerts are in UTC for unambiguous reading across timezones. Discord's footer time auto-converts to each viewer's local time.
+All timestamps inside alerts are in UTC for unambiguous reading across timezones. Discord's footer time auto-converts to each viewer's local time; email footers include an explicit local-time `Time:` line.
 
 ### Discord alert examples
 
@@ -107,15 +135,16 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 
 ![Quorum Alerts](Discord_alert-Quorum2.jpg)
 
-_The Quorum1 image is a current v2.5.6 Testnet26 health summary — the day-to-day view most operators see. The Quorum2 image (quorum state transitions) is older and will be refreshed when an organic quorum event provides a fresh capture, likely post-mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29)._
+_The Quorum1 image is a current Testnet26 health summary — the day-to-day view most operators see. The Quorum2 image (quorum state transitions) is older and will be refreshed when an organic quorum event provides a fresh capture, likely post-mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29)._
 
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS) — for Windows and macOS, see [Platform support](#platform-support) above
 - DigiByte Core **v9.26.4** (also compatible with v9.26.2/v9.26.3 and RC44–RC46 — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles` RPCs)
 - `jq` (for JSON parsing — install with `sudo apt install jq`)
-- `curl`
+- `curl` with SMTP support (stock Ubuntu ships this — verify with `curl --version | grep smtp`)
 - A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
+- (Optional, for email) SMTP credentials — Gmail App Password, Outlook, Brevo relay, or your own provider
 
 ### Setup
 
@@ -130,15 +159,16 @@ _The Quorum1 image is a current v2.5.6 Testnet26 health summary — the day-to-d
 ```bash
    mkdir -p ~/.oracle-monitor
    cp config.template ~/.oracle-monitor/config
+   chmod 600 ~/.oracle-monitor/config    # keep SMTP password out of world-readable files
 ```
 
 3. Edit the config file with your settings:
 ```bash
    nano ~/.oracle-monitor/config
 ```
-   Set your Discord webhook URL, oracle ID, and oracle name. For mainnet, change `CLI="digibyte-cli"`.
+   Set your Discord webhook URL, oracle ID, and oracle name. For mainnet, change `CLI="digibyte-cli"`. To enable email, set `EMAIL_ENABLED=true` and fill in the SMTP block — see the template's inline docs for Gmail App Password / Outlook / Brevo setup.
 
-4. Test with `--dry-run` (runs all checks, prints to terminal, skips Discord):
+4. Test with `--dry-run` (runs all checks, prints to terminal, skips Discord + email):
 ```bash
    ./oracle-monitor.sh --dry-run
 ```
@@ -147,14 +177,20 @@ _The Quorum1 image is a current v2.5.6 Testnet26 health summary — the day-to-d
 ```bash
    ./oracle-monitor.sh --test
 ```
-   You should see a test alert appear in your Discord channel.
+   You should see a test alert appear in your Discord channel. If email is also enabled, a test email lands in your inbox at the same time.
 
-6. Test a full health summary:
+6. Test email alone (v2.6.0):
+```bash
+   ./oracle-monitor.sh --test-email
+```
+   Sends a test email through your configured SMTP. Reports success or one of the common failure modes with a diagnostic hint.
+
+7. Test a full health summary:
 ```bash
    ./oracle-monitor.sh --summary
 ```
 
-7. Add to cron (`crontab -e`):
+8. Add to cron (`crontab -e`):
 ```cron
    */5 * * * * $HOME/oracle-monitor.sh 2>/dev/null
    0 */12 * * * $HOME/oracle-monitor.sh --summary 2>/dev/null
@@ -165,9 +201,10 @@ _The Quorum1 image is a current v2.5.6 Testnet26 health summary — the day-to-d
 | Flag | What it does |
 |------|-------------|
 | *(none)* | Normal health check — alerts only on problems or recovery |
-| `--summary` | Full status summary — always sends to Discord |
-| `--dry-run` | Runs all checks, prints to terminal, skips Discord, no state changes |
-| `--test` | Sends a test embed to Discord to verify webhook |
+| `--summary` | Full status summary — always sends to Discord + email |
+| `--dry-run` | Runs all checks, prints to terminal, skips Discord + email, no state changes |
+| `--test` | Sends a test embed to Discord to verify webhook (also fires the email test if `EMAIL_ENABLED=true`) |
+| `--test-email` | Sends a test email to verify SMTP settings — inline diagnostics for the common failure modes (v2.6.0) |
 | `--config /path` | Use alternate config file — enables dual-instance monitoring (v2.3+) |
 
 ### Configuration options
@@ -177,8 +214,17 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `DISCORD_WEBHOOK` | *(empty)* | Discord webhook URL for alerts |
+| `EMAIL_ENABLED` | `false` | Set to `true` to fire the same alerts as Discord to `EMAIL_TO` via SMTP (v2.6.0) |
+| `EMAIL_TO` | *(empty)* | Recipient email address (v2.6.0) |
+| `SMTP_SERVER` | `smtp.gmail.com` | SMTP server hostname (v2.6.0) |
+| `SMTP_PORT` | `587` | 587 for STARTTLS (Gmail/Outlook/Brevo default), 465 for implicit TLS (v2.6.0) |
+| `SMTP_USER` | *(empty)* | SMTP login — usually your full email address (v2.6.0) |
+| `SMTP_PASS` | *(empty)* | SMTP password. Gmail: **App Password**, not account password (v2.6.0) |
+| `SMTP_FROM` | *(empty)* | `"Display Name <you@example.com>"` — empty = use `SMTP_USER` (v2.6.0) |
+| `UPDATE_CHECK` | `yes` | Set to `no` to disable the daily GitHub version check (v2.6.0) |
+| `UPDATE_CHECK_TTL` | `86400` | Seconds between GitHub fetches — default 1 day (v2.6.0) |
 | `ORACLE_ID` | `0` | Your oracle slot ID |
-| `ORACLE_NAME` | `my-oracle` | Your oracle name (shown in Discord embeds) |
+| `ORACLE_NAME` | `my-oracle` | Your oracle name (shown in Discord embeds and email footer) |
 | `CLI` | `digibyte-cli -testnet` | RPC command. Use `digibyte-cli` for mainnet |
 | `WALLET_FLAG` | `-rpcwallet=oracle` | Wallet flag for RPC calls |
 | `MIN_PEERS` | `3` | Minimum peer count before alerting |
@@ -275,7 +321,7 @@ Both scripts parse specific fields from DigiByte Core RPCs. If a future RC renam
 
 ## `oracle-network-status.sh`
 
-Community-facing Gitter bot that posts oracle network health summaries to the [DigiDollar Gitter channel](https://app.gitter.im/#/room/#digidollar:gitter.im) every 12 hours. Unlike `oracle-monitor.sh` (which watches your own node and alerts you privately via Discord), this script monitors the entire oracle network and reports publicly.
+Community-facing Gitter bot that posts oracle network health summaries to the [DigiDollar Gitter channel](https://app.gitter.im/#/room/#digidollar:gitter.im) every 12 hours. Unlike `oracle-monitor.sh` (which watches your own node and alerts you privately via Discord + email), this script monitors the entire oracle network and reports publicly.
 
 ### What it reports
 
@@ -445,11 +491,11 @@ ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-rost
 
 ### Note on running your own instance
 
-This script is the reference implementation for the Gitter network status bot posting to `#digidollar:gitter.im`. First deployed 2026-06-16 (v1.2, GitHub issue #18), maintained and iterated continuously since. Currently at v1.6.2 with dual-instance testnet + mainnet monitoring running under my authorship.
+This script is the reference implementation for the Gitter network status bot posting to `#digidollar:gitter.im`. First deployed 2026-06-16 (v1.2, GitHub issue #18), maintained and iterated continuously since. Currently at v1.6.5 with dual-instance testnet + mainnet monitoring running under my authorship.
 
 **ONE bot per network is sufficient to serve the room.** Running a second instance against the same Gitter channel produces duplicate posts, splits @ mention tracking, and confuses operators. My testnet + mainnet instances (using `--config` for dual-instance) currently cover the network and coordinate with Jared and DigiSwarm on cadence and content.
 
-If you want to monitor your own oracle privately, use `oracle-monitor.sh` with a Discord webhook to your own channel. That's the intended pair: `oracle-monitor.sh` for private per-operator alerts, `oracle-network-status.sh` for the shared community status feed.
+If you want to monitor your own oracle privately, use `oracle-monitor.sh` with a Discord webhook and/or SMTP credentials to your own channel/inbox. That's the intended pair: `oracle-monitor.sh` for private per-operator alerts (Discord + email), `oracle-network-status.sh` for the shared community status feed.
 
 If you have ideas to improve the reference implementation (compliance rules, new sections, additional RPC data, better formatting), open an issue or PR on this repo. Contributions have shaped every version since v1.2, and I welcome more. Bastian's "any v9.26 will do" rule became the default `ACCEPTED_VERSIONS` list in v1.6. Aussie Epic's suggestions shaped the disk alert phrasing in the monitor. That collaboration is the point.
 
@@ -472,10 +518,10 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | DigiByte Core | v9.26.4 (also compatible with v9.26.2, v9.26.3, and RC44/RC45/RC46) |
 | Chain | testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.5.6 |
-| oracle-monitor.ps1 | v2.5.6-win.1 |
-| oracle-monitor-macos.sh | v2.5.6-macos.1 |
-| oracle-network-status.sh | v1.6.3 |
+| oracle-monitor.sh | v2.6.1 |
+| oracle-monitor.ps1 | v2.6.1-win.1 |
+| oracle-monitor-macos.sh | v2.6.1-macos.1 |
+| oracle-network-status.sh | v1.6.5 |
 
 If you're running a different release and something breaks, please open an issue.
 

@@ -1,26 +1,29 @@
 #!/bin/bash
 ###############################################################################
-# oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord Alerts (macOS)
-# Version: 2.5.6-macos.1
+# oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
+# Version: 2.6.1-macos.1
 #
-# macOS port of my oracle-monitor.sh v2.5.3 (Linux). Same checks, same quorum
+# macOS port of my oracle-monitor.sh v2.6.1 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
-# guard, same auto-detect for headless vs Qt wallet — BSD/macOS-native
-# commands. Written for the stock /bin/bash 3.2 that ships with every Mac
-# (no Homebrew bash needed). The only dependency is jq.
+# guard, same auto-detect for headless vs Qt wallet, same email-plus-Discord
+# dual-channel alerts, same daily update check — BSD/macOS-native commands.
+# Written for the stock /bin/bash 3.2 that ships with every Mac (no Homebrew
+# bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.5.6-macos.1"
+readonly SCRIPT_VERSION="2.6.1-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
 #   2. chmod +x ~/oracle-monitor-macos.sh
 #   3. Install jq (one time): brew install jq
 #   4. Create config: mkdir -p ~/.oracle-monitor && cp config-macos.template ~/.oracle-monitor/config
-#   5. Edit config: Set your Discord webhook URL and oracle settings
+#   5. Edit config: Set your Discord webhook URL, oracle settings, and
+#      (optionally) email settings — see the EMAIL section in the template
 #   6. Test it: ./oracle-monitor-macos.sh --dry-run
 #   7. Test webhook: ./oracle-monitor-macos.sh --test
-#   8. Add to cron: crontab -e
+#   8. Test email (if enabled): ./oracle-monitor-macos.sh --test-email
+#   9. Add to cron: crontab -e
 #      */5 * * * * /Users/YOUR_USER/oracle-monitor-macos.sh 2>/dev/null
 #      0 */12 * * * /Users/YOUR_USER/oracle-monitor-macos.sh --summary 2>/dev/null
 #
@@ -38,12 +41,13 @@ readonly SCRIPT_VERSION="2.5.6-macos.1"
 #
 # FLAGS:
 #   (none)     Normal health check — alerts only on problems/recovery
-#   --summary  Full status summary — always sends to Discord
-#   --dry-run  Runs all checks, prints to terminal, skips Discord, no state changes
+#   --summary  Full status summary — always sends to Discord + email
+#   --dry-run  Runs all checks, prints to terminal, skips Discord + email, no state changes
 #   --watch    Live console dashboard — refreshes the full status every 60s
 #              (or --watch 30 for 30s). Never alerts, never touches state:
 #              safe to leave open in a Terminal window alongside cron.
 #   --test     Sends a test embed to Discord to verify webhook
+#   --test-email    Sends a test email to verify SMTP settings
 #   --config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CRON SCHEDULE:
@@ -51,9 +55,63 @@ readonly SCRIPT_VERSION="2.5.6-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.6.1-macos.1 — Cosmetic fix matching Linux v2.6.1 (caught by Aussie
+#            Epic). ⚠️ (U+26A0 + VS16) and ℹ️ (U+2139 + VS16) render as
+#            single-width text glyphs in most terminals — the VS16
+#            selector requests emoji presentation but is honored
+#            inconsistently — while ✅ 🔴 💀 render as double-width
+#            emoji. Net effect in the health summary: every ⚠️/ℹ️
+#            line's label sat one column left of the ✅/🔴 line labels,
+#            giving the summary a subtle-but-persistent "some lines
+#            look squished" appearance. Every ⚠️ and ℹ️ prefix now
+#            carries a second space so all status lines line up at the
+#            same column regardless of the terminal's emoji-width
+#            handling. Applies to DETAILS summary lines, alert titles,
+#            and the top status header ("⚠️  N Warnings"). No logic
+#            change; no alert path change — purely how the output
+#            renders. In Discord and email the double-space is visually
+#            harmless (both render these as full-width emoji so the
+#            extra space reads as intentional padding). Also: the
+#            update-available footer URL now includes the https://
+#            scheme so email clients (including Outlook desktop and
+#            corporate gateways that only linkify explicit-scheme URLs)
+#            auto-linkify it universally. One-character change in
+#            build_footer.
+#   v2.6.0-macos.1 — Two features, one release. Matches Linux v2.6.0 line by line.
+#            (1) EMAIL NOTIFICATIONS (closes #17). New send_email() fires
+#            on the same triggers as Discord — red/yellow/green state
+#            changes plus the 12-hour summary — via curl's built-in SMTP
+#            support (no mailx/postfix/sendmail needed; curl ships with
+#            SMTP on every modern macOS). Config-driven: EMAIL_ENABLED,
+#            EMAIL_TO, SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASS,
+#            SMTP_FROM. Port 587 = STARTTLS (Gmail/Outlook/Brevo default),
+#            465 = implicit TLS. Gmail requires an App Password (2FA →
+#            App passwords), never the account password. Subjects carry
+#            severity ([ALERT]/[WARNING]/[RESOLVED]/[INFO]) and the
+#            NETWORK_LABEL prefix (dual-instance parity with v2.5.3-
+#            macos.1 Discord titles, applied at the send_email
+#            chokepoint). New --test-email flag verifies SMTP settings
+#            with inline diagnostics for the common failure modes.
+#            Backup channel if Discord is down; primary channel for
+#            operators who don't use Discord/Slack/Telegram.
+#            (2) UPDATE CHECK. New check_for_update() fetches this
+#            script's own published header from the GitHub main branch
+#            (raw.githubusercontent.com — the same URL the repo's
+#            publish-verification flow already trusts), extracts the
+#            published SCRIPT_VERSION, and compares via sort -V. When a
+#            newer version exists, every Discord card and email gains a
+#            second footer line: "⬆️ vX.Y.Z available — <repo url>".
+#            No new repo files — the version source IS the shipped
+#            script header, so it can never drift from what operators
+#            actually download. UPDATE_CHECK="yes" by default; silent on
+#            every failure mode (no curl, timeout, offline, parse failure
+#            → footer simply stays one line, monitor unaffected). Result
+#            cached per-instance for UPDATE_CHECK_TTL seconds (default
+#            86400 = one GitHub fetch per day per instance). Never
+#            fetches and never writes cache in --dry-run.
 #   v2.5.6-macos.1 — Cosmetic fix matching Linux v2.5.6. The MuSig2
 #          summary line now carries its own status icon (✅ complete,
-#          ℹ️ in progress, ⚠️ parse failure) so it renders consistently
+#          ℹ️  in progress, ⚠️  parse failure) so it renders consistently
 #          alongside the other health lines instead of floating with a
 #          bare three-space indent. Redundant "✓" and "($state)" suffix
 #          dropped since the icon carries that meaning. No behavior
@@ -109,7 +167,7 @@ readonly SCRIPT_VERSION="2.5.6-macos.1"
 #          and send_summary() (--dry-run/--summary/--watch route through
 #          send_summary, so the pre-flight must live in every entry).
 #          check_oracle, check_price, check_services, check_quorum all
-#          downgrade "no data" to standby INFO instead of red while
+#          downgrade "no data" to standby INFO instead of red alert while
 #          DD_ACTIVE=false. check_version now reads $CLI getnetworkinfo →
 #          .subversion instead of a raw `digibyted --version` invocation
 #          (which failed for Qt-wallet operators — no digibyted binary
@@ -141,6 +199,9 @@ readonly SCRIPT_VERSION="2.5.6-macos.1"
 #          bash-3.2 compatible (stock macOS /bin/bash).
 #
 #   Linux lineage this port tracks (see oracle-monitor.sh for details):
+#   v2.6.1 — cosmetic spacing fix         v2.6.0 — email + update-check (#17)
+#   v2.5.6 — MuSig2 status icon           v2.5.5 — disk total+used% + DATADIR
+#   v2.5.4 — full-repo audit fixes        v2.5.3 — NETWORK_LABEL chokepoint
 #   v2.5.2 — headless/Qt auto-detect      v2.5.1 — version + label + footer
 #   v2.5 — DD BIP9 guard (#27)            v2.4 — swap pressure (#26)
 #   v2.3 — --config dual-instance (#23)   v2.2 — heartbeat_status quorum
@@ -174,16 +235,16 @@ while [ $# -gt 0 ]; do
         --config)
             if [ -z "${2:-}" ] || [[ "${2:-}" == --* ]]; then
                 echo "ERROR: --config requires a path argument."
-                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --watch [seconds]]"
+                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --test-email | --watch [seconds]]"
                 exit 1
             fi
             CONFIG_ARG="$2"
             shift 2
             ;;
-        --dry-run|--summary|--test)
+        --dry-run|--summary|--test|--test-email)
             if [ -n "$ACTION_FLAG" ]; then
                 echo "ERROR: Cannot combine $ACTION_FLAG and $1."
-                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --watch [seconds]]"
+                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --test-email | --watch [seconds]]"
                 exit 1
             fi
             ACTION_FLAG="$1"
@@ -192,7 +253,7 @@ while [ $# -gt 0 ]; do
         --watch)
             if [ -n "$ACTION_FLAG" ]; then
                 echo "ERROR: Cannot combine $ACTION_FLAG and $1."
-                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --watch [seconds]]"
+                echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --test-email | --watch [seconds]]"
                 exit 1
             fi
             ACTION_FLAG="--watch"
@@ -205,7 +266,7 @@ while [ $# -gt 0 ]; do
             fi
             ;;
         *)
-            echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --watch [seconds]]"
+            echo "Usage: $0 [--config /path] [--dry-run | --summary | --test | --test-email | --watch [seconds]]"
             exit 1
             ;;
     esac
@@ -218,6 +279,27 @@ done
 # Discord webhook URL — get this from your Discord server settings
 # Server Settings > Integrations > Webhooks > New Webhook > Copy URL
 DISCORD_WEBHOOK=""
+
+# Email notifications (v2.6.0-macos.1) — set EMAIL_ENABLED=true in the
+# config to activate. Fires on the same triggers as Discord. Uses curl's
+# built-in SMTP support (verify with: curl --version | grep smtp —
+# standard on modern macOS). See config-macos.template for Gmail App
+# Password setup.
+EMAIL_ENABLED=false
+EMAIL_TO=""           # Recipient address
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT=587         # 587 = STARTTLS (Gmail/Outlook), 465 = implicit TLS
+SMTP_USER=""          # SMTP login (usually your full email address)
+SMTP_PASS=""          # Gmail: 16-char App Password — NOT your account password
+SMTP_FROM=""          # "Display Name <you@example.com>" — empty = use SMTP_USER
+
+# Update check (v2.6.0-macos.1) — compares this script's version against
+# the published copy on GitHub main once per UPDATE_CHECK_TTL seconds.
+# When a newer version exists, Discord cards and emails gain a second
+# footer line. Silent on any failure. Set UPDATE_CHECK="no" to disable.
+UPDATE_CHECK="yes"
+UPDATE_CHECK_URL="https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor-macos.sh"
+UPDATE_CHECK_TTL=86400
 
 # Oracle settings
 ORACLE_ID=0
@@ -324,7 +406,72 @@ mkdir -p "$STATE_DIR"
 DRY_RUN=false
 
 # ============================================================================
-# DISCORD NOTIFICATION FUNCTIONS
+# UPDATE CHECK (v2.6.0-macos.1)
+# ============================================================================
+# Fetches the published script header from GitHub main and compares
+# SCRIPT_VERSION. The version source is the shipped file itself — no
+# separate VERSION file to drift. Cached per instance (STATE_DIR) for
+# UPDATE_CHECK_TTL seconds. Memoized per run. Every failure mode is
+# silent: the footer just stays one line and the monitor is unaffected.
+# Never called in --dry-run (callers sit below the dry-run early return),
+# so dry-run never fetches and never writes the cache file.
+
+UPDATE_AVAILABLE=""
+UPDATE_CHECKED=false
+
+check_for_update() {
+    [ "$UPDATE_CHECKED" = true ] && return 0
+    UPDATE_CHECKED=true
+    [ "${UPDATE_CHECK:-yes}" = "yes" ] || return 0
+
+    local cache_file="${STATE_DIR}/update_check_cache"
+    local now cached_ts remote_ver=""
+    now=$(date +%s)
+
+    # Serve from cache while fresh (line 1 = epoch of last attempt,
+    # line 2 = version found, empty on a failed fetch)
+    if [ -f "$cache_file" ]; then
+        cached_ts=$(sed -n '1p' "$cache_file" 2>/dev/null)
+        if [[ "$cached_ts" =~ ^[0-9]+$ ]] && [ $((now - cached_ts)) -lt "${UPDATE_CHECK_TTL:-86400}" ]; then
+            remote_ver=$(sed -n '2p' "$cache_file" 2>/dev/null)
+        fi
+    fi
+
+    # Cache miss or expired — fetch the published header (5s cap so a
+    # GitHub outage can't stall a cron run). Cache the attempt either
+    # way: a failed fetch caches empty, which stays silent and defers
+    # the retry to the next TTL window instead of hammering on failure.
+    if [ ! -f "$cache_file" ] || ! [[ "${cached_ts:-}" =~ ^[0-9]+$ ]] || [ $((now - ${cached_ts:-0})) -ge "${UPDATE_CHECK_TTL:-86400}" ]; then
+        remote_ver=$(curl -sf --max-time 5 "$UPDATE_CHECK_URL" 2>/dev/null \
+            | grep -m1 '^readonly SCRIPT_VERSION=' \
+            | cut -d'"' -f2)
+        printf '%s\n%s\n' "$now" "$remote_ver" > "$cache_file" 2>/dev/null
+    fi
+
+    # Newer only: sort -V picks the highest; if that isn't what we're
+    # running, an update exists. Running a dev version ahead of the
+    # published one correctly stays silent.
+    if [ -n "$remote_ver" ] && [ "$remote_ver" != "$SCRIPT_VERSION" ]; then
+        local newest
+        newest=$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$remote_ver" | sort -V | tail -1)
+        [ "$newest" = "$remote_ver" ] && UPDATE_AVAILABLE="$remote_ver"
+    fi
+}
+
+# Footer for Discord cards and emails — one line normally, two when an
+# update is available. Single chokepoint so every card and email agrees.
+build_footer() {
+    check_for_update
+    local footer="Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)"
+    if [ -n "$UPDATE_AVAILABLE" ]; then
+        footer="${footer}
+⬆️ v${UPDATE_AVAILABLE} available — https://github.com/BaumerCrypto/digidollar-oracle-tools"
+    fi
+    printf '%s' "$footer"
+}
+
+# ============================================================================
+# NOTIFICATION FUNCTIONS — DISCORD + EMAIL
 # ============================================================================
 
 send_discord() {
@@ -351,21 +498,112 @@ send_discord() {
 
     # v2.5.4-macos.1: payload built with jq -n so quotes/backslashes in
     # RPC-derived text can't silently break the webhook POST.
+    # v2.6.0-macos.1: footer via build_footer() — gains a second line
+    # when a newer published version exists.
     local payload
     payload=$(jq -n \
         --arg title "$title" \
         --arg desc "$message" \
         --argjson color "$color" \
-        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg footer "$(build_footer)" \
         --arg ts "$timestamp" \
         '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
 }
 
-alert_red()    { send_discord 16711680 "$1" "$2"; }
-alert_yellow() { send_discord 16776960 "$1" "$2"; }
-alert_green()  { send_discord 65280    "$1" "$2"; }
-alert_blue()   { send_discord 3447003  "$1" "$2"; }
+# ----------------------------------------------------------------------------
+# send_email (v2.6.0-macos.1, closes #17) — plain-text email via curl SMTP.
+# Same triggers as Discord. No mailx/postfix/sendmail — curl ships with
+# SMTP support on modern macOS (verify: curl --version | grep smtp).
+# Port 587 (default) = STARTTLS via --ssl-reqd; port 465 = smtps://.
+# NETWORK_LABEL prefixes the subject at this single chokepoint, matching
+# the v2.5.3-macos.1 Discord title pattern, so dual-instance operators
+# can tell which daemon fired the email from the subject line alone.
+# ----------------------------------------------------------------------------
+
+send_email() {
+    local subject="$1"
+    local body="$2"
+
+    [ "${EMAIL_ENABLED}" = "true" ] || return 0
+
+    # v2.5.3-macos.1 parity: label the subject for dual-instance operators
+    if [ -n "${NETWORK_LABEL:-}" ]; then
+        subject="${NETWORK_LABEL} — ${subject}"
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        echo "[$(date)] EMAIL would send to ${EMAIL_TO:-<not set>}: $subject"
+        return 0
+    fi
+
+    # Essential fields — silently skip if not configured (mirrors the
+    # empty-DISCORD_WEBHOOK behavior; --test-email diagnoses loudly)
+    if [ -z "$EMAIL_TO" ] || [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ]; then
+        return 0
+    fi
+
+    # Resolve display From and bare envelope address for --mail-from.
+    # Handles both "Display Name <addr>" and bare "addr" formats.
+    local from_display="${SMTP_FROM:-Oracle Monitor <${SMTP_USER}>}"
+    local from_addr="$from_display"
+    if [[ "$from_addr" == *"<"*">"* ]]; then
+        from_addr="${from_addr##*<}"
+        from_addr="${from_addr%%>*}"
+    fi
+
+    # Port 465 = implicit TLS (smtps://); everything else = STARTTLS
+    local smtp_url
+    if [ "${SMTP_PORT:-587}" = "465" ]; then
+        smtp_url="smtps://${SMTP_SERVER:-smtp.gmail.com}:465"
+    else
+        smtp_url="smtp://${SMTP_SERVER:-smtp.gmail.com}:${SMTP_PORT:-587}"
+    fi
+
+    # Body: alert text + timestamp + the same footer the Discord cards
+    # carry (including the update line when one is available)
+    local full_body
+    full_body="${body}
+
+Time: $(date '+%Y-%m-%d %H:%M:%S %Z')
+$(build_footer)"
+
+    # RFC 2822 message via temp file → curl --upload-file
+    # macOS mktemp requires the template to end in a suffix-free tail
+    # ending with X's — using .eml suffix like Linux is not portable to
+    # BSD mktemp, so we generate the base then rename.
+    local tmpfile
+    tmpfile=$(mktemp -t oracle-alert 2>/dev/null) || return 1
+
+    printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n' \
+        "$from_display" "$EMAIL_TO" "$subject" "$full_body" > "$tmpfile"
+
+    # curl on macOS supports the same options as Linux curl for SMTP.
+    # --max-time (not `timeout`, which isn't in BSD) bounds total send time.
+    local curl_opts=(
+        --silent
+        --url "$smtp_url"
+        --mail-from "$from_addr"
+        --mail-rcpt "$EMAIL_TO"
+        --user "${SMTP_USER}:${SMTP_PASS}"
+        --upload-file "$tmpfile"
+        --max-time 30
+    )
+    [ "${SMTP_PORT:-587}" != "465" ] && curl_opts+=(--ssl-reqd)
+
+    curl "${curl_opts[@]}" > /dev/null 2>&1
+    local exit_code=$?
+    rm -f "$tmpfile"
+    return $exit_code
+}
+
+# v2.6.0-macos.1: each wrapper fires both channels on the same event.
+# Email subjects carry the severity so inbox scanning works without
+# opening.
+alert_red()    { send_discord 16711680 "$1" "$2"; send_email "[ALERT] $1" "$2"; }
+alert_yellow() { send_discord 16776960 "$1" "$2"; send_email "[WARNING] $1" "$2"; }
+alert_green()  { send_discord 65280    "$1" "$2"; send_email "[RESOLVED] $1" "$2"; }
+alert_blue()   { send_discord 3447003  "$1" "$2"; send_email "[INFO] $1" "$2"; }
 
 # Only alert once per issue until it clears
 # In --dry-run mode: always returns "should alert" but does NOT touch state files
@@ -497,7 +735,7 @@ check_chain() {
     chain_info=$($CLI getblockchaininfo 2>/dev/null)
 
     if [ $? -ne 0 ]; then
-        DETAILS+="⚠️ Chain: could not query\n"
+        DETAILS+="⚠️  Chain: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -511,9 +749,9 @@ check_chain() {
 
     if [ "$behind" -gt "$MAX_CHAIN_BEHIND" ]; then
         if should_alert "chain_behind"; then
-            alert_yellow "⚠️ Chain Behind" "Node is $behind blocks behind (block $blocks / header $headers)."
+            alert_yellow "⚠️  Chain Behind" "Node is $behind blocks behind (block $blocks / header $headers)."
         fi
-        DETAILS+="⚠️ Chain: $behind blocks behind ($blocks / $headers)\n"
+        DETAILS+="⚠️  Chain: $behind blocks behind ($blocks / $headers)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "chain_behind"; then
@@ -529,16 +767,16 @@ check_peers() {
     peer_count=$($CLI getconnectioncount 2>/dev/null)
 
     if [ $? -ne 0 ]; then
-        DETAILS+="⚠️ Peers: could not query\n"
+        DETAILS+="⚠️  Peers: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
 
     if [ "$peer_count" -lt "$MIN_PEERS" ]; then
         if should_alert "low_peers"; then
-            alert_yellow "⚠️ Low Peers" "Only $peer_count peers connected (minimum: $MIN_PEERS)."
+            alert_yellow "⚠️  Low Peers" "Only $peer_count peers connected (minimum: $MIN_PEERS)."
         fi
-        DETAILS+="⚠️ Peers: $peer_count (low!)\n"
+        DETAILS+="⚠️  Peers: $peer_count (low!)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "low_peers"; then
@@ -562,7 +800,7 @@ check_price() {
             DETAILS+="ℹ️  Price: pending (DigiDollar deployment: $DD_STATUS)\n"
             return
         fi
-        DETAILS+="⚠️ Price: could not query\n"
+        DETAILS+="⚠️  Price: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -576,20 +814,20 @@ check_price() {
     # Check 5a: Stale price (v1.0)
     if [ "$is_stale" = "true" ]; then
         if should_alert "stale_price"; then
-            alert_yellow "⚠️ Stale Price" "Oracle consensus price is stale. Last price: \$$price_usd"
+            alert_yellow "⚠️  Stale Price" "Oracle consensus price is stale. Last price: \$$price_usd"
         fi
-        DETAILS+="⚠️ Price: STALE — \$$price_usd\n"
+        DETAILS+="⚠️  Price: STALE — \$$price_usd\n"
         WARNINGS=$((WARNINGS + 1))
     # Check 5b: Error status — real problem, alert operator (v1.4)
     elif [ "$status" = "error" ]; then
         if should_alert "degraded_consensus"; then
-            alert_yellow "⚠️ Degraded Consensus" "Network status: $status | Price: \$$price_usd | Oracles: $oracle_count. Network aggregation is failing."
+            alert_yellow "⚠️  Degraded Consensus" "Network status: $status | Price: \$$price_usd | Oracles: $oracle_count. Network aggregation is failing."
         fi
-        DETAILS+="⚠️ Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
+        DETAILS+="⚠️  Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
         WARNINGS=$((WARNINGS + 1))
     # Check 5c: Warning status — network notice, no Discord alert (v1.4)
     elif [ "$status" = "warning" ]; then
-        DETAILS+="⚠️ Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
+        DETAILS+="⚠️  Price: \$$price_usd (status: $status, oracles: $oracle_count)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "stale_price"; then
@@ -612,7 +850,7 @@ check_disk() {
     total_gb=$(echo "$df_line" | awk '{print $2}')
 
     if [ -z "$avail_gb" ] || ! [[ "$avail_gb" =~ ^[0-9]+$ ]]; then
-        DETAILS+="⚠️ Disk: could not query $DISK_PATH\n"
+        DETAILS+="⚠️  Disk: could not query $DISK_PATH\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -659,7 +897,7 @@ check_memory() {
     vm=$(vm_stat 2>/dev/null)
 
     if [ -z "$page_size" ] || [ -z "$total_bytes" ] || [ -z "$vm" ]; then
-        DETAILS+="⚠️ Memory: could not query\n"
+        DETAILS+="⚠️  Memory: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -677,16 +915,16 @@ check_memory() {
         awk '{avail=($3+$4+$5)*$1; used=$2-avail; printf "%.0f", used/$2*100}')
 
     if [ -z "$mem_pct" ]; then
-        DETAILS+="⚠️ Memory: could not query\n"
+        DETAILS+="⚠️  Memory: could not query\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
 
     if [ "$mem_pct" -gt "$MEM_THRESHOLD" ]; then
         if should_alert "high_memory"; then
-            alert_yellow "⚠️ High Memory" "Memory usage at ${mem_pct}%."
+            alert_yellow "⚠️  High Memory" "Memory usage at ${mem_pct}%."
         fi
-        DETAILS+="⚠️ Memory: ${mem_pct}% used\n"
+        DETAILS+="⚠️  Memory: ${mem_pct}% used\n"
         WARNINGS=$((WARNINGS + 1))
     else
         clear_alert "high_memory" > /dev/null 2>&1
@@ -737,9 +975,9 @@ check_swap() {
 
     if [ "$swap_used_mb" -gt "$SWAP_THRESHOLD_MB" ]; then
         if should_alert "swap_pressure"; then
-            alert_yellow "⚠️ Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB. Memory pressure detected — check running processes."
+            alert_yellow "⚠️  Swap Pressure" "Swap usage: ${swap_used_mb}MB of ${swap_total_mb}MB. Memory pressure detected — check running processes."
         fi
-        DETAILS+="⚠️ Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure!)\n"
+        DETAILS+="⚠️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (pressure!)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "swap_pressure"; then
@@ -792,7 +1030,7 @@ check_services() {
     elif [ "$oracle_status" = "true" ]; then
         DETAILS+="✅ Oracle process: running\n"
     else
-        DETAILS+="⚠️ Oracle process: $oracle_status\n"
+        DETAILS+="⚠️  Oracle process: $oracle_status\n"
         WARNINGS=$((WARNINGS + 1))
     fi
 }
@@ -822,7 +1060,7 @@ check_ntp() {
     offset=$(sntp -t 3 "$NTP_SERVER" 2>/dev/null | awk '/\+\/-/ {print $1; exit}')
 
     if [ -z "$offset" ]; then
-        DETAILS+="⚠️ NTP: could not verify (sntp query failed)\n"
+        DETAILS+="⚠️  NTP: could not verify (sntp query failed)\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -833,9 +1071,9 @@ check_ntp() {
 
     if [ "$in_range" != "yes" ]; then
         if should_alert "ntp_desync"; then
-            alert_yellow "⚠️ NTP Desync" "System clock is off by ${offset}s vs $NTP_SERVER. Oracle timestamps may drift. Run: sudo sntp -sS $NTP_SERVER"
+            alert_yellow "⚠️  NTP Desync" "System clock is off by ${offset}s vs $NTP_SERVER. Oracle timestamps may drift. Run: sudo sntp -sS $NTP_SERVER"
         fi
-        DETAILS+="⚠️ NTP: offset ${offset}s (NOT synchronized)\n"
+        DETAILS+="⚠️  NTP: offset ${offset}s (NOT synchronized)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "ntp_desync"; then
@@ -886,7 +1124,7 @@ check_quorum() {
     deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
 
     if [ $? -ne 0 ] || [ -z "$deploy_info" ]; then
-        DETAILS+="⚠️ Quorum: could not query deployment info\n"
+        DETAILS+="⚠️  Quorum: could not query deployment info\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -903,14 +1141,14 @@ check_quorum() {
     musig_sigs=$(echo "$deploy_info" | jq -r '.musig2_session.partial_sig_count // "?"' 2>/dev/null)
 
     # v2.5.6-macos.1: musig_detail now carries its own status icon so
-    # the line renders consistently alongside the other ✅/ℹ️/⚠️ health
+    # the line renders consistently alongside the other ✅/ℹ️/⚠️  health
     # lines instead of floating with a bare three-space indent.
     if [ "$musig_state" = "complete" ]; then
         musig_detail="✅ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_epoch" != "?" ]; then
-        musig_detail="ℹ️ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
+        musig_detail="ℹ️  MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
     else
-        musig_detail="⚠️ MuSig2: could not parse session"
+        musig_detail="⚠️  MuSig2: could not parse session"
     fi
 
     # --- Step 2: Count reporting oracles ---
@@ -922,7 +1160,7 @@ check_quorum() {
             DETAILS+="ℹ️  Quorum: standby (DigiDollar deployment: $DD_STATUS)\n"
             return
         fi
-        DETAILS+="⚠️ Quorum: could not query oracles\n"
+        DETAILS+="⚠️  Quorum: could not query oracles\n"
         WARNINGS=$((WARNINGS + 1))
         return
     fi
@@ -940,7 +1178,7 @@ check_quorum() {
     # Fallback: if jq filter fails (field name mismatch), use roster count
     if [ -z "$reporting" ] || [ "$reporting" = "null" ]; then
         reporting="$roster_count"
-        DETAILS+="⚠️ Quorum: could not count reporting oracles (heartbeat_status field missing?) — using roster count\n"
+        DETAILS+="⚠️  Quorum: could not count reporting oracles (heartbeat_status field missing?) — using roster count\n"
         WARNINGS=$((WARNINGS + 1))
     fi
 
@@ -1037,7 +1275,7 @@ check_quorum() {
                     alert_red "🔴 Quorum At Edge" "Only $reporting/$total_slots oracles reporting (need $consensus_required). Network at risk if more drop."
                     ;;
                 yellow)
-                    alert_yellow "⚠️ Quorum Getting Thin" "$reporting/$total_slots oracles reporting (need $consensus_required). Comfortable is ${QUORUM_GREEN}+."
+                    alert_yellow "⚠️  Quorum Getting Thin" "$reporting/$total_slots oracles reporting (need $consensus_required). Comfortable is ${QUORUM_GREEN}+."
                     ;;
             esac
         else
@@ -1072,7 +1310,7 @@ check_quorum() {
             ISSUES=$((ISSUES + 1))
             ;;
         yellow)
-            DETAILS+="⚠️ Quorum: $reporting/$total_slots reporting (need $consensus_required) — getting thin\n"
+            DETAILS+="⚠️  Quorum: $reporting/$total_slots reporting (need $consensus_required) — getting thin\n"
             WARNINGS=$((WARNINGS + 1))
             ;;
         green)
@@ -1109,7 +1347,7 @@ send_summary() {
         status="🔴 $ISSUES Issues Detected"
     elif [ $WARNINGS -gt 0 ]; then
         color=16776960  # yellow
-        status="⚠️ $WARNINGS Warnings"
+        status="⚠️  $WARNINGS Warnings"
     fi
 
     local timestamp
@@ -1126,16 +1364,29 @@ send_summary() {
         echo "======================================="
         echo -e "$desc"
         echo "======================================="
+        # v2.6.0-macos.1: no webhook configured but email is → still email
+        # the summary (email-only operators are the point of #17). Dry-run
+        # is handled inside send_email (prints, sends nothing).
+        if [ "$DRY_RUN" != true ] && [ "${EMAIL_ENABLED}" = "true" ]; then
+            send_email "$status — Health Summary" "$desc"
+        fi
         return
     fi
 
+    # v2.6.0-macos.1: email fires alongside the Discord card. send_email
+    # prefixes NETWORK_LABEL itself (chokepoint), so the subject passed
+    # here is label-free to avoid doubling.
+    send_email "$status — Health Summary" "$desc"
+
     # v2.5.4-macos.1: payload built with jq -n (matches send_discord).
+    # v2.6.0-macos.1: footer via build_footer() — two lines when an
+    # update exists.
     local payload
     payload=$(jq -n \
         --arg title "$status — ${NETWORK_LABEL:-Oracle} Health Summary" \
         --arg desc "$desc" \
         --argjson color "$color" \
-        --arg footer "Oracle Monitor v${SCRIPT_VERSION} — $ORACLE_NAME (ID $ORACLE_ID)" \
+        --arg footer "$(build_footer)" \
         --arg ts "$timestamp" \
         '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
     curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
@@ -1228,6 +1479,41 @@ case "$ACTION_FLAG" in
         # prefixes NETWORK_LABEL) — no more doubled label in the card.
         alert_blue "🔧 Test Alert" "Oracle monitor is configured and working! $(date)"
         echo "Check your Discord channel."
+        if [ "${EMAIL_ENABLED}" = "true" ]; then
+            echo "(Email is enabled — a test email was sent too. To test email alone: $0 --test-email)"
+        fi
+        ;;
+    --test-email)
+        echo "Testing email configuration..."
+        if [ "${EMAIL_ENABLED}" != "true" ]; then
+            echo "ERROR: EMAIL_ENABLED is not set to true."
+            echo "       Set it in: $CONFIG_FILE"
+            exit 1
+        fi
+        if [ -z "$EMAIL_TO" ] || [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASS" ]; then
+            echo "ERROR: EMAIL_TO, SMTP_USER, and SMTP_PASS must all be set."
+            echo "       Configure them in: $CONFIG_FILE"
+            exit 1
+        fi
+        if ! curl --version 2>/dev/null | grep -qi smtp; then
+            echo "ERROR: this curl build has no SMTP support."
+            echo "       Check: curl --version | grep -i smtp"
+            echo "       (Modern macOS ships with SMTP-capable curl by default.)"
+            exit 1
+        fi
+        echo "Sending test email to $EMAIL_TO via ${SMTP_SERVER}:${SMTP_PORT}..."
+        if send_email "🔧 Test Email" "Oracle monitor email alerts are configured and working."; then
+            echo "✓ Test email sent — check your inbox (and spam folder)."
+        else
+            echo "✗ Send failed. Check SMTP settings in: $CONFIG_FILE"
+            echo "  Common issues:"
+            echo "    - Gmail: SMTP_PASS must be an App Password, not your account password"
+            echo "      (Google Account > Security > 2-Step Verification, then App passwords)"
+            echo "    - Outlook/365: SMTP_SERVER=smtp.office365.com, SMTP_PORT=587"
+            echo "    - Wrong SMTP_PORT for your provider (587=STARTTLS, 465=implicit TLS)"
+            echo "    - macOS firewall or corporate network blocking outbound SMTP"
+            exit 1
+        fi
         ;;
     *)
         run_checks
