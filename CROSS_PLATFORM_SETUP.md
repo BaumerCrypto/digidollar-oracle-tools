@@ -2,7 +2,7 @@
 
 _By digibyte-maxi (Oracle ID 17) · [@BaumerCrypto2.0](https://x.com/BaumerCrypto2_0)_
 
-My [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh) started life on Linux because that's where my oracle runs. But plenty of DigiDollar oracle operators run their nodes on Windows or macOS, and they deserve the same Discord alerts — and now the same email alerts — when something goes sideways. This guide covers the two native ports I built to close [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11) and the v2.6.0 dual-channel work that closed [issue #17](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/17):
+My [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh) started life on Linux because that's where my oracle runs. But plenty of DigiDollar oracle operators run their nodes on Windows or macOS, and they deserve the same Discord alerts - and now the same email alerts - when something goes sideways. This guide covers the two native ports I built to close [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11) and the v2.6.0 dual-channel work that closed [issue #17](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/17):
 
 | Your platform | Monitor script | Config template |
 |---|---|---|
@@ -152,13 +152,13 @@ The SMTP knobs are the same across Linux, macOS, and Windows — only the config
 | SendGrid | `smtp.sendgrid.net` | 587 | Free tier: 100 emails/day. `SMTP_USER = apikey` (literal string), `SMTP_PASS` is the API key. |
 | Your own SMTP | your host | 587 | Any auth-capable submission server works. |
 
-Port 587 (STARTTLS) is the recommended and most portable setting. Some providers also offer port 465 (implicit TLS) — supported by Linux and macOS (curl handles both), **not** natively supported by Windows PowerShell 5.1 (.NET's built-in SmtpClient does not handle port 465). If you're on Windows, use 587.
+Port 587 (STARTTLS) is the recommended and most portable setting. Some providers also offer port 465 (implicit TLS) - supported by Linux and macOS (curl handles both), **not** natively supported by Windows PowerShell 5.1 (.NET's built-in SmtpClient does not handle port 465). If you're on Windows, use 587.
 
 ### Gmail — the full walkthrough
 
 1. Enable 2-Step Verification: Google Account → Security → 2-Step Verification → follow the prompts.
 2. Create an App Password: Google Account → Security → **App passwords** (Google hides this until 2-Step is on; search "App passwords" in the account search bar if you can't find it in the menu).
-3. Give it a name (e.g. "Oracle Monitor"), click Generate. Google shows you a 16-character password *once*. Copy it. Spaces don't matter — the SMTP server ignores them.
+3. Give it a name (e.g. "Oracle Monitor"), click Generate. Google shows you a 16-character password *once*. Copy it. Spaces don't matter - the SMTP server ignores them.
 4. In your config file:
    ```
    SMTP_SERVER="smtp.gmail.com"
@@ -166,7 +166,7 @@ Port 587 (STARTTLS) is the recommended and most portable setting. Some providers
    SMTP_USER="your.full.address@gmail.com"
    SMTP_PASS="the 16 character App Password"
    ```
-5. Run `--test-email` / `-TestEmail`. If it fails, the most common cause is that `SMTP_PASS` still has your real account password — Gmail rejects that from SMTP even if it works on the web.
+5. Run `--test-email` / `-TestEmail`. If it fails, the most common cause is that `SMTP_PASS` still has your real account password - Gmail rejects that from SMTP even if it works on the web.
 
 ### When your ISP blocks direct SMTP — use a relay
 
@@ -219,7 +219,7 @@ All three config files expose the same knobs with the same defaults: alert thres
 
 New in v2.6.0, on all three platforms: email as a second alert channel (identical trigger set to Discord — configured via `EMAIL_ENABLED`, `EMAIL_TO`, and the SMTP block; the `NETWORK_LABEL` prefix is added at the send chokepoint, mirroring the Discord title behavior from v2.5.3 so dual-instance operators can tell testnet from mainnet in the inbox at a glance) and an auto update-check that quietly notifies you via a footer line on every Discord card and email when a newer version of the monitor is published to GitHub main.
 
-New in v2.5.5, still applies to all three platforms (both enhancements suggested by Aussie Epic): the disk line shows free/total/used% (`✅ Disk: 156GB free of 200GB (22% used)`), and the Low Disk Space alert names your DigiByte datadir on its own line so you know exactly where to clean up. The path comes from the `DATADIR` config variable — no RPC returns the datadir, so you declare it. Each template ships the platform-correct default: `$HOME/.digibyte` (Linux), `$HOME/Library/Application Support/DigiByte` (macOS), `$env:APPDATA\DigiByte` (Windows). Single-instance operators leave the default. Dual-instance operators (testnet + mainnet on one box) should set it per config file — testnet points at the `testnet26` subdirectory, mainnet at the top level — so the same full disk produces two distinct, actionable cards instead of two ambiguous ones:
+New in v2.5.5, still applies to all three platforms (both enhancements suggested by Aussie Epic): the disk line shows free/total/used% (`✅ Disk: 156GB free of 200GB (22% used)`), and the Low Disk Space alert names your DigiByte datadir on its own line so you know exactly where to clean up. The path comes from the `DATADIR` config variable - no RPC returns the datadir, so you declare it. Each template ships the platform-correct default: `$HOME/.digibyte` (Linux), `$HOME/Library/Application Support/DigiByte` (macOS), `$env:APPDATA\DigiByte` (Windows). Single-instance operators leave the default. Dual-instance operators (testnet + mainnet on one box) should set it per config file - testnet points at the `testnet26` subdirectory, mainnet at the top level — so the same full disk produces two distinct, actionable cards instead of two ambiguous ones:
 
 ```
 Testnet26 — 🔴 Low Disk Space
@@ -235,7 +235,7 @@ Clean up old logs or unused chain data in:
 /home/YOU/.digibyte/
 ```
 
-`NETWORK_LABEL` tells you which daemon fired; `DATADIR` tells you which directory to prune. The testnet subdirectory tracks the current testnet reset (`testnet26`, `testnet27`, ...) — bump it when the testnet resets.
+`NETWORK_LABEL` tells you which daemon fired; `DATADIR` tells you which directory to prune. The testnet subdirectory tracks the current testnet reset (`testnet26`, `testnet27`, ...) - bump it when the testnet resets.
 
 Switching any platform from testnet to mainnet is one config line: drop the `-testnet` argument (`$CLI_ARGS = @()` on Windows, `CLI="digibyte-cli"` on macOS/Linux).
 
