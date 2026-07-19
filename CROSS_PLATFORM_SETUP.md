@@ -170,11 +170,11 @@ Port 587 (STARTTLS) is the recommended and most portable setting. Some providers
 
 ### When your ISP blocks direct SMTP — use a relay
 
-Some ISPs restrict outbound SMTP submission from datacenter, VPS, or cloud IP ranges — Contabo, DigitalOcean, and other budget VPS hosts often trip an anti-abuse throttle on major providers. What you'll see is a `535 5.7.0 "Authentication disabled due to threshold limitation"` (or similar) from the SMTP server even with correct credentials. Rotating the password or waiting doesn't help — the block is IP-based.
+Some email providers throttle outbound SMTP submission from datacenter, VPS, or cloud IP ranges. Budget VPS hosts (Contabo, DigitalOcean, and similar) often trip an anti-abuse block on the big telco and ISP email providers (Rogers, Telus, AT&T, Verizon, T-Mobile, and the like). What you'll see is a `535 5.7.0 "Authentication disabled due to threshold limitation"` (or similar) from the SMTP server even with correct credentials. Rotating the password or waiting doesn't help, because the block is IP-based, not credential-based.
 
-The fix is to route through an SMTP relay service. Their free tiers are more than enough for oracle alerts (each of the providers above handles at least 100/day, and the monitor typically sends fewer than 10). Setup on the relay side is straightforward: sign up, verify the sender address you want your alerts to come from (usually your own email address), grab an SMTP key from the dashboard, and drop it into `SMTP_USER`/`SMTP_PASS`. **Brevo** is what my Contabo VPS uses in production — free tier 300/day, IP-lockable keys, standard STARTTLS on 587. **Mailjet** and **SendGrid** are equivalent alternatives if you prefer them or hit issues.
+The fix is to route through an SMTP relay service. Their free tiers are more than enough for oracle alerts (each of the providers below handles at least 100/day, and the monitor typically sends fewer than 10). Setup on the relay side is straightforward: sign up, verify the sender address you want your alerts to come from (usually your own email address), grab an SMTP key from the dashboard, and drop it into `SMTP_USER`/`SMTP_PASS`. **Brevo is the relay I recommend**, and it's what runs in production on my Contabo VPS: free tier 300/day, IP-lockable keys, standard STARTTLS on 587, and the simplest verified-sender flow of the three. **Mailjet** and **SendGrid** are equivalent alternatives if you prefer them or hit issues.
 
-Detailed Brevo setup (the flow that closed #17 on my VPS):
+**Detailed Brevo setup (recommended relay).** This is the exact flow that got email working on my VPS:
 
 1. Sign up at [brevo.com](https://www.brevo.com/) with the same email you want alerts sent to.
 2. The signup email address becomes a "verified sender" automatically — no separate verification email to click.
@@ -206,7 +206,7 @@ Detailed Brevo setup (the flow that closed #17 on my VPS):
 ### Linux-specific notes
 
 - Stock Ubuntu curl ships with SMTP support (verify: `curl --version | grep smtp`). Nothing to install.
-- Some ISPs (I mentioned SaskTel's Contabo range above) throttle direct SMTP submission from datacenter IPs — you'll see `535 5.7.0` errors even with correct credentials, and rotating the password doesn't help. Use Brevo, Mailjet, or SendGrid as a relay. The `--test-email` diagnostic prints the failure reason so you can identify this quickly.
+- Some email providers (the big telco and ISP mail hosts, as noted in the relay section above) throttle direct SMTP submission from datacenter IPs. You'll see `535 5.7.0` errors even with correct credentials, and rotating the password doesn't help. Route through a relay (Brevo recommended; Mailjet or SendGrid also work). The `--test-email` diagnostic prints the failure reason so you can identify this quickly.
 - The config file should be `chmod 600` on the VPS so only your user can read it. If you keep a config backup off-VPS, encrypt it — the SMTP password is a live credential.
 
 ---
