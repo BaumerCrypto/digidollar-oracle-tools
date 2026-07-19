@@ -1,9 +1,9 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
-# Version: 2.6.2-macos.1
+# Version: 2.6.3-macos.1
 #
-# macOS port of my oracle-monitor.sh v2.6.2 (Linux). Same checks, same quorum
+# macOS port of my oracle-monitor.sh v2.6.3 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
 # guard, same auto-detect for headless vs Qt wallet, same email-plus-Discord
 # dual-channel alerts, same daily update check — BSD/macOS-native commands.
@@ -11,7 +11,7 @@
 # bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.6.2-macos.1"
+readonly SCRIPT_VERSION="2.6.3-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -55,6 +55,23 @@ readonly SCRIPT_VERSION="2.6.2-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.6.3-macos.1 — Two operator-suggested additions. Matches Linux v2.6.3.
+#            (1) DIGIBYTE VERSION NOW UPDATE-AWARE (caught by Baumer). The
+#            node-version line compares the running version against the
+#            latest DigiByte Core release on GitHub (releases/latest, cached
+#            daily) and colours the icon: ✅ green when on the latest release
+#            or newer, ℹ️ blue "— vX.Y.Z available" when a newer release is
+#            out. Falls back to the plain ℹ️ line when GitHub is unreachable
+#            or disabled; never fetches or writes its cache in --dry-run.
+#            New config: DIGIBYTE_UPDATE_CHECK ("yes"), DIGIBYTE_UPDATE_TTL
+#            (86400).
+#            (2) LAUNCHD_LABEL="none" ESCAPE HATCH (caught by Aussie Epic on
+#            Linux). Operators who deliberately run headless WITHOUT launchd
+#            can set LAUNCHD_LABEL="none" (also "skip"/"disabled") to
+#            replace the launchd check with an ℹ️ "check disabled" line.
+#            (macOS already fell back to a green process line on an empty
+#            label; this adds the explicit opt-out for parity with Linux's
+#            SERVICE_NAME="none".)
 #   v2.6.2-macos.1 — Three operator-suggested fixes (two cosmetic, one
 #            alert-logic). Matches Linux v2.6.2.
 #            (1) VERSION LINE CLEANUP. check_version now strips the
@@ -326,6 +343,15 @@ UPDATE_CHECK="yes"
 UPDATE_CHECK_URL="https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor-macos.sh"
 UPDATE_CHECK_TTL=86400
 
+# DigiByte Core version check (v2.6.3-macos.1) — compares the running
+# node's version against the latest DigiByte Core release on GitHub once
+# per DIGIBYTE_UPDATE_TTL seconds. The node-version line turns ✅ green
+# when you're on the latest release (or newer) and stays ℹ️ blue with a
+# "vX.Y.Z available" note when a newer release exists. Silent on any
+# failure (blue line, no note). Set to "no" to disable.
+DIGIBYTE_UPDATE_CHECK="yes"
+DIGIBYTE_UPDATE_TTL=86400
+
 # Oracle settings
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
@@ -500,6 +526,61 @@ build_footer() {
 ⬆️ v${UPDATE_AVAILABLE} available — https://github.com/BaumerCrypto/digidollar-oracle-tools"
     fi
     printf '%s' "$footer"
+}
+
+# ============================================================================
+# DIGIBYTE CORE VERSION CHECK (v2.6.3-macos.1)
+# ============================================================================
+# Fetches the latest DigiByte Core release tag from the GitHub releases API,
+# cached per instance (STATE_DIR) for DIGIBYTE_UPDATE_TTL seconds. Same
+# discipline as the self-update check: memoized per run, silent on failure
+# (returns empty → check_version falls back to the plain ℹ️ line), and —
+# because check_version runs during --dry-run — it never fetches or writes
+# the cache in dry-run (serves any stale cache read-only). Matches Linux.
+
+DIGIBYTE_LATEST=""
+DIGIBYTE_CHECKED=false
+
+get_latest_digibyte_release() {
+    if [ "$DIGIBYTE_CHECKED" = true ]; then
+        printf '%s' "$DIGIBYTE_LATEST"
+        return 0
+    fi
+    DIGIBYTE_CHECKED=true
+
+    [ "${DIGIBYTE_UPDATE_CHECK:-yes}" = "yes" ] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local cache_file="${STATE_DIR}/digibyte_latest_cache"
+    local ttl="${DIGIBYTE_UPDATE_TTL:-86400}"
+    local now cached_ts
+    now=$(date +%s)
+
+    if [ -f "$cache_file" ]; then
+        cached_ts=$(sed -n '1p' "$cache_file" 2>/dev/null)
+        if [[ "$cached_ts" =~ ^[0-9]+$ ]] && [ $((now - cached_ts)) -lt "$ttl" ]; then
+            DIGIBYTE_LATEST=$(sed -n '2p' "$cache_file" 2>/dev/null)
+            printf '%s' "$DIGIBYTE_LATEST"
+            return 0
+        fi
+    fi
+
+    # v2.5.4 dry-run discipline: never fetch or write the cache in --dry-run.
+    if [ "${DRY_RUN:-false}" = true ]; then
+        [ -f "$cache_file" ] && DIGIBYTE_LATEST=$(sed -n '2p' "$cache_file" 2>/dev/null)
+        printf '%s' "$DIGIBYTE_LATEST"
+        return 0
+    fi
+
+    local latest
+    latest=$(curl -sf --max-time 8 \
+        -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/DigiByte-Core/digibyte/releases/latest" 2>/dev/null \
+        | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')
+    printf '%s\n%s\n' "$now" "$latest" > "$cache_file" 2>/dev/null
+
+    DIGIBYTE_LATEST="$latest"
+    printf '%s' "$DIGIBYTE_LATEST"
 }
 
 # ============================================================================
@@ -1084,7 +1165,18 @@ check_services() {
         DigiByte-Qt|Digibyte-Qt|digibyte-qt) is_qt=true ;;
     esac
 
-    if [ "$is_qt" = true ]; then
+    # v2.6.3-macos.1: explicit opt-out (first branch, takes precedence) for
+    # operators who deliberately run headless WITHOUT launchd.
+    # LAUNCHD_LABEL="none" (or "skip"/"disabled") replaces the launchd check
+    # with an informational line and skips the rest of this block.
+    local launchd_disabled=false
+    case "$LAUNCHD_LABEL" in
+        none|None|NONE|skip|Skip|SKIP|disabled|Disabled|DISABLED) launchd_disabled=true ;;
+    esac
+
+    if [ "$launchd_disabled" = true ]; then
+        DETAILS+="ℹ️  launchd: check disabled (LAUNCHD_LABEL=\"none\")\n"
+    elif [ "$is_qt" = true ]; then
         DETAILS+="ℹ️  launchd: n/a — Qt wallet is the running daemon\n"
     elif [ -n "$LAUNCHD_LABEL" ]; then
         # v2.5.4-macos.1: exact label match on launchctl's third column —
@@ -1125,14 +1217,34 @@ check_services() {
 # binary in dual-daemon setups. RPC always reports what's actually
 # running and works identically for Qt and headless.
 check_version() {
-    local version
+    local version running_ver display_ver latest_ver
     version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion 2>/dev/null)
-    if [ -n "$version" ] && [ "$version" != "null" ]; then
-        # v2.6.2-macos.1: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
-        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
-        # to network peers but noise to operators reading a health summary.
-        version=$(echo "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
-        DETAILS+="ℹ️  $version\n"
+    if [ -z "$version" ] || [ "$version" = "null" ]; then
+        return
+    fi
+
+    # Bare numeric running version: /DigiByte:9.26.4/ -> 9.26.4
+    running_ver=$(printf '%s' "$version" | sed -n 's|^/[^:]*:\(.*\)/$|\1|p')
+
+    # v2.6.2-macos.1: strip the /Name:Version/ wrapper for display.
+    # /DigiByte:9.26.4/ -> DigiByte: v9.26.4
+    display_ver=$(printf '%s' "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
+
+    # v2.6.3-macos.1: compare against the latest DigiByte Core release.
+    #   ✅ green — on the latest (or newer); ℹ️ blue "— vX available" when a
+    #   newer release exists; ℹ️ plain blue when it can't be determined.
+    latest_ver=$(get_latest_digibyte_release)
+
+    if [ -n "$latest_ver" ] && [ -n "$running_ver" ]; then
+        local newest
+        newest=$(printf '%s\n%s\n' "$running_ver" "$latest_ver" | sort -V | tail -1)
+        if [ "$running_ver" = "$latest_ver" ] || [ "$newest" = "$running_ver" ]; then
+            DETAILS+="✅ $display_ver\n"
+        else
+            DETAILS+="ℹ️  $display_ver — v${latest_ver} available\n"
+        fi
+    else
+        DETAILS+="ℹ️  $display_ver\n"
     fi
 }
 

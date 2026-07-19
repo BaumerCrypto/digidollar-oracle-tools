@@ -67,6 +67,15 @@ SMTP_FROM="Oracle Monitor <your-address@gmail.com>"
 UPDATE_CHECK="yes"
 # UPDATE_CHECK_TTL=86400    # seconds between GitHub fetches (default 1 day)
 
+# ---- DigiByte Core Version Check (oracle-monitor-macos.sh v2.6.3+) ----
+# Once a day the monitor also compares your running node's version against
+# the latest DigiByte Core release on GitHub. The node-version line turns
+# ✅ green when you're on the latest release (or newer), and stays ℹ️ blue
+# with a "— vX.Y.Z available" note when a newer release is out. Silent on
+# any failure (falls back to the plain blue line). Set to "no" to disable.
+DIGIBYTE_UPDATE_CHECK="yes"
+# DIGIBYTE_UPDATE_TTL=86400  # seconds between GitHub release checks (default 1 day)
+
 # ---- Oracle Identity ----
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
@@ -113,7 +122,13 @@ WALLET_FLAG="-rpcwallet=oracle"
 # will report its loaded/not-loaded state. Ignored automatically when a
 # Qt wallet is the detected daemon (v2.5.2-macos.1+).
 #   LAUNCHD_LABEL="org.digibyte.digibyted"
+#
+# Leaving this "" already stands in with a green process line (no red). To
+# state explicitly that you don't use launchd, set LAUNCHD_LABEL="none"
+# (v2.6.3+; "skip"/"disabled" also work) for an informational "launchd:
+# check disabled" line — the parity twin of Linux's SERVICE_NAME="none".
 LAUNCHD_LABEL=""
+# LAUNCHD_LABEL="none"         # explicitly disable the launchd check
 
 # ---- Disk Watch Path ----
 # The volume containing this path is watched for free space. The default

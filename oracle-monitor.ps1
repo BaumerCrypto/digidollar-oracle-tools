@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.6.2-win.1
+# Version: 2.6.3-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.6.2 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.6.3 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet, same
 # email-plus-Discord dual-channel alerts, same daily update check — all
@@ -50,6 +50,22 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.6.3-win.1 — Two operator-suggested additions. Matches Linux v2.6.3.
+#            (1) DIGIBYTE VERSION NOW UPDATE-AWARE (caught by Baumer). The
+#            node-version line compares the running version against the
+#            latest DigiByte Core release on GitHub (releases/latest via
+#            Invoke-RestMethod, cached daily) and colours the icon: green
+#            when on the latest release or newer, blue "— vX.Y.Z available"
+#            when a newer release is out. [System.Version] comparison with a
+#            plain-blue fail-safe when GitHub is unreachable or the version
+#            can't be parsed; never fetches or writes its cache in -DryRun.
+#            New config: $DIGIBYTE_UPDATE_CHECK ("yes"), $DIGIBYTE_UPDATE_TTL
+#            (86400).
+#            (2) SERVICE_NAME="none" ESCAPE HATCH (caught by Aussie Epic on
+#            Linux). Operators who deliberately run without a Windows
+#            service wrapper can set $SERVICE_NAME="none" (also "skip"/
+#            "disabled") to replace the service check with an informational
+#            "check disabled" line instead of a red on a missing service.
 #   v2.6.2-win.1 — Three operator-suggested fixes (two cosmetic, one
 #            alert-logic). Matches Linux v2.6.2.
 #            (1) VERSION LINE CLEANUP. Check-Version now strips the
@@ -241,7 +257,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.6.2-win.1"
+$SCRIPT_VERSION = "2.6.3-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -299,6 +315,15 @@ $SMTP_FROM     = ""                      # "Display Name <you@example.com>" — 
 $UPDATE_CHECK     = "yes"
 $UPDATE_CHECK_URL = "https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.ps1"
 $UPDATE_CHECK_TTL = 86400
+
+# DigiByte Core version check (v2.6.3-win.1) — compares the running node's
+# version against the latest DigiByte Core release on GitHub once per
+# $DIGIBYTE_UPDATE_TTL seconds. The node-version line turns green when
+# you're on the latest release (or newer) and stays blue with a
+# "vX.Y.Z available" note when a newer release exists. Silent on any
+# failure (blue line, no note). Set $DIGIBYTE_UPDATE_CHECK="no" to disable.
+$DIGIBYTE_UPDATE_CHECK = "yes"
+$DIGIBYTE_UPDATE_TTL   = 86400
 
 # Oracle settings
 $ORACLE_ID   = 0
@@ -536,6 +561,79 @@ function Build-Footer {
         $footer = "$footer`n⬆️ v$($script:UpdateAvailable) available — https://github.com/BaumerCrypto/digidollar-oracle-tools"
     }
     return $footer
+}
+
+# ============================================================================
+# DIGIBYTE CORE VERSION CHECK (v2.6.3-win.1)
+# ============================================================================
+# Fetches the latest DigiByte Core release tag from the GitHub releases API,
+# cached per instance ($STATE_DIR) for $DIGIBYTE_UPDATE_TTL seconds. Same
+# discipline as Check-ForUpdate: memoized per run, silent on failure
+# (returns "" → Check-Version falls back to the plain blue line), and —
+# because Check-Version runs during -DryRun — it never fetches or writes
+# the cache in dry-run (serves any stale cache read-only). Matches Linux.
+
+$script:DigibyteLatest  = ""
+$script:DigibyteChecked = $false
+
+function Get-LatestDigibyteRelease {
+    if ($script:DigibyteChecked) { return $script:DigibyteLatest }
+    $script:DigibyteChecked = $true
+    if ("$DIGIBYTE_UPDATE_CHECK" -ne "yes") { return "" }
+
+    $cacheFile = Join-Path $STATE_DIR "digibyte_latest_cache"
+    $now       = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $ttl       = if ($DIGIBYTE_UPDATE_TTL) { [long]$DIGIBYTE_UPDATE_TTL } else { 86400 }
+    $cachedTs  = $null
+
+    # Serve from cache while fresh (line 1 = epoch, line 2 = tag, empty on fail)
+    if (Test-Path $cacheFile) {
+        try {
+            $lines = @(Get-Content $cacheFile -ErrorAction SilentlyContinue)
+            $parsed = [long]0
+            if ($lines.Count -ge 1 -and [long]::TryParse("$($lines[0])".Trim(), [ref]$parsed)) {
+                $cachedTs = $parsed
+                if (($now - $cachedTs) -lt $ttl) {
+                    if ($lines.Count -ge 2) { $script:DigibyteLatest = "$($lines[1])".Trim() }
+                    return $script:DigibyteLatest
+                }
+            }
+        } catch { }
+    }
+
+    # Dry-run discipline: never fetch or write the cache in -DryRun. Serve
+    # whatever (possibly stale) value the cache holds, read-only.
+    if ($script:DRY_RUN) {
+        if (Test-Path $cacheFile) {
+            try {
+                $lines = @(Get-Content $cacheFile -ErrorAction SilentlyContinue)
+                if ($lines.Count -ge 2) { $script:DigibyteLatest = "$($lines[1])".Trim() }
+            } catch { }
+        }
+        return $script:DigibyteLatest
+    }
+
+    # Cache miss or expired — fetch the latest release tag (8s cap). Strip
+    # the leading "v" ("v9.26.4" -> "9.26.4"). Cache the attempt either way.
+    $latest = ""
+    try {
+        $headers = @{ 'User-Agent' = 'oracle-monitor'; 'Accept' = 'application/vnd.github+json' }
+        $resp = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/DigiByte-Core/digibyte/releases/latest" `
+            -TimeoutSec 8 -Headers $headers -UseBasicParsing -ErrorAction Stop
+        if ($null -ne $resp.tag_name) {
+            $latest = ("$($resp.tag_name)").Trim() -replace '^v', ''
+        }
+    } catch {
+        $latest = ""
+    }
+
+    try {
+        "$now`n$latest" | Set-Content -Path $cacheFile -Encoding ASCII -ErrorAction SilentlyContinue
+    } catch { }
+
+    $script:DigibyteLatest = $latest
+    return $script:DigibyteLatest
 }
 
 # ============================================================================
@@ -1155,8 +1253,14 @@ function Check-Swap {
 #         NSSM/service wrappers, so a "not found" red would be misleading.
 # v2.5:   Adds DD_ACTIVE guard for oracle process (standby → INFO not warn).
 function Check-Services {
+    # v2.6.3-win.1: explicit opt-out (first branch, takes precedence) for
+    # operators who deliberately run without a Windows service wrapper.
+    # $SERVICE_NAME="none" (or "skip"/"disabled") replaces the service check
+    # with an informational line instead of a red on a missing service.
+    if ($SERVICE_NAME -match '^(none|skip|disabled)$') {
+        $script:Details.Add('ℹ️  Service: check disabled (SERVICE_NAME="none")')
     # v2.5.2: Qt-skip
-    if ($script:DetectedDaemon -eq "digibyte-qt") {
+    } elseif ($script:DetectedDaemon -eq "digibyte-qt") {
         $script:Details.Add("ℹ️  Service: n/a — Qt wallet is the running daemon")
     } elseif (-not [string]::IsNullOrEmpty($SERVICE_NAME)) {
         $svc = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
@@ -1220,14 +1324,50 @@ function Check-Version {
         } catch { }
     }
 
-    if (-not [string]::IsNullOrEmpty($verLine)) {
-        # v2.6.2-win.1: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
-        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
-        # to network peers but noise to operators reading a health summary.
-        if ($verLine -match '^/([^:]+):(.+)/$') {
-            $verLine = "$($Matches[1]): v$($Matches[2])"
+    if ([string]::IsNullOrEmpty($verLine)) { return }
+
+    # v2.6.2-win.1: strip the bitcoin-legacy /Name:Version/ wrapper for display,
+    # and capture the bare numeric running version for comparison.
+    # /DigiByte:9.26.4/ -> running "9.26.4", display "DigiByte: v9.26.4"
+    $running = ""
+    $display = $verLine
+    if ($verLine -match '^/([^:]+):(.+)/$') {
+        $running = $Matches[2]
+        $display = "$($Matches[1]): v$($Matches[2])"
+    }
+
+    # v2.6.3-win.1: compare against the latest DigiByte Core release.
+    #   green — on the latest (or newer); blue "— vX available" when a newer
+    #   release exists; plain blue when it can't be determined (fail-safe).
+    $latest = Get-LatestDigibyteRelease
+
+    if ((-not [string]::IsNullOrEmpty($latest)) -and (-not [string]::IsNullOrEmpty($running))) {
+        # Normalize to the numeric-dotted base for [version] compare (drops
+        # any rc/hash suffix, e.g. "9.26.0rc46" -> "9.26.0").
+        $rBase = ($running -replace '[^0-9.].*$', '')
+        $lBase = ($latest  -replace '[^0-9.].*$', '')
+        $determined = $false
+        $upToDate   = $false
+        try {
+            $rv = [System.Version]$rBase
+            $lv = [System.Version]$lBase
+            $determined = $true
+            if ($rv -ge $lv) { $upToDate = $true }
+        } catch {
+            $determined = $false
         }
-        $script:Details.Add("ℹ️  $verLine")
+
+        if ($determined) {
+            if ($upToDate) {
+                $script:Details.Add("✅ $display")
+            } else {
+                $script:Details.Add("ℹ️  $display — v$latest available")
+            }
+        } else {
+            $script:Details.Add("ℹ️  $display")
+        }
+    } else {
+        $script:Details.Add("ℹ️  $display")
     }
 }
 

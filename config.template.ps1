@@ -72,6 +72,15 @@ $SMTP_FROM     = "Oracle Monitor <your-address@gmail.com>"
 $UPDATE_CHECK = "yes"
 # $UPDATE_CHECK_TTL = 86400    # seconds between GitHub fetches (default 1 day)
 
+# ---- DigiByte Core Version Check (oracle-monitor.ps1 v2.6.3+) ----
+# Once a day the monitor also compares your running node's version against
+# the latest DigiByte Core release on GitHub. The node-version line turns
+# green when you're on the latest release (or newer), and stays blue with a
+# "— vX.Y.Z available" note when a newer release is out. Silent on any
+# failure (falls back to the plain blue line). Set to "no" to disable.
+$DIGIBYTE_UPDATE_CHECK = "yes"
+# $DIGIBYTE_UPDATE_TTL = 86400  # seconds between GitHub release checks (default 1 day)
+
 # ---- Oracle Identity ----
 $ORACLE_ID   = 0
 $ORACLE_NAME = "my-oracle"
@@ -111,7 +120,12 @@ $DAEMON_PROCESS = ""
 # the service name here and Check #8 will report its Running/Stopped
 # state. Leave "" to fall back to a process check. Ignored automatically
 # when the Qt wallet is the detected daemon (v2.5.2-win.1+).
+#
+# Set $SERVICE_NAME = "none" (v2.6.3+; "skip"/"disabled" also work) to
+# explicitly disable the service check — an informational "check disabled"
+# line instead of a red — if you run digibyted without a service wrapper.
 $SERVICE_NAME = ""
+# $SERVICE_NAME = "none"       # explicitly disable the Windows service check
 
 # ---- Disk ----
 # Drive letter where your DigiByte datadir lives. Default datadir is

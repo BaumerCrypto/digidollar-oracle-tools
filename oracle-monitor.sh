@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.6.2
+# Version: 2.6.3
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.6.2"
+readonly SCRIPT_VERSION="2.6.3"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +35,28 @@ readonly SCRIPT_VERSION="2.6.2"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.6.3 — Two operator-suggested additions.
+#            (1) DIGIBYTE VERSION NOW UPDATE-AWARE (caught by Baumer). The
+#            node-version line (Check 9) compares the running version
+#            against the latest DigiByte Core release on GitHub
+#            (releases/latest, cached daily per instance) and colours the
+#            icon: ✅ green when running the latest release or newer, ℹ️
+#            blue "— vX.Y.Z available" when a newer release is out. Falls
+#            back to the plain ℹ️ line when GitHub is unreachable or the
+#            check is disabled — never blocks a run, and never fetches or
+#            writes its cache during --dry-run. Previously the line was
+#            always blue regardless of whether an update existed. New
+#            config: DIGIBYTE_UPDATE_CHECK ("yes"), DIGIBYTE_UPDATE_TTL
+#            (86400). Uses releases/latest, which GitHub only points at a
+#            real (non-prerelease) release, so operators are never nudged
+#            toward an RC.
+#            (2) SERVICE_NAME="none" ESCAPE HATCH (caught by Aussie Epic).
+#            Operators who deliberately run headless WITHOUT systemd
+#            (tmux/screen, Docker, runit, a hand-started -daemon) can set
+#            SERVICE_NAME="none" (also "skip"/"disabled") to replace the
+#            systemd check with an ℹ️ "check disabled" line instead of a 🔴
+#            on a missing/idle unit. The daemon and oracle-process checks
+#            still run — only the systemd unit lookup is suppressed.
 #   v2.6.2 — Three operator-suggested fixes (two cosmetic, one alert-logic).
 #            (1) VERSION LINE CLEANUP. check_version now strips the
 #            bitcoin-legacy /Name:Version/ user-agent wrapper that
@@ -321,6 +343,15 @@ UPDATE_CHECK="yes"
 UPDATE_CHECK_URL="https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.sh"
 UPDATE_CHECK_TTL=86400
 
+# DigiByte Core version check (v2.6.3) — compares the running node's
+# version against the latest DigiByte Core release on GitHub once per
+# DIGIBYTE_UPDATE_TTL seconds. The node-version line in the health summary
+# turns ✅ green when you're on the latest release (or newer) and stays
+# ℹ️ blue with a "vX.Y.Z available" note when a newer release exists.
+# Silent on any failure (blue line, no note). Set to "no" to disable.
+DIGIBYTE_UPDATE_CHECK="yes"
+DIGIBYTE_UPDATE_TTL=86400
+
 # Oracle settings
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
@@ -481,6 +512,71 @@ build_footer() {
 ⬆️ v${UPDATE_AVAILABLE} available — https://github.com/BaumerCrypto/digidollar-oracle-tools"
     fi
     printf '%s' "$footer"
+}
+
+# ============================================================================
+# DIGIBYTE CORE VERSION CHECK (v2.6.3)
+# ============================================================================
+# Fetches the latest DigiByte Core release tag from the GitHub releases API
+# and caches it per instance (STATE_DIR) for DIGIBYTE_UPDATE_TTL seconds.
+# Same discipline as the self-update check above: memoized per run, silent
+# on every failure (returns empty → check_version falls back to the plain
+# ℹ️ line), and — because check_version runs during --dry-run — it never
+# fetches or writes the cache in dry-run (serves any stale cache read-only).
+# Uses the releases/latest endpoint, which GitHub only points at a real
+# (non-prerelease) release, so operators are never nudged toward an RC.
+
+DIGIBYTE_LATEST=""
+DIGIBYTE_CHECKED=false
+
+get_latest_digibyte_release() {
+    # Memoize per run
+    if [ "$DIGIBYTE_CHECKED" = true ]; then
+        printf '%s' "$DIGIBYTE_LATEST"
+        return 0
+    fi
+    DIGIBYTE_CHECKED=true
+
+    [ "${DIGIBYTE_UPDATE_CHECK:-yes}" = "yes" ] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local cache_file="${STATE_DIR}/digibyte_latest_cache"
+    local ttl="${DIGIBYTE_UPDATE_TTL:-86400}"
+    local now cached_ts
+    now=$(date +%s)
+
+    # Serve from cache while fresh (line 1 = epoch of last attempt,
+    # line 2 = tag found, empty on a failed fetch)
+    if [ -f "$cache_file" ]; then
+        cached_ts=$(sed -n '1p' "$cache_file" 2>/dev/null)
+        if [[ "$cached_ts" =~ ^[0-9]+$ ]] && [ $((now - cached_ts)) -lt "$ttl" ]; then
+            DIGIBYTE_LATEST=$(sed -n '2p' "$cache_file" 2>/dev/null)
+            printf '%s' "$DIGIBYTE_LATEST"
+            return 0
+        fi
+    fi
+
+    # v2.5.4 dry-run discipline: never fetch or write the cache in --dry-run.
+    # Serve whatever (possibly stale) value the cache holds, read-only.
+    if [ "${DRY_RUN:-false}" = true ]; then
+        [ -f "$cache_file" ] && DIGIBYTE_LATEST=$(sed -n '2p' "$cache_file" 2>/dev/null)
+        printf '%s' "$DIGIBYTE_LATEST"
+        return 0
+    fi
+
+    # Cache miss or expired — fetch the latest release tag (8s cap so a
+    # GitHub outage can't stall a cron run). Strip the leading "v" from the
+    # tag ("v9.26.4" -> "9.26.4"). Cache the attempt either way: a failed
+    # fetch caches empty, staying silent until the next TTL window.
+    local latest
+    latest=$(curl -sf --max-time 8 \
+        -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/DigiByte-Core/digibyte/releases/latest" 2>/dev/null \
+        | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')
+    printf '%s\n%s\n' "$now" "$latest" > "$cache_file" 2>/dev/null
+
+    DIGIBYTE_LATEST="$latest"
+    printf '%s' "$DIGIBYTE_LATEST"
 }
 
 # ============================================================================
@@ -1006,20 +1102,34 @@ check_services() {
     local dgb_status oracle_status service_name
     service_name="${SERVICE_NAME:-digibyted.service}"
 
-    # v2.5.2: Skip systemd unit check when the Qt wallet is the running
-    # daemon — most Qt operators launch the GUI outside systemd, so a
-    # `systemctl is-active` on the headless unit is a misleading red.
-    if [ "${DETECTED_DAEMON:-}" = "digibyte-qt" ]; then
-        DETAILS+="ℹ️  Systemd: n/a — Qt wallet is the running daemon\n"
-    else
-        dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
-        if [ "$dgb_status" = "active" ]; then
-            DETAILS+="✅ ${service_name}: active\n"
-        else
-            DETAILS+="🔴 ${service_name}: $dgb_status\n"
-            ISSUES=$((ISSUES + 1))
-        fi
-    fi
+    # v2.6.3: explicit opt-out for operators who deliberately run headless
+    # WITHOUT systemd (tmux/screen, Docker, runit, a hand-started -daemon).
+    # SERVICE_NAME="none" (or "skip"/"disabled") replaces the systemd check
+    # with an informational line instead of a red on a missing/idle unit.
+    # The daemon and oracle-process checks still run — only the systemd
+    # unit lookup is suppressed.
+    case "$service_name" in
+        none|None|NONE|skip|Skip|SKIP|disabled|Disabled|DISABLED)
+            DETAILS+="ℹ️  Systemd: check disabled (SERVICE_NAME=\"none\")\n"
+            ;;
+        *)
+            # v2.5.2: Skip systemd unit check when the Qt wallet is the
+            # running daemon — most Qt operators launch the GUI outside
+            # systemd, so `systemctl is-active` on the headless unit is a
+            # misleading red.
+            if [ "${DETECTED_DAEMON:-}" = "digibyte-qt" ]; then
+                DETAILS+="ℹ️  Systemd: n/a — Qt wallet is the running daemon\n"
+            else
+                dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
+                if [ "$dgb_status" = "active" ]; then
+                    DETAILS+="✅ ${service_name}: active\n"
+                else
+                    DETAILS+="🔴 ${service_name}: $dgb_status\n"
+                    ISSUES=$((ISSUES + 1))
+                fi
+            fi
+            ;;
+    esac
 
     oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
@@ -1033,19 +1143,45 @@ check_services() {
     fi
 }
 
-# --- Check 9: Node version ---
+# --- Check 9: Node version (+ latest-release comparison, v2.6.3) ---
 # v2.5: Read version via RPC (getnetworkinfo → .subversion) instead of
 # `digibyted --version`. The old approach pulled whichever `digibyted`
 # lived in $PATH, which read the wrong binary in dual-daemon setups.
+# v2.6.2: strip the bitcoin-legacy /Name:Version/ wrapper for display.
+# v2.6.3: compare the running version against the latest DigiByte Core
+# release on GitHub and colour the icon accordingly:
+#   ✅ green  — running the latest release (or newer, e.g. an RC ahead)
+#   ℹ️ blue   — a newer release exists ("... — vX.Y.Z available")
+#   ℹ️ blue   — can't determine latest (offline, API down, check disabled):
+#              falls back to the plain v2.6.2 info line, no note.
 check_version() {
-    local version
+    local version running_ver display_ver latest_ver
     version=$($CLI getnetworkinfo 2>/dev/null | jq -r .subversion 2>/dev/null)
-    if [ -n "$version" ] && [ "$version" != "null" ]; then
-        # v2.6.2: strip bitcoin-legacy /Name:Version/ user-agent wrapper.
-        # /DigiByte:9.26.4/ -> DigiByte: v9.26.4. The slashes are meaningful
-        # to network peers but noise to operators reading a health summary.
-        version=$(echo "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
-        DETAILS+="ℹ️  $version\n"
+    if [ -z "$version" ] || [ "$version" = "null" ]; then
+        return
+    fi
+
+    # Bare numeric running version for comparison: /DigiByte:9.26.4/ -> 9.26.4
+    running_ver=$(printf '%s' "$version" | sed -n 's|^/[^:]*:\(.*\)/$|\1|p')
+
+    # Display label (v2.6.2): /DigiByte:9.26.4/ -> DigiByte: v9.26.4
+    display_ver=$(printf '%s' "$version" | sed 's|^/\([^:]*\):\(.*\)/$|\1: v\2|')
+
+    latest_ver=$(get_latest_digibyte_release)
+
+    if [ -n "$latest_ver" ] && [ -n "$running_ver" ]; then
+        local newest
+        newest=$(printf '%s\n%s\n' "$running_ver" "$latest_ver" | sort -V | tail -1)
+        if [ "$running_ver" = "$latest_ver" ] || [ "$newest" = "$running_ver" ]; then
+            # running >= latest — up to date
+            DETAILS+="✅ $display_ver\n"
+        else
+            # a newer release is out
+            DETAILS+="ℹ️  $display_ver — v${latest_ver} available\n"
+        fi
+    else
+        # can't determine latest — fail safe to the plain info line
+        DETAILS+="ℹ️  $display_ver\n"
     fi
 }
 

@@ -63,6 +63,18 @@ SMTP_FROM="Oracle Monitor <your-address@gmail.com>"
 UPDATE_CHECK="yes"
 # UPDATE_CHECK_TTL=86400    # seconds between GitHub fetches (default 1 day)
 
+# ---- DigiByte Core Version Check (oracle-monitor.sh v2.6.3+) ----
+# Once a day the monitor also compares your running node's version against
+# the latest DigiByte Core release on GitHub. The node-version line in the
+# health summary turns ✅ green when you're on the latest release (or
+# newer), and stays ℹ️ blue with a "— vX.Y.Z available" note when a newer
+# release is out. Silent on any failure (offline, timeout, GitHub down) —
+# it falls back to the plain blue line and the monitor is never affected.
+# Uses the releases/latest endpoint, so you're never nudged toward an RC.
+# Set DIGIBYTE_UPDATE_CHECK="no" to disable.
+DIGIBYTE_UPDATE_CHECK="yes"
+# DIGIBYTE_UPDATE_TTL=86400  # seconds between GitHub release checks (default 1 day)
+
 # ---- Oracle Identity ----
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
@@ -165,8 +177,15 @@ PSI_SWAP_THRESHOLD="5.0"   # Linux PSI "some avg10" above this = live pressure
 # For Qt-wallet operators: this setting is ignored — the systemd check
 # auto-skips when digibyte-qt is the detected daemon (v2.5.2+).
 #
+# If you deliberately run headless WITHOUT systemd (tmux/screen, Docker,
+# runit, or a hand-started `digibyted -daemon`), set SERVICE_NAME="none"
+# (v2.6.3+; "skip"/"disabled" also work) so the summary shows an
+# informational "Systemd: check disabled" line instead of a red on a unit
+# that isn't there. The node and oracle-process checks still run.
+#
 # Leave commented out to use the default (digibyted.service).
 # SERVICE_NAME="digibyted.service"
+# SERVICE_NAME="none"          # disable the systemd check entirely
 
 # ---- Quorum Alert Bands (v2.0, tuned in v2.5.1) ----
 # Band thresholds for network-wide oracle liveness.
