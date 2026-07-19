@@ -188,7 +188,9 @@ The fix is to route through an SMTP relay service. Their free tiers are more tha
    SMTP_PASS="xsmtpsib-…the-full-key"
    SMTP_FROM="Your Name <your.address@example.com>"
    ```
-6. Run `--test-email` / `-TestEmail`. First test may hit spam — mark it as not-spam once and the filter typically learns. Adding `brevo.com`, `smtp-relay.brevo.com`, and your own domain as trusted senders in your inbox helps immediately.
+6. Run `--test-email` / `-TestEmail`. Heads up: your alerts arrive from your own address (you're both the verified sender and the recipient), and mail providers often flag self-addressed mail as suspicious, so the first one may land in spam. Mark it as not-spam once and the filter usually learns. To stop it recurring, add your own sending address and your domain to your safe/trusted-senders list, alongside `brevo.com` and `smtp-relay.brevo.com`.
+
+**Official Brevo docs.** For a deeper walkthrough on the two trickiest bits: [Create and manage your SMTP keys](https://help.brevo.com/hc/en-us/articles/7959631848850-Create-and-manage-your-SMTP-keys) covers generating the Standard SMTP key, and [Send transactional emails using Brevo SMTP](https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP) is Brevo's full end-to-end SMTP guide (remember to use an SMTP key, not an API key).
 
 ### Windows-specific notes
 
