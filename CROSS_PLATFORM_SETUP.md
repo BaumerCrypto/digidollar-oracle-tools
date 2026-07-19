@@ -177,9 +177,9 @@ The fix is to route through an SMTP relay service. Their free tiers are more tha
 **Detailed Brevo setup (recommended relay).** This is the exact flow that got email working on my VPS:
 
 1. Sign up at [brevo.com](https://www.brevo.com/) with the same email you want alerts sent to.
-2. The signup email address becomes a "verified sender" automatically — no separate verification email to click.
+2. The signup email address becomes a "verified sender" automatically - no separate verification email to click.
 3. Dashboard → SMTP & API → **SMTP** → generate a Standard SMTP key. Name it something like "Oracle Monitor VPS". Optionally IP-lock it to your VPS address for extra safety.
-4. Copy the SMTP login (looks like `xxx@smtp-brevo.com`) and the key (starts with `xsmtpsib-` and is 90 characters total — the dashboard's "length 64" refers to the body after the prefix, so don't panic that yours looks longer).
+4. Copy the SMTP login (looks like `xxx@smtp-brevo.com`) and the key (starts with `xsmtpsib-` and is 90 characters total - the dashboard's "length 64" refers to the body after the prefix, so don't panic that yours looks longer).
 5. In your config:
    ```
    SMTP_SERVER="smtp-relay.brevo.com"
@@ -194,15 +194,15 @@ The fix is to route through an SMTP relay service. Their free tiers are more tha
 
 ### Windows-specific notes
 
-- Port 465 is not natively supported by PowerShell 5.1's `SmtpClient`. Every major provider offers 587 STARTTLS — use that.
+- Port 465 is not natively supported by PowerShell 5.1's `SmtpClient`. Every major provider offers 587 STARTTLS - use that.
 - Windows Firewall may block outbound port 587 for `powershell.exe` on first send. Windows usually pops a prompt the first time; approve it or add a rule.
 - Corporate proxies: `System.Net.Mail.SmtpClient` in PS 5.1 does not honor Internet Options proxy settings. If you're on a corporate network that requires a proxy for outbound SMTP, talk to your admin about a bypass, or run the monitor from a machine with direct internet.
-- Password storage: `$SMTP_PASS` sits plaintext in the config file. The file lives under your Windows user profile, so it's protected by NTFS permissions to your account. If your machine is shared or you want stronger protection, look at the [SecretManagement module](https://learn.microsoft.com/en-us/powershell/utility-modules/secretmanagement/overview) — the current monitor script reads plaintext, but the module can wrap the retrieval with a per-boot unlock.
+- Password storage: `$SMTP_PASS` sits plaintext in the config file. The file lives under your Windows user profile, so it's protected by NTFS permissions to your account. If your machine is shared or you want stronger protection, look at the [SecretManagement module](https://learn.microsoft.com/en-us/powershell/utility-modules/secretmanagement/overview) - the current monitor script reads plaintext, but the module can wrap the retrieval with a per-boot unlock.
 
 ### macOS-specific notes
 
 - macOS ships curl with SMTP support by default on modern versions (verify with `curl --version | grep smtp`). No install step required.
-- Corporate networks / hotel Wi-Fi may block outbound SMTP even to trusted providers — if `--test-email` works at home but fails elsewhere, that's why.
+- Corporate networks / hotel Wi-Fi may block outbound SMTP even to trusted providers - if `--test-email` works at home but fails elsewhere, that's why.
 - Password storage: `~/.oracle-monitor/config` should be `chmod 600` so only your user can read it. macOS Full Disk Access does not affect the config file itself.
 
 ### Linux-specific notes
