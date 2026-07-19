@@ -96,15 +96,11 @@ Third (caught by Aussie Epic): **the swap alert is now pressure-gated, fixing a 
 
 ![Email alert — Testnet26 Health Summary red](email-alert-testnet.jpg)
 
-**Mainnet Health Summary — green all-clear (pre-activation standby pattern):**
+**Mainnet Health Summary — green all-clear (pre-activation standby pattern), with the auto update-check footer line active:**
 
 ![Email alert — Mainnet Health Summary green](email-alert-mainnet.jpg)
 
-**Mainnet Health Summary with auto update-check footer active — same green card as above, plus the second footer line the monitor adds when a newer published version exists on GitHub:**
-
-![Email alert — Mainnet with update-available footer](email-alert-mainnet-update.jpg)
-
-All three cards carry the `NETWORK_LABEL` subject prefix, the severity tag, and the same footer stamp as the Discord cards. When a newer version exists on GitHub main, the footer gains its second line automatically (the `⬆️ vX.Y.Z available — https://github.com/BaumerCrypto/digidollar-oracle-tools` line) — no config change needed. The `https://` scheme is included so email clients auto-linkify the URL universally, including Outlook desktop and corporate gateways that only linkify explicit-scheme URLs (v2.6.1).
+Both cards carry the `NETWORK_LABEL` subject prefix, the severity tag, and the same footer stamp as the Discord cards. When a newer version exists on GitHub main, the footer gains its second line automatically (the `⬆️ vX.Y.Z available — https://github.com/BaumerCrypto/digidollar-oracle-tools` line) — no config change needed. The `https://` scheme is included so email clients auto-linkify the URL universally, including Outlook desktop and corporate gateways that only linkify explicit-scheme URLs (v2.6.1).
 
 ### DigiDollar activation status handling
 
