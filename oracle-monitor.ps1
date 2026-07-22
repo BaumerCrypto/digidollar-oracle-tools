@@ -66,7 +66,7 @@
 #            with @($parsed) — correct on both PS 5.1 (single write → the
 #            array) and PS 7 (streamed → collected). Latent since
 #            v2.2-win.1; masked pre-activation (empty roster). Affects
-#            every PS 5.1 operator with a populated roster. (fixes #37)
+#            every PS 5.1 operator with a populated roster. (fixes #38)
 #   v2.7.1-win.1 — The debug.log alert now links straight to the guide.
 #            The v2.7.0 card ended with a bare filename that Discord and
 #            email clients won't linkify, so an operator reading the alert
@@ -1907,7 +1907,7 @@ function Check-Quorum {
     # write → the array) and PS 7 (streamed → collected); @($parsed) then
     # flattens to a proper array on both. (caught by DigiByte, PS 5.1.26100,
     # mainnet post-activation — the empty pre-activation roster masked it
-    # since v2.2-win.1. fixes #37)
+    # since v2.2-win.1. fixes #38)
     $parsed = $null
     try { $parsed = $rawOracles | ConvertFrom-Json } catch { }
     if ($null -eq $parsed) {
