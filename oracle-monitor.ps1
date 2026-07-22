@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.7.1-win.1
+# Version: 2.7.1-win.2
 #
 # Windows PowerShell port of my oracle-monitor.sh v2.7.1 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -50,6 +50,23 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.7.1-win.2 — CRITICAL Windows-only parse fix (caught by DigiByte,
+#            mainnet post-activation). No Linux/macOS change — those use
+#            jq, which parses JSON arrays natively. Check-Quorum parsed the
+#            roster with the one-liner @($rawOracles | ConvertFrom-Json).
+#            On Windows PowerShell 5.1, ConvertFrom-Json writes a JSON
+#            ARRAY to the pipeline as a SINGLE non-enumerated object, so
+#            @() wrapped all 35 oracle objects as ONE nested element:
+#            $oracles.Count == 1 and $oracles[0] was the whole array. The
+#            heartbeat_status field check then failed (an array has no such
+#            property), tripping the "using roster count" fallback with
+#            reporting = 1 and firing a false "1/35 reporting (need 7) —
+#            CRITICAL" on a fully healthy 35/35 network. Fix: assign the
+#            ConvertFrom-Json result to a variable first, then normalize
+#            with @($parsed) — correct on both PS 5.1 (single write → the
+#            array) and PS 7 (streamed → collected). Latent since
+#            v2.2-win.1; masked pre-activation (empty roster). Affects
+#            every PS 5.1 operator with a populated roster. (fixes #37)
 #   v2.7.1-win.1 — The debug.log alert now links straight to the guide.
 #            The v2.7.0 card ended with a bare filename that Discord and
 #            email clients won't linkify, so an operator reading the alert
@@ -302,7 +319,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.7.1-win.1"
+$SCRIPT_VERSION = "2.7.1-win.2"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -1877,17 +1894,35 @@ function Check-Quorum {
         return
     }
 
-    $oracles = $null
-    try { $oracles = @($rawOracles | ConvertFrom-Json) } catch { }
+    # Parse the roster. IMPORTANT: assign the ConvertFrom-Json result to a
+    # variable FIRST, then normalize with @(...) — do NOT collapse this back
+    # into @($rawOracles | ConvertFrom-Json). On Windows PowerShell 5.1,
+    # ConvertFrom-Json writes a JSON ARRAY to the pipeline as a single,
+    # non-enumerated object, so @(pipe | ConvertFrom-Json) wraps the entire
+    # 35-oracle array as ONE element: $oracles.Count == 1 and $oracles[0] is
+    # the real array. That silently fed the "heartbeat_status field missing?
+    # — using roster count" fallback with rosterCount = 1, producing a bogus
+    # "1/35 reporting — CRITICAL" on a fully healthy network. Assigning first
+    # makes $parsed the real array on BOTH PS 5.1 (single non-enumerated
+    # write → the array) and PS 7 (streamed → collected); @($parsed) then
+    # flattens to a proper array on both. (caught by DigiByte, PS 5.1.26100,
+    # mainnet post-activation — the empty pre-activation roster masked it
+    # since v2.2-win.1. fixes #37)
+    $parsed = $null
+    try { $parsed = $rawOracles | ConvertFrom-Json } catch { }
+    if ($null -eq $parsed) {
+        $oracles = @()
+    } else {
+        $oracles = @($parsed)
+    }
 
-    # PS 5.1 quirk: ConvertFrom-Json returns $null for a literal "[]", which
-    # would land in the "could not query" path below. But an EMPTY roster is
-    # not a query failure — it means zero oracles are active, and that must
-    # flow through as reporting=0 so the QUORUM LOST critical alert fires
-    # (same as the Linux script, where jq counts [] as 0).
+    # An EMPTY roster ("[]") is not a query failure — zero oracles active must
+    # flow through as reporting = 0 so QUORUM LOST fires (same as Linux, where
+    # jq counts [] as 0). On PS 5.1 ConvertFrom-Json '[]' yields $null →
+    # $oracles = @() above; the explicit check keeps the intent obvious.
     $rosterEmpty = ($rawOracles.Trim() -eq "[]")
 
-    if ((-not $rosterEmpty) -and ($null -eq $oracles -or $oracles.Count -eq 0)) {
+    if ((-not $rosterEmpty) -and ($oracles.Count -eq 0)) {
         $script:Details.Add("⚠️  Quorum: could not query oracles")
         $script:Warnings++
         return
