@@ -4,6 +4,8 @@ Operator tools and monitoring scripts for [DigiByte](https://www.digibyte.org/) 
 
 Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
+> **DigiDollar is live on mainnet.** The deployment activated at block **23,869,440** on **2026-07-17**. These tools monitor both mainnet and testnet26 oracles; everything below applies to both chains unless noted.
+
 ---
 
 ## What's in this repo
@@ -42,7 +44,7 @@ More tools will be added as the DigiDollar testnet matures toward mainnet activa
 
 ## Platform support
 
-The monitor runs natively on all three major platforms. Same 12 checks, same DigiDollar BIP9 pre-activation guard, same quorum state machine, same anti-flap logic, same Qt/headless auto-detect, same Discord card format, and — as of v2.6.0 — the same dual-channel email + Discord alerts and the same daily update-check. Only the platform plumbing underneath differs.
+The monitor runs natively on all three major platforms. Same 13 checks, same DigiDollar BIP9 pre-activation guard, same quorum state machine, same anti-flap logic, same Qt/headless auto-detect, same Discord card format, and — as of v2.6.0 — the same dual-channel email + Discord alerts and the same daily update-check. Only the platform plumbing underneath differs.
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
@@ -115,7 +117,7 @@ Full background — the measured growth table, why `rm` on a live log makes thin
 
 ![Email alert — Testnet26 Health Summary red](email-alert-testnet.jpg)
 
-**Mainnet Health Summary — green all-clear (pre-activation standby pattern), with the auto update-check footer line active:**
+**Mainnet Health Summary — green all-clear with real post-activation oracle data, and the auto update-check footer line active:**
 
 ![Email alert — Mainnet Health Summary green](email-alert-mainnet.jpg)
 
@@ -152,15 +154,17 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 
 ### Discord alert examples
 
-**Health summary with quorum tracking and MuSig2 session status:**
+**Dual-instance health summaries — testnet26 and mainnet, same Discord channel, one daemon each:**
 
-![Oracle Health Summary](Discord_alert-Quorum1.jpg)
+![Dual-instance health summaries — Testnet26 and Mainnet](Discord_alert-HealthSummary-DualInstance.jpg)
+
+This is the day-to-day view, and it's the argument for `NETWORK_LABEL` in one picture: two daemons on one box, two cards in one channel, and no ambiguity about which fired. Beyond the title, the cards diverge exactly where they should — `digibyted.service` versus `digibyted-mainnet.service`, testnet block height versus mainnet, quorum counts from two different rosters. The `debug.log` line is the clearest tell: `986MB — debug: digidollar, net` on the testnet daemon that has debug categories enabled, `20MB` on the mainnet one that doesn't. Same box, same monitor, same 5-minute cron — the growth difference is entirely the config. Both footers stamp `v2.7.0`.
 
 **Quorum state transition alerts — red/yellow/green as oracle count changes:**
 
 ![Quorum Alerts](Discord_alert-Quorum2.jpg)
 
-_The Quorum1 image is a current Testnet26 health summary — the day-to-day view most operators see. The Quorum2 image (quorum state transitions) is older and will be refreshed when an organic quorum event provides a fresh capture, likely post-mainnet activation — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29)._
+_The transition image is older than the rest and will be refreshed when an organic quorum event provides a fresh capture — see [issue #29](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/29). Quorum bands and hysteresis behave as documented below regardless._
 
 ### Requirements
 
@@ -372,12 +376,11 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 
 ### Modes (v1.6+)
 
-The bot has four operating modes decided at runtime based on chain, DD BIP9 activation state, and the `--endgame-only` flag:
+The bot picks its mode at runtime from the chain, the DigiDollar activation state, and the `--endgame-only` flag.
 
-- **FULL** — regular network status post. Always used on testnet (DD active since block 600). Used on mainnet post-activation. This is what the "What it reports" section above describes.
-- **STANDBY** — mainnet + DD not yet active. Posts a compact countdown with current block, activation block, blocks remaining, day/hour granularity, and calendar UTC ETA. Skips the full status data (which isn't available pre-activation anyway). Inside the final 24h it defers to the hourly endgame ticker (59-minute dedup window, v1.6.3) so the room gets one countdown per hour instead of near-duplicates 5 minutes apart.
-- **BIRTH** — mainnet + DD just flipped to ACTIVE + no prior birth-state file. Fires a one-shot announcement with `m.mentions` notifications to Jared (slot 0) and DigiSwarm (slot 15). State-file dedup prevents double-fire from the endgame vs 12hr cron collision window.
-- **ENDGAME** — silent-exit variant of STANDBY that fires from the hourly `--endgame-only` cron. Only posts when inside the 24h band before activation. Silent exit outside that band so hourly cron doesn't spam.
+**FULL** is the mode you'll see — the regular network status post described in "What it reports" above. It runs on testnet (DD active since block 600) and on mainnet, which activated at block 23,869,440 on 2026-07-17.
+
+The other three are the **activation trio**, dormant on mainnet since that date but still the code path any chain takes on its way to a live deployment — a future testnet reset, for instance. **STANDBY** posts a compact countdown (current block, activation block, blocks remaining, UTC ETA) instead of status data that doesn't exist yet, deferring inside the final 24h to the hourly ticker so the room gets one countdown per hour rather than near-duplicates. **ENDGAME** is that hourly ticker: a silent-exit variant fired by `--endgame-only` that only speaks inside the 24h band. **BIRTH** is the one-shot announcement when a deployment flips to ACTIVE, with `m.mentions` to Jared (slot 0) and DigiSwarm (slot 15) and a state file to prevent a double-fire from the endgame/12hr cron collision. Mainnet's fired once, on 2026-07-17.
 
 ### Example output (FULL mode, v1.6.2 formatting)
 
@@ -415,7 +418,8 @@ Software (accepted: v9.26.2 / v9.26.3 / v9.26.4):
   (...)
 ```
 
-### Example output (STANDBY mode, pre-activation mainnet)
+<details>
+<summary><b>Example output (STANDBY mode)</b> — historical: the mainnet pre-activation countdown, retired at activation on 2026-07-17. Click to expand.</summary>
 
 ```
 🟢 Oracle Network Status, Mainnet, 2026-07-13 00:10 UTC
@@ -434,6 +438,8 @@ Signing status: standby, mainnet oracles begin publishing at BIP9 ACTIVE
 This bot will resume full network status posts (fresh heartbeats,
 consensus price, MuSig2, upgrade nudges) automatically at activation.
 ```
+
+</details>
 
 ### Data sources
 
@@ -501,18 +507,18 @@ nano ~/.oracle-monitor/oracle-roster.conf
 
 ### Dual-instance monitoring (testnet + mainnet)
 
-When mainnet launches, run two independent instances from the same script using `--config`:
+Run two independent instances from the same script using `--config` — one per chain:
 
 ```cron
 # Testnet 12hr status pulse (default config)
 5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 # Mainnet 12hr status pulse (custom config)
 10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
-# Mainnet hourly endgame countdown ticker (v1.6.2, silent-exit outside 24h band)
-15 * * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 ```
 
-Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). The endgame ticker cost is negligible outside the 24h band (silent-exit after Phase 1 RPCs). Setup:
+The hourly `--endgame-only` ticker that ran alongside these through the mainnet countdown is no longer needed post-activation — it silent-exits every time. Add it back only if you're tracking a chain toward a future activation.
+
+Each instance uses its own config file and tracks mention state independently. The roster file is shared by default (same 35 operators on both networks). Setup:
 
 ```bash
 mkdir -p ~/.oracle-monitor-mainnet
