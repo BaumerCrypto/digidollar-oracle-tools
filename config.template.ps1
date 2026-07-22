@@ -1,4 +1,4 @@
-# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
+﻿# %USERPROFILE%\.oracle-monitor\config.ps1 — Oracle Monitor Configuration (Windows)
 #
 # This file is dot-sourced by oracle-monitor.ps1 (v2.5.4-win.1+) at startup.
 # Edit values below to override the built-in defaults.
@@ -151,6 +151,40 @@ $DISK_DRIVE = "C"
 # in a subdirectory named for the current testnet reset (testnet26,
 # testnet27, ...) — bump it when the testnet resets.
 $DATADIR = "$env:APPDATA\DigiByte"
+
+# ---- v2.7.0: Disk + debug.log Safety Net ----
+# Yellow disk band (closes #33): warn at this used-% while $MIN_DISK_GB
+# below stays the red floor. 0 disables the band.
+$DISK_USED_PCT_WARN = 80
+
+# debug.log watchdog (Check 13): yellow alert when the daemon's debug.log
+# reaches this many MB. The alert names any enabled debug categories —
+# enabling one (e.g. debug=digidollar from the old setup docs) also
+# disables the daemon's automatic startup log-shrink, and oracle boxes
+# rarely restart. Measured: ~374 MB/day with digidollar+net enabled vs
+# ~8 MB/day default logging.
+$DEBUG_LOG_WARN_MB = 1024
+
+# debug.log safe auto-rotation — DEFAULT ON (v2.7.0 behavior change).
+# At $DEBUG_LOG_MAX_MB: Copy-Item to debug.log.1, truncate the live file
+# in place via .NET (daemon keeps writing, no restart). Previous .1 only
+# overwritten by the NEXT rotation (~2x threshold of newest history
+# always kept). Every rotation posts a blue card; skipped with a red
+# card if free space can't hold the safety copy. If Windows file locking
+# blocks the in-place truncate, one yellow card explains the durable fix
+# (shrinkdebugfile=1 + restart) and re-attempts stop. "no" opts out.
+# $DEBUG_LOG_KEEP = rotated copies to retain (values >1 chain .1→.2→…;
+# 0 is treated as 1 — never truncate without a copy).
+$DEBUG_LOG_ROTATE = "yes"
+$DEBUG_LOG_MAX_MB = 2048
+$DEBUG_LOG_KEEP   = 1
+
+# Run the getoracleprice freshness check every Nth pass (Check 5). That
+# RPC writes ~4,780 log lines per call when debug=digidollar is on —
+# 3 = one price check per 15 min at the stock schedule (a third of that
+# log volume, up to 10 extra minutes' stale-price latency). 1 = every
+# pass (pre-2.7.0 behavior). Summaries always check.
+$PRICE_CHECK_EVERY = 1
 
 # ---- Alert Thresholds ----
 $MIN_PEERS           = 3     # Minimum peer count before alerting

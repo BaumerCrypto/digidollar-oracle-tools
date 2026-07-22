@@ -40,6 +40,8 @@ I wrote this guide based on the security setup running on my own DigiDollar orac
 - [Optional Extras](#optional-extras)
   - [NTP Time Sync](#ntp-time-sync--verify-your-clock)
   - [Resource Isolation and OOM Protection](#resource-isolation-and-oom-protection)
+- [debug.log: Growth, Rotation, and the Disappearing Disk](#debuglog-growth-rotation-and-the-disappearing-disk)
+- [Hardware Requirements: RAM and Disk](#hardware-requirements-ram-and-disk)
 - [Maintenance](#maintenance)
 
 ---
@@ -868,6 +870,107 @@ Restart SSH to apply (`sudo systemctl restart ssh`, or `sudo systemctl daemon-re
 
 ---
 
+## debug.log: Growth, Rotation, and the Disappearing Disk
+
+This section exists because my own testnet26 `debug.log` quietly reached **15 GB** before anything complained — on a hardened, monitored box. Nothing was broken; three defaults were just stacked against me, and if you followed the early oracle setup docs they are stacked against you too.
+
+### Why oracle boxes are the worst case
+
+**1. Enabling any debug category silently disables auto-shrink.** DigiByte Core inherits Bitcoin Core's `-shrinkdebugfile` behavior: the log is trimmed to ~10 MB at startup *by default* — **unless `-debug` is set**. The old oracle setup docs told operators to put `debug=digidollar` in `digibyte.conf`, which flips auto-shrink off without saying so. If you want the category *and* the shrink, you must set both explicitly:
+
+```ini
+debug=digidollar
+shrinkdebugfile=1
+```
+
+**2. The shrink only runs at startup — and oracle boxes never restart.** Uptime discipline is a virtue everywhere else on an oracle node. Here it means the one built-in bound never fires.
+
+**3. Routine monitoring multiplies the growth.** On v9.26.4, a single `getoracleprice` call with `debug=digidollar` enabled writes **~4,780 log lines** — it scans the 24-hour price window (5,760 blocks) and logs one line per cache miss. The RPC itself is fast (~30 ms — this is a *logging* problem, not a performance problem), but a monitor calling it every 5 minutes turns one enabled category into a firehose.
+
+**Measured on my slot-17 VPS, July 2026, same box, same monitor:**
+
+| Configuration | Growth |
+|---|---|
+| `debug=digidollar` + `debug=net` (testnet26) | **~374 MB/day** |
+| Default logging, no categories (mainnet) | **~8 MB/day** |
+
+That is ~11 GB/month on a "normal-looking" testnet oracle. On a 100 GB VPS shared with a mainnet chain, that is the disk gone in months.
+
+### The fix, in order of preference
+
+**A. Turn the category off unless you are actively debugging.** `debug=digidollar` is a troubleshooting tool, not a requirement. The oracle signs fine without it. Remove the `debug=` line(s) from `digibyte.conf` and restart at your next maintenance window. Check what's currently enabled without restarting:
+
+```bash
+digibyte-cli logging          # mainnet
+digibyte-cli -testnet logging # testnet
+```
+
+You can also flip categories live, no restart: `digibyte-cli logging '[]' '["digidollar"]'` disables it.
+
+**B. Let oracle-monitor v2.7.0 handle it (default ON).** The monitor now watches `debug.log` size and growth-per-day (Check 13), names any enabled categories right in the alert, and safely auto-rotates at 2 GB: copy to `debug.log.1`, truncate the live file **in place** (the daemon keeps writing — no restart), blue Discord card on every rotation, red card instead of rotation if free space can't hold the safety copy. Nothing is deleted until a *second* rotation overwrites `.1`, so ~4 GB of the newest history is always on disk for a developer. Knobs: `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, and `PRICE_CHECK_EVERY` to thin the loudest RPC.
+
+**C. Weekly cron truncate (belt-and-braces, or if you don't run the monitor).** Copy-then-truncate is the only safe pattern — the daemon holds the file open, so `rm`/`mv` leaks the space until restart:
+
+```bash
+# crontab -e — Sundays 04:00, keep one previous copy
+0 4 * * 0 cp ~/.digibyte/debug.log ~/.digibyte/debug.log.1 && truncate -s 0 ~/.digibyte/debug.log
+0 4 * * 0 cp ~/.digibyte/testnet26/debug.log ~/.digibyte/testnet26/debug.log.1 && truncate -s 0 ~/.digibyte/testnet26/debug.log
+```
+
+**D. logrotate, if you prefer the system tool.** The critical directive is `copytruncate` — same reason as above:
+
+```
+# /etc/logrotate.d/digibyte
+/home/YOUR_USER/.digibyte/debug.log /home/YOUR_USER/.digibyte/testnet26/debug.log {
+    weekly
+    rotate 2
+    copytruncate
+    compress
+    missingok
+    notifempty
+}
+```
+
+> ⚠️ **Never `rm` or `mv` a live debug.log.** The daemon keeps the deleted inode open: `df` shows no space reclaimed, `du` can't find the file, and the confusion usually ends in an unnecessary restart. Truncate in place, always.
+
+### Quick health check
+
+```bash
+ls -lh ~/.digibyte/debug.log ~/.digibyte/testnet26/debug.log 2>/dev/null
+digibyte-cli logging | jq -r 'to_entries[] | select(.value==true) | .key'
+```
+
+If the second command prints anything and you are not mid-investigation, that category is costing you disk for nothing.
+
+---
+
+## Hardware Requirements: RAM and Disk
+
+Numbers below are from my own dual-daemon VPS (mainnet + testnet26) and the community's v9.26.4 pruning validation, July 2026. Treat them as floors, not targets.
+
+### RAM
+
+- Budget **~2 GB of RAM per mainnet daemon as a floor** — and note that **pruning does not reduce this**. The v9 block index keeps per-block algo history in memory and loads fully at startup regardless of prune mode, so a pruned mainnet node needs the same RAM as a full one.
+- A comfortable dual-daemon oracle box (mainnet + testnet, monitor, OS): **8 GB works, 12 GB is comfortable.** My 12 GB box idles around 60% RAM with both daemons — that baseline is the block index doing its job, not a leak.
+- Keep the swap safety net from [Resource Isolation and OOM Protection](#resource-isolation-and-oom-protection). Swap is the difference between "yellow card" and "OOM-killed signer".
+
+### Disk
+
+| Node type | Today | Growth |
+|---|---|---|
+| Pruned mainnet (prune=550 floor) | ~2–3 GB | ~3–5 GB/year |
+| Full mainnet | ~42 GB and up | tens of GB/year |
+| + testnet26 (full) | add a few GB | varies with testnet activity |
+
+- **Pruned nodes can run oracles.** Validated on v9.26.4 (DigiSwarm, slot 15). The oracle signs from its key + recent chain state; it does not need historical blocks.
+- **Prune floor:** the chain enforces keeping blocks from height **23,627,520** (the DigiDollar deployment's `min_activation_height`) — the practical floor, already below any block a healthy oracle needs.
+- **In-place full→pruned migration is validated** — set `prune=550` (or your target), restart, and the daemon trims itself; no resync. One caveat: the **first** prune on v9.26.3+ triggers a one-time DigiDollar health-seeding scan (~8 minutes on my hardware). Plan the restart window, don't panic at the pause.
+- **Wallet-birthday caveat:** if your oracle wallet was created *before* the prune floor and you ever need a full rescan, a pruned node can't serve it — you'd need a full node or a `-reindex` on one. Keep your wallet backup discipline tight and this stays theoretical.
+- **Who should stay full:** if your node is a **seed peer** (hardcoded in chainparams), keep it full with `txindex=1` — the network leans on it. Mine stays full for exactly that reason; I grow the SSD instead of pruning.
+- And after all of the above: the fastest-growing file on many oracle boxes is not the chain — it's `debug.log`. See [the section above](#debuglog-growth-rotation-and-the-disappearing-disk).
+
+---
+
 ## Maintenance
 
 Security isn't a one-time setup. Here's what I do regularly:
@@ -930,5 +1033,5 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.4.1
+Version: v1.5.0
 

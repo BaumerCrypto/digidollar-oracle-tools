@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.6.3
+# Version: 2.7.0
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.6.3"
+readonly SCRIPT_VERSION="2.7.0"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +35,54 @@ readonly SCRIPT_VERSION="2.6.3"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.7.0 — The disk-safety release. Born from a real incident on my own
+#            slot-17 VPS: testnet26's debug.log quietly reached 15 GB
+#            before anything complained. Root cause chain, measured live
+#            in July 2026: (a) enabling any debug category — and the old
+#            oracle setup docs said debug=digidollar — silently disables
+#            the daemon's automatic startup log-shrink (upstream
+#            -shrinkdebugfile defaults to "on unless -debug is set");
+#            (b) oracle boxes are exactly the machines that never
+#            restart, so the one built-in bound never fires; (c) every
+#            getoracleprice call on a v9.26.4 node with the category on
+#            writes ~4,780 lines (a 24h price-window scan logging one
+#            line per cache miss), so routine 5-minute monitoring
+#            multiplies the growth ~374 MB/day measured with
+#            digidollar+net vs ~8 MB/day default logging, same box.
+#            Four features + one compatibility fix:
+#            (1) DEBUG.LOG WATCHDOG (Check 13). Tracks debug.log size
+#            and growth-per-day, and names any enabled debug categories
+#            (via the `logging` RPC) right in the summary line and the
+#            yellow alert — "disk is filling" becomes "here's why, and
+#            the one-line fix". Config: DEBUG_LOG_WARN_MB (1024).
+#            (2) SAFE AUTO-ROTATION — DEFAULT ON (behavior change!).
+#            At DEBUG_LOG_MAX_MB (2048) the monitor copies debug.log to
+#            debug.log.1 and truncates the live file in place (daemon
+#            keeps writing; rm/mv would leak the space until restart).
+#            Evidence rules: copy-first (truncate only if the copy
+#            landed), nothing lost until a SECOND rotation overwrites
+#            .1 (~4 GB of newest history always on disk at defaults),
+#            every rotation posts a blue card (never silent), skipped
+#            with a red card when free space can't hold the safety
+#            copy, dry-run touches nothing. DEBUG_LOG_ROTATE="no" to
+#            opt out when capturing logs for a developer.
+#            (3) DISK USAGE WARNING BAND (closes #33). Yellow at
+#            DISK_USED_PCT_WARN (80%) while MIN_DISK_GB stays the red
+#            floor. My June→July disk crawl from 67%→72% produced zero
+#            honest warnings — the only alert that fired was a
+#            misconfigured threshold. Now the calm heads-up exists.
+#            (4) PRICE_CHECK_EVERY (1). Run the getoracleprice
+#            freshness check every Nth pass — the knob for small-VPS
+#            operators to cut the loudest log source to 1/N without
+#            losing daemon/disk/quorum detection. Default = every pass,
+#            exactly the old behavior. Summaries always check.
+#            (5) v9.26.5-READY (PR #429 by DigiSwarm). That release
+#            buries the DigiDollar deployment (BIP90) and reshapes
+#            getdigidollardeploymentinfo. The buried shape keeps
+#            status/"active", and this release adds an explicit
+#            fallback via {type:"buried", active:true} plus graceful
+#            degradation notes on every field the quorum check reads —
+#            upgrade daemon and monitor in either order.
 #   v2.6.3 — Two operator-suggested additions.
 #            (1) DIGIBYTE VERSION NOW UPDATE-AWARE (caught by Baumer). The
 #            node-version line (Check 9) compares the running version
@@ -388,6 +436,44 @@ DISK_PATH="/home"
 # set this per config file (see config.template) so each instance's
 # alert names its own datadir.
 DATADIR="$HOME/.digibyte"
+
+# ---- v2.7.0: disk + debug.log safety net -----------------------------------
+
+# Yellow disk band (closes #33). Fires a warning at this used-% while the
+# MIN_DISK_GB red floor above stays the hard alarm. A 96 GB disk crosses
+# 80% with ~19 GB still free — early enough to act calmly instead of at
+# the cliff edge. Set to 0 to disable the band.
+DISK_USED_PCT_WARN=80
+
+# debug.log watchdog (Check 13). Yellow alert when the daemon's debug.log
+# reaches this many MB. The alert names any enabled debug categories (via
+# the local `logging` RPC) because enabling one — e.g. debug=digidollar
+# from the old oracle setup docs — also disables the daemon's automatic
+# startup log-shrink, and long-uptime oracle boxes then grow without
+# bound (measured on my slot-17 VPS: ~374 MB/day with digidollar+net
+# enabled vs ~8 MB/day with default logging).
+DEBUG_LOG_WARN_MB=1024
+
+# debug.log safe auto-rotation — DEFAULT ON (v2.7.0 behavior change).
+# When debug.log reaches DEBUG_LOG_MAX_MB the monitor copies it to
+# debug.log.1 and truncates the live file in place (the daemon keeps
+# writing — no restart, no lost file handle). The previous .1 is only
+# overwritten by the NEXT rotation, so ~2x DEBUG_LOG_MAX_MB of the newest
+# history always survives for debugging. Every rotation posts a blue
+# Discord card — never silent. Skipped (with a red card) if free space
+# can't hold the safety copy. Set DEBUG_LOG_ROTATE="no" if you are
+# actively capturing logs for a developer and must keep everything.
+DEBUG_LOG_ROTATE="yes"
+DEBUG_LOG_MAX_MB=2048
+DEBUG_LOG_KEEP=1
+
+# Run the getoracleprice freshness check (Check 5) on every Nth 5-minute
+# pass. On a node with debug=digidollar enabled, every getoracleprice
+# call writes ~4,780 log lines (v9.26.4) — setting 3 here means one price
+# check per 15 minutes, a third of that log volume, at the cost of up to
+# 10 extra minutes' stale-price alert latency. 1 (default) = every pass,
+# exactly the pre-2.7.0 behavior. Summaries and --dry-run always check.
+PRICE_CHECK_EVERY=1
 
 # Thresholds — quorum margin (v2.0)
 # These define the alert bands for network-wide oracle liveness.
@@ -979,12 +1065,243 @@ check_disk() {
         fi
         DETAILS+="🔴 Disk: ${avail_gb}GB free${size_info} (LOW!)\n"
         ISSUES=$((ISSUES + 1))
+    # v2.7.0 (closes #33): yellow band well before the red floor. On my own
+    # box the June→July crawl from 67%→72% used produced zero honest
+    # warnings — the only alert that fired was a misconfigured threshold
+    # doing accidental duty. The band gives the calm heads-up; the red
+    # floor above stays the alarm. Only evaluated when df's total parsed
+    # (used_pct exists) and the band is enabled (>0).
+    elif [ -n "$size_info" ] && [[ "${DISK_USED_PCT_WARN:-80}" =~ ^[0-9]+$ ]] \
+         && [ "${DISK_USED_PCT_WARN:-80}" -gt 0 ] && [ "$used_pct" -ge "${DISK_USED_PCT_WARN:-80}" ]; then
+        if clear_alert "low_disk"; then
+            alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free${size_info}."
+        fi
+        if should_alert "disk_warn"; then
+            alert_yellow "⚠️  Disk Filling Up" "${used_pct}% used — ${avail_gb}GB free${size_info}. The red alert fires below ${MIN_DISK_GB}GB free."$'\n'"The usual offender on an oracle box is a grown debug.log — check the debug.log line in your health summary."$'\n'"Datadir: ${DATADIR%/}/"
+        fi
+        DETAILS+="⚠️  Disk: ${avail_gb}GB free${size_info} — over ${DISK_USED_PCT_WARN:-80}% warn band\n"
+        WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "low_disk"; then
             alert_green "✅ Disk Space Recovered" "Disk space back to ${avail_gb}GB free${size_info}."
         fi
+        if clear_alert "disk_warn"; then
+            alert_green "✅ Disk Usage Back Under Band" "Disk usage back under ${DISK_USED_PCT_WARN:-80}% — ${avail_gb}GB free${size_info}."
+        fi
         DETAILS+="✅ Disk: ${avail_gb}GB free${size_info}\n"
     fi
+}
+
+# --- Check 13: debug.log size + growth watchdog (v2.7.0) ---
+# Why this check exists: DigiByte Core inherits Bitcoin Core's
+# -shrinkdebugfile default of "on unless -debug is set". The moment an
+# operator enables any debug category — and the oracle setup docs
+# historically said debug=digidollar — automatic startup log-shrinking
+# turns OFF. Oracle boxes are exactly the machines that never restart, so
+# the one built-in bound never fires. Measured on my slot-17 VPS in July
+# 2026: ~374 MB/day with digidollar+net enabled (testnet26) vs ~8 MB/day
+# with default logging (mainnet) — same box, same monitor. The single
+# biggest amplifier is getoracleprice, which writes ~4,780 category-gated
+# lines per call on v9.26.4 (a 24h price-window scan logging one line per
+# cache miss), so ordinary 5-minute monitoring multiplies the growth.
+# This check makes the growth visible and names the cause;
+# rotate_debuglog() below bounds it.
+#
+# Mechanics:
+#   - Reads ${DATADIR}/debug.log size (missing file = quiet ℹ️ line —
+#     custom datadirs, fresh installs).
+#   - Tracks growth-per-day via a rolling baseline in STATE_DIR (file:
+#     debuglog_growth, "epoch bytes"; baseline advances at most hourly;
+#     --dry-run reads it but never writes — v2.5.4 discipline).
+#   - Calls the `logging` RPC (local, sub-millisecond, no chain scan) and
+#     lists any enabled categories on the summary line and in the alert —
+#     turning "disk is filling" into "here's why, and the one-line fix".
+#   - Yellow at DEBUG_LOG_WARN_MB; green recovery when it drops back
+#     under (usually via rotation, manual truncate, or category off +
+#     daemon restart).
+check_debuglog() {
+    local log_path="${DATADIR%/}/debug.log"
+
+    if [ ! -f "$log_path" ]; then
+        DETAILS+="ℹ️  debug.log: not found at ${log_path} (custom datadir? set DATADIR in config)\n"
+        return
+    fi
+
+    local size_bytes size_mb
+    size_bytes=$(stat -c %s "$log_path" 2>/dev/null)
+    [[ "$size_bytes" =~ ^[0-9]+$ ]] || size_bytes=$(wc -c < "$log_path" 2>/dev/null | tr -d ' ')
+    if ! [[ "$size_bytes" =~ ^[0-9]+$ ]]; then
+        DETAILS+="⚠️  debug.log: could not read size\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
+    size_mb=$(( size_bytes / 1048576 ))
+
+    # Growth-per-day from a rolling baseline. Two different windows, on
+    # purpose: the rate DISPLAYS once the baseline is >=1h old (a 5-minute
+    # delta is noise), but the baseline only ADVANCES every 24h. Making
+    # both 1h -- as the first cut of this did -- means the */5 cron resets
+    # the baseline on the first pass past each hour mark, so 11 of every
+    # 12 passes have <1h elapsed and print nothing: the rate would be
+    # invisible ~92% of the time, including on most summaries and on the
+    # yellow alert itself (caught on live cards before this ever shipped).
+    # With a 24h advance the rate shows on ~96% of passes AND measures
+    # growth over up to a full day, which is what a figure labelled
+    # MB/day should mean. A rotation (size < baseline) resets it at once.
+    local growth_file="$STATE_DIR/debuglog_growth" rate_note=""
+    local now base_ts base_bytes elapsed
+    now=$(date +%s)
+    if [ -f "$growth_file" ]; then
+        base_ts=$(awk '{print $1}' "$growth_file" 2>/dev/null)
+        base_bytes=$(awk '{print $2}' "$growth_file" 2>/dev/null)
+        if [[ "$base_ts" =~ ^[0-9]+$ ]] && [[ "$base_bytes" =~ ^[0-9]+$ ]]; then
+            elapsed=$(( now - base_ts ))
+            if [ "$elapsed" -ge 3600 ] && [ "$size_bytes" -ge "$base_bytes" ]; then
+                rate_note=$(awk -v d=$(( size_bytes - base_bytes )) -v s="$elapsed" \
+                    'BEGIN{printf " (+%.1f MB/day)", d/s*86400/1048576}')
+            fi
+        fi
+    fi
+    if [ "$DRY_RUN" != true ]; then
+        if [ ! -f "$growth_file" ] || ! [[ "${base_ts:-}" =~ ^[0-9]+$ ]] \
+           || [ $(( now - ${base_ts:-0} )) -ge 86400 ] \
+           || [ "$size_bytes" -lt "${base_bytes:-0}" ]; then
+            echo "$now $size_bytes" > "$growth_file"
+        fi
+    fi
+
+    # Enabled debug categories — the attribution that makes the alert
+    # actionable. `logging` is a local table lookup: safe every pass.
+    local cats cats_suffix=""
+    cats=$($CLI logging 2>/dev/null | jq -r '[to_entries[] | select(.value == true) | .key] | join(", ")' 2>/dev/null)
+    [ -n "$cats" ] && [ "$cats" != "null" ] && cats_suffix=" — debug: ${cats}"
+
+    if [ "$size_mb" -ge "${DEBUG_LOG_WARN_MB:-1024}" ]; then
+        if should_alert "debuglog_large"; then
+            local why fix
+            if [ -n "$cats" ] && [ "$cats" != "null" ]; then
+                why="Debug categories enabled: ${cats}. Any -debug category also disables the daemon's automatic startup log-shrink, so this file grows until rotated."
+                fix="One-line fix if you're not actively debugging: remove the debug= line(s) from digibyte.conf, then restart the daemon at your next maintenance window."
+            else
+                why="No debug categories are enabled — this is default-logging growth (slow, but unbounded between restarts)."
+                fix="The daemon truncates it automatically on the next restart (shrinkdebugfile default)."
+            fi
+            local rot_note
+            if [ "${DEBUG_LOG_ROTATE:-yes}" = "yes" ]; then
+                rot_note="Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB:-2048}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted."
+            else
+                rot_note="Auto-rotation is OFF (DEBUG_LOG_ROTATE=\"no\"). Manual: cp ${log_path} ${log_path}.1 && truncate -s 0 ${log_path}"
+            fi
+            alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: ORACLE_HARDENING_GUIDE.md → \"debug.log: growth, rotation\""
+        fi
+        DETAILS+="⚠️  debug.log: ${size_mb}MB${rate_note}${cats_suffix} (LARGE)\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        if clear_alert "debuglog_large"; then
+            alert_green "✅ debug.log Back Under Threshold" "debug.log is ${size_mb}MB — under the ${DEBUG_LOG_WARN_MB:-1024}MB warn threshold again."
+        fi
+        DETAILS+="✅ debug.log: ${size_mb}MB${rate_note}${cats_suffix}\n"
+    fi
+}
+
+# --- debug.log safe auto-rotation (v2.7.0) — default ON ---
+# Design rules, in priority order:
+#   1. NEVER destroy the only copy of recent history. Rotation is
+#      copy-then-truncate: cp debug.log → debug.log.1, then truncate the
+#      LIVE file to zero in place. The daemon holds the file open — rm or
+#      mv would leak the disk space until restart and orphan the write
+#      handle; truncate -s 0 is the only safe primitive here. Nothing is
+#      lost until a SECOND rotation overwrites debug.log.1 — at default
+#      thresholds that keeps ~4 GB of the newest history on disk, which
+#      is what a developer actually asks for in an incident.
+#   2. NEVER rotate silently. Every rotation posts a blue card. Rotations
+#      every few days are themselves the signal that a debug category
+#      should probably come off (Check 13's line names it).
+#   3. NEVER make things worse. The copy momentarily needs as much free
+#      space as the log itself; below log-size + 512MB margin the
+#      rotation is SKIPPED and a red card explains the manual path
+#      (state-gated: fires once, not every 5 minutes).
+#   4. If the copy fails, the live file is NOT touched (rule 1).
+#   5. --dry-run prints what it would do and touches nothing.
+# DEBUG_LOG_KEEP: rotated copies to retain (default 1 → debug.log.1).
+# Values >1 shift .1→.2→… first. 0 is treated as 1 — truncate-without-
+# copy is exactly the evidence destruction this design forbids.
+rotate_debuglog() {
+    [ "${DEBUG_LOG_ROTATE:-yes}" = "yes" ] || return 0
+    local log_path="${DATADIR%/}/debug.log"
+    [ -f "$log_path" ] || return 0
+
+    local size_bytes size_mb
+    size_bytes=$(stat -c %s "$log_path" 2>/dev/null)
+    [[ "$size_bytes" =~ ^[0-9]+$ ]] || return 0
+    size_mb=$(( size_bytes / 1048576 ))
+    [ "$size_mb" -ge "${DEBUG_LOG_MAX_MB:-2048}" ] || return 0
+
+    local keep="${DEBUG_LOG_KEEP:-1}"
+    [[ "$keep" =~ ^[0-9]+$ ]] && [ "$keep" -ge 1 ] || keep=1
+
+    if [ "$DRY_RUN" = true ]; then
+        echo "[dry-run] debug.log is ${size_mb}MB ≥ DEBUG_LOG_MAX_MB=${DEBUG_LOG_MAX_MB:-2048}MB — would rotate (cp → ${log_path}.1, then truncate live file in place)."
+        return 0
+    fi
+
+    # Rule 3 — free-space rail on the datadir's own filesystem.
+    local avail_mb
+    avail_mb=$(df -BM "$(dirname "$log_path")" 2>/dev/null | tail -1 | awk '{print $4}' | tr -d 'M')
+    if ! [[ "$avail_mb" =~ ^[0-9]+$ ]] || [ "$avail_mb" -lt $(( size_mb + 512 )) ]; then
+        if should_alert "debuglog_rotate_blocked"; then
+            alert_red "🔴 debug.log Rotation Blocked" "debug.log is ${size_mb}MB (≥ ${DEBUG_LOG_MAX_MB:-2048}MB rotation threshold) but only ${avail_mb:-?}MB is free — the safety copy needs ~${size_mb}MB + 512MB margin."$'\n'"Free up space, then either wait for the next pass or rotate manually:"$'\n'"cp ${log_path} ${log_path}.1 && truncate -s 0 ${log_path}"
+        fi
+        return 1
+    fi
+
+    # KEEP>1: shift the retained chain (.1→.2, …) before the fresh copy.
+    local i
+    if [ "$keep" -gt 1 ]; then
+        for (( i=keep-1; i>=1; i-- )); do
+            [ -f "${log_path}.${i}" ] && mv -f "${log_path}.${i}" "${log_path}.$((i+1))" 2>/dev/null
+        done
+    fi
+
+    # Rule 1/4 — copy first; truncate ONLY if the copy landed.
+    if ! cp -f "$log_path" "${log_path}.1" 2>/dev/null; then
+        if should_alert "debuglog_rotate_blocked"; then
+            alert_red "🔴 debug.log Rotation Failed" "Could not copy ${log_path} to ${log_path}.1 — the live file was left untouched (evidence rule). Check permissions and free space."
+        fi
+        return 1
+    fi
+    truncate -s 0 "$log_path" 2>/dev/null
+
+    clear_alert "debuglog_rotate_blocked" > /dev/null 2>&1
+    clear_alert "debuglog_large" > /dev/null 2>&1
+
+    # Rule 2 — every rotation is announced, never state-gated.
+    alert_blue "🔁 debug.log Rotated" "debug.log reached ${size_mb}MB (rotation threshold: ${DEBUG_LOG_MAX_MB:-2048}MB)."$'\n'"Newest history preserved in: ${log_path}.1"$'\n'"Live file truncated in place — the daemon keeps writing, no restart needed. Nothing is lost until the NEXT rotation overwrites debug.log.1."$'\n'"Seeing this card often? A debug category is on — check the debug.log line in your health summary."
+    return 0
+}
+
+# --- Price-check interval gate (v2.7.0) ---
+# getoracleprice is the single loudest RPC a v9.26.4 node exposes when
+# debug=digidollar is enabled (~4,780 log lines per call — a 24h
+# price-window scan logging one line per cache miss). PRICE_CHECK_EVERY=N
+# runs Check 5 on every Nth pass instead of all of them. N=3 with the
+# stock */5 cron = one price check per 15 minutes — a third of that log
+# source for the cost of up to 10 extra minutes' stale-price latency.
+# Default 1 = every pass, exactly the pre-2.7.0 behavior. Counter lives
+# in STATE_DIR (per-instance); --summary and --dry-run route through
+# send_summary's direct check_price call and always check.
+maybe_check_price() {
+    local n="${PRICE_CHECK_EVERY:-1}"
+    if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 1 ]; then
+        check_price
+        return
+    fi
+    local cfile="$STATE_DIR/price_check_counter" count=0
+    [ -f "$cfile" ] && count=$(cat "$cfile" 2>/dev/null)
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    count=$(( (count + 1) % n ))
+    echo "$count" > "$cfile"
+    [ "$count" -eq 0 ] && check_price
 }
 
 # --- Check 7: Memory usage ---
@@ -1250,6 +1567,16 @@ band_severity() {
 #   digibyte-cli -testnet getdigidollardeploymentinfo | jq .
 #   digibyte-cli -testnet getoracles true | jq '.[0]'
 #
+# v2.7.0 / v9.26.5 SHAPE NOTE (PR #429, BIP90 burial): the burial removes
+# the BIP9 *signaling* fields from getdigidollardeploymentinfo — this
+# check never read those. The fields it does read
+# (oracle_consensus_required, oracle_total_slots, musig2_session.*) are
+# DD-roster/session data, not signaling data, and persist in the buried
+# shape per the v9.26.5 release notes. Belt-and-braces: every read below
+# already carries a jq fallback (// 7, // 35, // "?"), so if a future
+# release drops one, the quorum math degrades to the correct mainnet
+# constants and the MuSig2 line degrades to a visible ⚠️ "could not
+# parse" — never a crash, never a silent wrong alert.
 check_quorum() {
     # --- Migration: clean up v2.0 state files (runs once, harmless after) ---
     # v2.5.4: skipped in dry-run — dry-run must not touch state.
@@ -1477,6 +1804,8 @@ send_summary() {
     check_peers
     check_price
     check_disk
+    check_debuglog            # v2.7.0: Check 13 — debug.log watchdog
+    rotate_debuglog           # v2.7.0: safe auto-rotation (default ON)
     check_memory
     check_swap                # v2.4
     check_services
@@ -1557,7 +1886,24 @@ check_digidollar_active() {
         return
     fi
 
-    DD_STATUS=$(echo "$deploy_info" | jq -r '.status // "unknown"' 2>/dev/null)
+    # v2.7.0: v9.26.5 (PR #429) buries the DigiDollar deployment (BIP90)
+    # and reshapes this RPC to {enabled, type:"buried",
+    # status:"active"|"defined", activation_height} — the BIP9 signaling
+    # fields (bit, statistics, since) are gone. The buried shape KEEPS a
+    # status field, so the primary read below works for both v9.26.4 and
+    # v9.26.5 nodes. The fallback additionally accepts the generic buried
+    # form ({type:"buried", active:true}) should status ever be absent,
+    # so daemon and monitor can be upgraded in either order.
+    DD_SHAPE=$(echo "$deploy_info" | jq -r '.type // "bip9"' 2>/dev/null)
+    DD_STATUS=$(echo "$deploy_info" | jq -r '.status // empty' 2>/dev/null)
+    if [ -z "$DD_STATUS" ] || [ "$DD_STATUS" = "null" ]; then
+        if [ "$DD_SHAPE" = "buried" ] && \
+           [ "$(echo "$deploy_info" | jq -r '.active // false' 2>/dev/null)" = "true" ]; then
+            DD_STATUS="active"
+        else
+            DD_STATUS="unknown"
+        fi
+    fi
 
     if [ "$DD_STATUS" = "active" ]; then
         DD_ACTIVE="true"
@@ -1572,8 +1918,10 @@ run_checks() {
     check_oracle
     check_chain
     check_peers
-    check_price
+    maybe_check_price         # v2.7.0: PRICE_CHECK_EVERY gate around Check 5
     check_disk
+    check_debuglog            # v2.7.0: Check 13 — debug.log watchdog
+    rotate_debuglog           # v2.7.0: safe auto-rotation (default ON)
     check_memory
     check_swap                # v2.4
     check_ntp

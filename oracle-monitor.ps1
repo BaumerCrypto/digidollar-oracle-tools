@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.6.3-win.1
+# Version: 2.7.0-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.6.3 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.7.0 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet, same
 # email-plus-Discord dual-channel alerts, same daily update check — all
@@ -50,6 +50,45 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.7.0-win.1 — The disk-safety release. Matches Linux v2.7.0.
+#            Root cause, measured live on my slot-17 Linux VPS in July
+#            2026 and just as true on Windows: enabling any -debug
+#            category (the old oracle docs said debug=digidollar)
+#            silently disables the daemon's automatic startup log-shrink,
+#            oracle boxes never restart, and getoracleprice writes
+#            ~4,780 category-gated lines per call on v9.26.4 — so
+#            5-minute monitoring multiplies growth (~374 MB/day measured
+#            with digidollar+net vs ~8 MB/day default). Four features +
+#            one compatibility fix:
+#            (1) DEBUG.LOG WATCHDOG (Check 13): size + growth/day + names
+#            enabled categories via the `logging` RPC. $DEBUG_LOG_WARN_MB
+#            (1024).
+#            (2) SAFE AUTO-ROTATION — DEFAULT ON (behavior change!). At
+#            $DEBUG_LOG_MAX_MB (2048): Copy-Item to debug.log.1, then
+#            truncate the LIVE file in place via a .NET FileStream
+#            SetLength(0) opened with FileShare ReadWrite — the daemon
+#            keeps writing, no restart. Copy-first (never truncate if the
+#            copy failed), ~2x threshold of newest history always on
+#            disk, blue card on every rotation, red card + skip when free
+#            space can't hold the safety copy, dry-run touches nothing.
+#            WINDOWS DIVERGENCE: if the daemon holds debug.log with an
+#            exclusive lock the in-place truncate is impossible from a
+#            second process. The monitor then posts ONE yellow card
+#            (state-gated), keeps the safety copy it already made, stops
+#            re-attempting, and names the durable fix (shrinkdebugfile=1
+#            + a daemon restart, or turning the debug category off).
+#            $DEBUG_LOG_ROTATE="no" opts out. $DEBUG_LOG_KEEP (1).
+#            (3) DISK USAGE WARNING BAND (closes #33): yellow at
+#            $DISK_USED_PCT_WARN (80%) while $MIN_DISK_GB stays the red
+#            floor.
+#            (4) $PRICE_CHECK_EVERY (1): run the getoracleprice check
+#            every Nth pass — cut the loudest log source to 1/N.
+#            (5) v9.26.5-READY (PR #429 by DigiSwarm): BIP90 burial
+#            reshapes getdigidollardeploymentinfo; the buried shape keeps
+#            status, and an explicit {type:"buried", active:true}
+#            fallback lands here too — upgrade daemon and monitor in
+#            either order. (The Windows port's property-guarded JSON
+#            reads were already shape-tolerant by construction.)
 #   v2.6.3-win.1 — Two operator-suggested additions. Matches Linux v2.6.3.
 #            (1) DIGIBYTE VERSION NOW UPDATE-AWARE (caught by Baumer). The
 #            node-version line compares the running version against the
@@ -257,7 +296,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.6.3-win.1"
+$SCRIPT_VERSION = "2.7.0-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -370,6 +409,44 @@ $DISK_DRIVE = "C"
 # its own datadir. (Declared here so the defaults block is complete and
 # the script runs clean under Set-StrictMode.)
 $DATADIR = "$env:APPDATA\DigiByte"
+
+# ---- v2.7.0: disk + debug.log safety net -----------------------------------
+
+# Yellow disk band (closes #33). Fires a warning at this used-% while the
+# $MIN_DISK_GB red floor stays the hard alarm. Set to 0 to disable.
+$DISK_USED_PCT_WARN = 80
+
+# debug.log watchdog (Check 13). Yellow alert when the daemon's debug.log
+# reaches this many MB. The alert names any enabled debug categories (via
+# the local `logging` RPC) because enabling one — e.g. debug=digidollar
+# from the old oracle setup docs — also disables the daemon's automatic
+# startup log-shrink, and long-uptime oracle boxes then grow without
+# bound (measured on my slot-17 VPS: ~374 MB/day with digidollar+net
+# enabled vs ~8 MB/day with default logging).
+$DEBUG_LOG_WARN_MB = 1024
+
+# debug.log safe auto-rotation — DEFAULT ON (v2.7.0 behavior change).
+# When debug.log reaches $DEBUG_LOG_MAX_MB the monitor copies it to
+# debug.log.1 and truncates the live file in place (the daemon keeps
+# writing — no restart). The previous .1 is only overwritten by the NEXT
+# rotation, so ~2x $DEBUG_LOG_MAX_MB of the newest history always
+# survives for debugging. Every rotation posts a blue Discord card —
+# never silent. Skipped (with a red card) if free space can't hold the
+# safety copy; if Windows file locking blocks the in-place truncate, one
+# yellow card explains the durable fix and re-attempts stop. Set
+# $DEBUG_LOG_ROTATE = "no" if you are actively capturing logs for a
+# developer and must keep everything.
+$DEBUG_LOG_ROTATE = "yes"
+$DEBUG_LOG_MAX_MB = 2048
+$DEBUG_LOG_KEEP   = 1
+
+# Run the getoracleprice freshness check (Check 5) on every Nth pass. On
+# a node with debug=digidollar enabled, every getoracleprice call writes
+# ~4,780 log lines (v9.26.4) — 3 here means one price check per 15
+# minutes at the stock schedule, a third of that log volume, at the cost
+# of up to 10 extra minutes' stale-price alert latency. 1 (default) =
+# every pass, exactly the pre-2.7.0 behavior. Summaries always check.
+$PRICE_CHECK_EVERY = 1
 
 # Thresholds — basic health
 $MIN_PEERS           = 3
@@ -1120,9 +1197,26 @@ function Check-Disk {
         }
         $script:Details.Add("🔴 Disk: ${availGB}GB free${sizeInfo} (LOW!)")
         $script:Issues++
+    # v2.7.0 (closes #33): yellow band well before the red floor — the
+    # calm heads-up while $MIN_DISK_GB stays the alarm. Only evaluated
+    # when the total parsed ($sizeInfo exists, so $usedPct exists) and
+    # the band is enabled (>0).
+    } elseif ($sizeInfo -ne "" -and $DISK_USED_PCT_WARN -gt 0 -and $usedPct -ge $DISK_USED_PCT_WARN) {
+        if (Clear-AlertState "low_disk") {
+            Alert-Green "✅ Disk Space Recovered" "Disk space back to ${availGB}GB free${sizeInfo}."
+        }
+        if (Test-ShouldAlert "disk_warn") {
+            $datadirLine = $DATADIR.TrimEnd('\') + '\'
+            Alert-Yellow "⚠️  Disk Filling Up" "${usedPct}% used — ${availGB}GB free${sizeInfo}. The red alert fires below ${MIN_DISK_GB}GB free.`nThe usual offender on an oracle box is a grown debug.log — check the debug.log line in your health summary.`nDatadir: ${datadirLine}"
+        }
+        $script:Details.Add("⚠️  Disk: ${availGB}GB free of ${totalGB}GB (${usedPct}% used, drive ${DISK_DRIVE}:) — over ${DISK_USED_PCT_WARN}% warn band")
+        $script:Warnings++
     } else {
         if (Clear-AlertState "low_disk") {
             Alert-Green "✅ Disk Space Recovered" "Disk space back to ${availGB}GB free${sizeInfo}."
+        }
+        if (Clear-AlertState "disk_warn") {
+            Alert-Green "✅ Disk Usage Back Under Band" "Disk usage back under ${DISK_USED_PCT_WARN}% — ${availGB}GB free${sizeInfo}."
         }
         # Summary line keeps the drive letter the Windows version has
         # always shown, folded into the same parens as used%.
@@ -1132,6 +1226,255 @@ function Check-Disk {
             $script:Details.Add("✅ Disk: ${availGB}GB free (drive ${DISK_DRIVE}:)")
         }
     }
+}
+
+# --- Check 13: debug.log size + growth watchdog (v2.7.0) ---
+# Why this check exists: DigiByte Core inherits Bitcoin Core's
+# -shrinkdebugfile default of "on unless -debug is set". The moment an
+# operator enables any debug category — and the oracle setup docs
+# historically said debug=digidollar — automatic startup log-shrinking
+# turns OFF. Oracle boxes are exactly the machines that never restart,
+# so the one built-in bound never fires. Measured on my slot-17 VPS in
+# July 2026: ~374 MB/day with digidollar+net enabled vs ~8 MB/day with
+# default logging — same box, same monitor. The single biggest amplifier
+# is getoracleprice (~4,780 category-gated lines per call on v9.26.4),
+# so ordinary 5-minute monitoring multiplies the growth. This check
+# makes the growth visible and names the cause; Rotate-Debuglog below
+# bounds it. Growth baseline lives in $STATE_DIR (file: debuglog_growth,
+# "epoch bytes", advances at most hourly; -DryRun reads, never writes).
+function Check-Debuglog {
+    $logPath = $DATADIR.TrimEnd('\') + '\debug.log'
+
+    if (-not (Test-Path -LiteralPath $logPath)) {
+        $script:Details.Add("ℹ️  debug.log: not found at ${logPath} (custom datadir? set `$DATADIR in config)")
+        return
+    }
+
+    $sizeBytes = $null
+    try { $sizeBytes = (Get-Item -LiteralPath $logPath -ErrorAction Stop).Length } catch { }
+    if ($null -eq $sizeBytes) {
+        $script:Details.Add("⚠️  debug.log: could not read size")
+        $script:Warnings++
+        return
+    }
+    $sizeMB = [math]::Floor($sizeBytes / 1MB)
+
+    # Growth-per-day from a rolling baseline. Two different windows, on
+    # purpose: the rate DISPLAYS once the baseline is >=1h old (a 5-minute
+    # delta is noise), but the baseline only ADVANCES every 24h. Making
+    # both 1h -- as the first cut did -- means a 5-minute schedule resets
+    # the baseline on the first pass past each hour, so 11 of every 12
+    # passes print nothing and the rate is invisible ~92% of the time.
+    # With a 24h advance it shows on ~96% of passes and measures growth
+    # over up to a full day. A rotation (size < baseline) resets it.
+    $growthFile = Join-Path $STATE_DIR "debuglog_growth"
+    $rateNote = ""
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $baseTs = $null; $baseBytes = $null
+    if (Test-Path $growthFile) {
+        $parts = (Get-Content $growthFile -ErrorAction SilentlyContinue | Select-Object -First 1) -split '\s+'
+        if ($parts.Count -ge 2) {
+            $tmpTs = 0; $tmpBy = 0
+            if ([long]::TryParse($parts[0], [ref]$tmpTs) -and [long]::TryParse($parts[1], [ref]$tmpBy)) {
+                $baseTs = $tmpTs; $baseBytes = $tmpBy
+            }
+        }
+    }
+    if ($null -ne $baseTs) {
+        $elapsed = $now - $baseTs
+        if ($elapsed -ge 3600 -and $sizeBytes -ge $baseBytes) {
+            $mbPerDay = ($sizeBytes - $baseBytes) / $elapsed * 86400 / 1MB
+            $rateNote = " (+{0:N1} MB/day)" -f $mbPerDay
+        }
+    }
+    if (-not $script:DRY_RUN) {
+        if ($null -eq $baseTs -or ($now - $baseTs) -ge 86400 -or $sizeBytes -lt $baseBytes) {
+            Set-Content -Path $growthFile -Value "$now $sizeBytes"
+        }
+    }
+
+    # Enabled debug categories — the attribution that makes the alert
+    # actionable. `logging` is a local table lookup: safe every pass.
+    $cats = ""
+    $rawLog = Invoke-DGBCli -RpcArgs @("logging")
+    if (-not [string]::IsNullOrEmpty($rawLog)) {
+        $logObj = $null
+        try { $logObj = $rawLog | ConvertFrom-Json } catch { }
+        if ($null -ne $logObj) {
+            $onCats = @($logObj.PSObject.Properties | Where-Object { $_.Value -eq $true } | ForEach-Object { $_.Name })
+            if ($onCats.Count -gt 0) { $cats = $onCats -join ", " }
+        }
+    }
+    $catsSuffix = ""
+    if ($cats -ne "") { $catsSuffix = " — debug: ${cats}" }
+
+    if ($sizeMB -ge $DEBUG_LOG_WARN_MB) {
+        if (Test-ShouldAlert "debuglog_large") {
+            if ($cats -ne "") {
+                $why = "Debug categories enabled: ${cats}. Any -debug category also disables the daemon's automatic startup log-shrink, so this file grows until rotated."
+                $fix = "One-line fix if you're not actively debugging: remove the debug= line(s) from digibyte.conf, then restart the daemon at your next maintenance window."
+            } else {
+                $why = "No debug categories are enabled — this is default-logging growth (slow, but unbounded between restarts)."
+                $fix = "The daemon truncates it automatically on the next restart (shrinkdebugfile default)."
+            }
+            if ($DEBUG_LOG_ROTATE -eq "yes") {
+                $rotNote = "Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted."
+            } else {
+                $rotNote = "Auto-rotation is OFF (`$DEBUG_LOG_ROTATE=`"no`"). Manual: stop the daemon, rename debug.log, restart — or set shrinkdebugfile=1 in digibyte.conf and restart."
+            }
+            Alert-Yellow "⚠️  debug.log Growing Large" "debug.log is ${sizeMB}MB${rateNote}.`n${why}`n${fix}`n${rotNote}`nFull guidance: ORACLE_HARDENING_GUIDE.md → `"debug.log: growth, rotation`""
+        }
+        $script:Details.Add("⚠️  debug.log: ${sizeMB}MB${rateNote}${catsSuffix} (LARGE)")
+        $script:Warnings++
+    } else {
+        if (Clear-AlertState "debuglog_large") {
+            Alert-Green "✅ debug.log Back Under Threshold" "debug.log is ${sizeMB}MB — under the ${DEBUG_LOG_WARN_MB}MB warn threshold again."
+        }
+        $script:Details.Add("✅ debug.log: ${sizeMB}MB${rateNote}${catsSuffix}")
+    }
+}
+
+# --- debug.log safe auto-rotation (v2.7.0) — default ON ---
+# Design rules, in priority order:
+#   1. NEVER destroy the only copy of recent history. Rotation is
+#      copy-then-truncate: Copy-Item debug.log → debug.log.1, then
+#      truncate the LIVE file to zero in place via a .NET FileStream
+#      SetLength(0) opened with FileShare ReadWrite. The daemon holds the
+#      file open — Remove-Item/Move-Item would fail or orphan the handle;
+#      an in-place truncate keeps the daemon writing with no restart.
+#      Nothing is lost until a SECOND rotation overwrites debug.log.1.
+#   2. NEVER rotate silently. Every rotation posts a blue card.
+#   3. NEVER make things worse. The copy momentarily needs as much free
+#      space as the log itself; below log-size + 512MB margin the
+#      rotation is SKIPPED and a red card explains the manual path.
+#   4. If the copy fails, the live file is NOT touched (rule 1).
+#   5. -DryRun prints what it would do and touches nothing.
+# WINDOWS DIVERGENCE: if the daemon opened debug.log without granting
+# shared write access, the in-place truncate throws. The monitor then
+# posts ONE yellow card (state: debuglog_rotate_locked), keeps the safety
+# copy it already made, and stops re-attempting until the file drops back
+# under the threshold — the card names the durable fix (shrinkdebugfile=1
+# + a daemon restart, or turning the debug category off). Never crashes.
+# $DEBUG_LOG_KEEP: rotated copies to retain (default 1 → debug.log.1).
+# Values >1 shift .1→.2→… first. 0 is treated as 1 — truncate-without-
+# copy is exactly the evidence destruction this design forbids.
+function Rotate-Debuglog {
+    if ($DEBUG_LOG_ROTATE -ne "yes") { return }
+    $logPath = $DATADIR.TrimEnd('\') + '\debug.log'
+    if (-not (Test-Path -LiteralPath $logPath)) { return }
+
+    $sizeBytes = $null
+    try { $sizeBytes = (Get-Item -LiteralPath $logPath -ErrorAction Stop).Length } catch { }
+    if ($null -eq $sizeBytes) { return }
+    $sizeMB = [math]::Floor($sizeBytes / 1MB)
+    if ($sizeMB -lt $DEBUG_LOG_MAX_MB) {
+        # Below threshold again (restart shrink, category off, manual fix)
+        # — forget any prior Windows-lock stall so a future breach retries.
+        Clear-AlertState "debuglog_rotate_locked" | Out-Null
+        return
+    }
+
+    $keep = $DEBUG_LOG_KEEP
+    if ($null -eq $keep -or $keep -lt 1) { $keep = 1 }
+
+    if ($script:DRY_RUN) {
+        Write-Output "[dry-run] debug.log is ${sizeMB}MB >= DEBUG_LOG_MAX_MB=${DEBUG_LOG_MAX_MB}MB — would rotate (Copy-Item → debug.log.1, then truncate live file in place)."
+        return
+    }
+
+    # Windows-lock stall: we already copied and explained once — don't
+    # churn the copy or the channel every 5 minutes while locked.
+    if (Test-Path (Join-Path $STATE_DIR "debuglog_rotate_locked")) { return }
+
+    # Rule 3 — free-space rail on the datadir's own drive.
+    $availMB = $null
+    try {
+        $qualifier = Split-Path -Qualifier $logPath   # e.g. "C:"
+        $drv = Get-PSDrive -Name $qualifier.TrimEnd(':') -ErrorAction Stop
+        $availMB = [math]::Floor($drv.Free / 1MB)
+    } catch { }
+    if ($null -eq $availMB -or $availMB -lt ($sizeMB + 512)) {
+        if (Test-ShouldAlert "debuglog_rotate_blocked") {
+            Alert-Red "🔴 debug.log Rotation Blocked" "debug.log is ${sizeMB}MB (≥ ${DEBUG_LOG_MAX_MB}MB rotation threshold) but only ${availMB}MB is free — the safety copy needs ~${sizeMB}MB + 512MB margin.`nFree up space, then wait for the next pass — or set shrinkdebugfile=1 in digibyte.conf and restart the daemon."
+        }
+        return
+    }
+
+    # KEEP>1: shift the retained chain (.1→.2, …) before the fresh copy.
+    if ($keep -gt 1) {
+        for ($i = $keep - 1; $i -ge 1; $i--) {
+            $older = "${logPath}.${i}"
+            if (Test-Path -LiteralPath $older) {
+                Move-Item -LiteralPath $older -Destination "${logPath}.$($i + 1)" -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    # Rule 1/4 — copy first; truncate ONLY if the copy landed.
+    try {
+        Copy-Item -LiteralPath $logPath -Destination "${logPath}.1" -Force -ErrorAction Stop
+    } catch {
+        if (Test-ShouldAlert "debuglog_rotate_blocked") {
+            Alert-Red "🔴 debug.log Rotation Failed" "Could not copy debug.log to debug.log.1 — the live file was left untouched (evidence rule). Check permissions and free space."
+        }
+        return
+    }
+
+    # In-place truncate via .NET, requesting shared read/write so the
+    # daemon's own handle keeps working. Clear-Content is NOT used here —
+    # it opens the file without sharing and fails against a live writer.
+    $truncated = $false
+    $fs = $null
+    try {
+        $fs = [System.IO.File]::Open($logPath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        $fs.SetLength(0)
+        $fs.Close()
+        $truncated = $true
+    } catch {
+        if ($null -ne $fs) { try { $fs.Close() } catch { } }
+    }
+
+    if (-not $truncated) {
+        if (Test-ShouldAlert "debuglog_rotate_locked") {
+            Alert-Yellow "⚠️  debug.log Rotation Stalled (Windows file lock)" "The safety copy was made (debug.log.1, ${sizeMB}MB) but the daemon holds debug.log with an exclusive lock, so the live file could not be truncated in place.`nDurable fix: set shrinkdebugfile=1 in digibyte.conf and restart the daemon at your next maintenance window — or remove the debug= line(s) so the file stops growing this fast.`nThe monitor will not re-attempt until the file next drops under ${DEBUG_LOG_MAX_MB}MB."
+        }
+        return
+    }
+
+    Clear-AlertState "debuglog_rotate_blocked" | Out-Null
+    Clear-AlertState "debuglog_large" | Out-Null
+
+    # Rule 2 — every rotation is announced, never state-gated.
+    Alert-Blue "🔁 debug.log Rotated" "debug.log reached ${sizeMB}MB (rotation threshold: ${DEBUG_LOG_MAX_MB}MB).`nNewest history preserved in: ${logPath}.1`nLive file truncated in place — the daemon keeps writing, no restart needed. Nothing is lost until the NEXT rotation overwrites debug.log.1.`nSeeing this card often? A debug category is on — check the debug.log line in your health summary."
+}
+
+# --- Price-check interval gate (v2.7.0) ---
+# getoracleprice is the single loudest RPC a v9.26.4 node exposes when
+# debug=digidollar is enabled (~4,780 log lines per call). N=3 with the
+# stock 5-minute schedule = one price check per 15 minutes — a third of
+# that log source for up to 10 extra minutes' stale-price latency.
+# Default 1 = every pass, exactly the pre-2.7.0 behavior. Counter lives
+# in $STATE_DIR; -Summary, -Watch, and -DryRun route through Send-Summary
+# which calls Check-Price directly and always checks.
+function Invoke-MaybeCheckPrice {
+    $n = $PRICE_CHECK_EVERY
+    if ($null -eq $n -or $n -le 1) {
+        Check-Price
+        return
+    }
+    $cfile = Join-Path $STATE_DIR "price_check_counter"
+    $count = 0
+    if (Test-Path $cfile) {
+        $tmp = 0
+        $rawCount = (Get-Content $cfile -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ([int]::TryParse("$rawCount", [ref]$tmp)) { $count = $tmp }
+    }
+    $count = ($count + 1) % $n
+    Set-Content -Path $cfile -Value "$count"
+    if ($count -eq 0) { Check-Price }
 }
 
 # --- Check 7: Memory usage ---
@@ -1455,6 +1798,15 @@ function Get-BandSeverity {
 #   & digibyte-cli.exe -testnet getdigidollardeploymentinfo | ConvertFrom-Json
 #   (& digibyte-cli.exe -testnet getoracles true | ConvertFrom-Json)[0]
 #
+# v2.7.0 / v9.26.5 SHAPE NOTE (PR #429, BIP90 burial): the burial removes
+# the BIP9 *signaling* fields from getdigidollardeploymentinfo — this
+# check never read those. The fields it does read
+# (oracle_consensus_required, oracle_total_slots, musig2_session.*) are
+# DD-roster/session data and persist in the buried shape per the v9.26.5
+# release notes; every read below is property-guarded with a sane
+# fallback (7, 35, "?"), so a dropped field degrades to the correct
+# mainnet constants or a visible ⚠️ line — never a crash, never a silent
+# wrong alert.
 function Check-Quorum {
     # --- Step 1: Get deployment info (quorum threshold + MuSig2 session) ---
     $rawDeploy = Invoke-DGBCli -RpcArgs @("getdigidollardeploymentinfo")
@@ -1712,6 +2064,8 @@ function Send-Summary {
     Check-Peers
     Check-Price
     Check-Disk
+    Check-Debuglog           # v2.7.0: Check 13 — debug.log watchdog
+    Rotate-Debuglog          # v2.7.0: safe auto-rotation (default ON)
     Check-Memory
     Check-Swap               # v2.4
     Check-Services
@@ -1812,9 +2166,24 @@ function Check-DigidollarActive {
         return
     }
 
+    # v2.7.0: v9.26.5 (PR #429) buries the DigiDollar deployment (BIP90)
+    # and reshapes this RPC to {enabled, type:"buried",
+    # status:"active"|"defined", activation_height}. The buried shape
+    # KEEPS a status field, so the primary read works for both v9.26.4
+    # and v9.26.5 nodes; the fallback additionally accepts the generic
+    # buried form ({type:"buried", active:true}) should status ever be
+    # absent — daemon and monitor can be upgraded in either order.
+    $script:DdShape = "bip9"
+    if ($null -ne $info.PSObject.Properties['type']) {
+        $script:DdShape = "$($info.type)"
+    }
     $script:DdStatus = "unknown"
-    if ($null -ne $info.PSObject.Properties['status']) {
+    if ($null -ne $info.PSObject.Properties['status'] -and -not [string]::IsNullOrEmpty("$($info.status)")) {
         $script:DdStatus = "$($info.status)"
+    } elseif ($script:DdShape -eq "buried" -and
+              $null -ne $info.PSObject.Properties['active'] -and
+              $info.active -eq $true) {
+        $script:DdStatus = "active"
     }
     $script:DdActive = ($script:DdStatus -eq "active")
 }
@@ -1825,8 +2194,10 @@ function Invoke-Checks {
     Check-Oracle
     Check-Chain
     Check-Peers
-    Check-Price
+    Invoke-MaybeCheckPrice   # v2.7.0: PRICE_CHECK_EVERY gate around Check 5
     Check-Disk
+    Check-Debuglog           # v2.7.0: Check 13 — debug.log watchdog
+    Rotate-Debuglog          # v2.7.0: safe auto-rotation (default ON)
     Check-Memory
     Check-Swap               # v2.4
     Check-Ntp
