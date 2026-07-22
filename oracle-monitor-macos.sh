@@ -1,9 +1,9 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
-# Version: 2.7.0-macos.1
+# Version: 2.7.1-macos.1
 #
-# macOS port of my oracle-monitor.sh v2.7.0 (Linux). Same checks, same quorum
+# macOS port of my oracle-monitor.sh v2.7.1 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
 # guard, same auto-detect for headless vs Qt wallet, same email-plus-Discord
 # dual-channel alerts, same daily update check — BSD/macOS-native commands.
@@ -11,7 +11,7 @@
 # bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.7.0-macos.1"
+readonly SCRIPT_VERSION="2.7.1-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -55,6 +55,13 @@ readonly SCRIPT_VERSION="2.7.0-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.7.1 — The debug.log alert now links straight to the guide. The v2.7.0
+#            card ended with a bare filename ("ORACLE_HARDENING_GUIDE.md →
+#            ...") that Discord and email clients won't linkify, so an
+#            operator reading the alert on their phone had to go find the
+#            repo by hand. It now carries the full anchor URL, landing them
+#            on the exact section. Same fix on all three platforms; no
+#            logic change, no new config.
 #   v2.7.0-macos.1 — The disk-safety release. Matches Linux v2.7.0.
 #            Root cause, measured live on my slot-17 Linux VPS in July
 #            2026 and just as true on a Mac: enabling any -debug category
@@ -1169,7 +1176,7 @@ check_debuglog() {
             else
                 rot_note="Auto-rotation is OFF (DEBUG_LOG_ROTATE=\"no\"). Manual: cp \"${log_path}\" \"${log_path}.1\" && : > \"${log_path}\""
             fi
-            alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: ORACLE_HARDENING_GUIDE.md → \"debug.log: growth, rotation\""
+            alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#debuglog-growth-rotation-and-the-disappearing-disk"
         fi
         DETAILS+="⚠️  debug.log: ${size_mb}MB${rate_note}${cats_suffix} (LARGE)\n"
         WARNINGS=$((WARNINGS + 1))

@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.7.0-win.1
+# Version: 2.7.1-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.7.0 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh v2.7.1 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet, same
 # email-plus-Discord dual-channel alerts, same daily update check — all
@@ -50,6 +50,12 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.7.1-win.1 — The debug.log alert now links straight to the guide.
+#            The v2.7.0 card ended with a bare filename that Discord and
+#            email clients won't linkify, so an operator reading the alert
+#            on their phone had to go find the repo by hand. It now carries
+#            the full anchor URL. Same fix on all three platforms; no logic
+#            change, no new config.
 #   v2.7.0-win.1 — The disk-safety release. Matches Linux v2.7.0.
 #            Root cause, measured live on my slot-17 Linux VPS in July
 #            2026 and just as true on Windows: enabling any -debug
@@ -296,7 +302,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.7.0-win.1"
+$SCRIPT_VERSION = "2.7.1-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -1322,7 +1328,7 @@ function Check-Debuglog {
             } else {
                 $rotNote = "Auto-rotation is OFF (`$DEBUG_LOG_ROTATE=`"no`"). Manual: stop the daemon, rename debug.log, restart — or set shrinkdebugfile=1 in digibyte.conf and restart."
             }
-            Alert-Yellow "⚠️  debug.log Growing Large" "debug.log is ${sizeMB}MB${rateNote}.`n${why}`n${fix}`n${rotNote}`nFull guidance: ORACLE_HARDENING_GUIDE.md → `"debug.log: growth, rotation`""
+            Alert-Yellow "⚠️  debug.log Growing Large" "debug.log is ${sizeMB}MB${rateNote}.`n${why}`n${fix}`n${rotNote}`nFull guidance: https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#debuglog-growth-rotation-and-the-disappearing-disk"
         }
         $script:Details.Add("⚠️  debug.log: ${sizeMB}MB${rateNote}${catsSuffix} (LARGE)")
         $script:Warnings++

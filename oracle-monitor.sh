@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.7.0
+# Version: 2.7.1
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.7.0"
+readonly SCRIPT_VERSION="2.7.1"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +35,13 @@ readonly SCRIPT_VERSION="2.7.0"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.7.1 — The debug.log alert now links straight to the guide. The v2.7.0
+#            card ended with a bare filename ("ORACLE_HARDENING_GUIDE.md →
+#            ...") that Discord and email clients won't linkify, so an
+#            operator reading the alert on their phone had to go find the
+#            repo by hand. It now carries the full anchor URL, landing them
+#            on the exact section. Same fix on all three platforms; no
+#            logic change, no new config.
 #   v2.7.0 — The disk-safety release. Born from a real incident on my own
 #            slot-17 VPS: testnet26's debug.log quietly reached 15 GB
 #            before anything complained. Root cause chain, measured live
@@ -1192,7 +1199,7 @@ check_debuglog() {
             else
                 rot_note="Auto-rotation is OFF (DEBUG_LOG_ROTATE=\"no\"). Manual: cp ${log_path} ${log_path}.1 && truncate -s 0 ${log_path}"
             fi
-            alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: ORACLE_HARDENING_GUIDE.md → \"debug.log: growth, rotation\""
+            alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#debuglog-growth-rotation-and-the-disappearing-disk"
         fi
         DETAILS+="⚠️  debug.log: ${size_mb}MB${rate_note}${cats_suffix} (LARGE)\n"
         WARNINGS=$((WARNINGS + 1))
