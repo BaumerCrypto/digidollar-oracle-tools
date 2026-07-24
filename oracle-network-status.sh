@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.6.5
+# Version: 1.7.2
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -50,6 +50,10 @@
 #   # Mainnet (custom config, 12hr status pulse)
 #   10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 #   # Mainnet (hourly endgame ticker, silent outside 24h band)
+#   #   NOTE (v1.7.2): only useful on a chain still heading TO activation.
+#   #   Once a chain is active this silent-exits on every run — mainnet
+#   #   activated at block 23,869,440 on 2026-07-17, so mainnet operators
+#   #   can leave this line out. Keep it for a future testnet countdown.
 #   15 * * * *   /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 #
 # DATA SOURCES (RPCs):
@@ -72,6 +76,59 @@
 #                                          read by the 12hr standby pass)
 #
 # CHANGELOG:
+#   v1.7.2 — Cosmetic follow-up to the v1.7.0 burial work, caught on the
+#          first live v9.26.5 card. The card rendered "BIP9: active (bit
+#          N/A)" instead of "(bit buried)". Cause: the deployment read
+#          used `jq -r '.bit // "N/A"'`, so when the buried shape omits
+#          .bit entirely, BIP9_BIT was set to the literal string "N/A" —
+#          non-empty, so the display default ${BIP9_BIT:-buried} could
+#          never fire. Fixed by defaulting that read to empty instead.
+#          The three cases are now distinct and each correct: v9.26.4
+#          returns the real bit ("bit 23"); v9.26.5's buried shape omits
+#          it and renders "bit buried"; and a FAILED RPC still renders
+#          "bit N/A", because there we genuinely do not know — that
+#          fallback is deliberately left alone. Also flagged the hourly
+#          --endgame-only cron in the header examples as post-activation
+#          vestigial (it silent-exits forever on a chain that has already
+#          activated) — the mode itself stays for any future chain.
+#   v1.7.1 — Software rows now sort ascending BY VERSION within each
+#          compliance tier, instead of by operator count descending.
+#          The card reads oldest-to-newest, so the upgrade story is
+#          visible at a glance (laggards at the top of the block, newest
+#          at the bottom) and rows stop reshuffling every time one
+#          operator moves. The v1.6.1 three-tier grouping is unchanged
+#          and deliberate — compliant block on top, pre-releases in the
+#          middle, "No version reported" pinned last. Sorting globally
+#          ascending would lift rc46/pre2 ABOVE the compliant baseline
+#          (9.26.0 < 9.26.2), which is the exact problem v1.6.1 fixed,
+#          so the reorder is strictly within tiers. The key is a numeric
+#          array compare, not text: v9.26.9 sorts before v9.26.10, which
+#          a lexical sort gets backwards the first time a double-digit
+#          patch number ships. Requires regex-enabled jq (1.5+).
+#          Related, config-side (no code change): ACCEPTED_VERSIONS now
+#          includes v9.26.5 on both instances — a version NEWER than the
+#          whitelist previously fell through as non-compliant and drew a
+#          public upgrade @-ping, which was about to hit the author of
+#          that very release. A version comparison instead of a fixed
+#          whitelist is the durable fix, tracked for v1.8.0.
+#   v1.7.0 — v9.26.5 BIP90 burial compatibility (PR #429, DigiSwarm).
+#          Burying the DigiDollar deployment reshapes both deployment
+#          RPCs: getdeploymentinfo loses .deployments.digidollar.bip9
+#          entirely (replaced by {type:"buried", active, height}), and
+#          getdigidollardeploymentinfo swaps its top-level .since for
+#          .activation_height. Both existing height sources are gated on
+#          the OLD field names, so on a v9.26.5 daemon both would fail
+#          and the chain would fall through to computed_from_window —
+#          the next-retarget-boundary wrong-height bug the v1.6.3
+#          critical fix eliminated. Two fixes: (1) new Source 1a runs
+#          ahead of Source 1 and reads the authoritative buried .height,
+#          confirming status from .active; (2) Source 1b extended to try
+#          .activation_height when .since is absent. Status itself is
+#          unaffected — getdigidollardeploymentinfo.status persists
+#          through the burial. Cosmetic: the buried shape has no
+#          signaling bit, so the card renders "(bit buried)" instead of
+#          "(bit )". No behavior change on v9.26.4: the new branches
+#          simply never match. Upgrade the bot BEFORE the daemon.
 #   v1.6.5 — Widened-window fallback for last-bundle display (July 2026).
 #          Fixes rare "Last bundle: block none in window, signed by 0 oracles"
 #          on the FULL card during a live, healthy signing network. Root cause:
@@ -892,7 +949,12 @@ CURRENT_HEIGHT=$(echo "$CHAIN_JSON" | jq -r '.blocks // 0' 2>/dev/null)
 # --- Deployment info (getdigidollardeploymentinfo, tolerates partial data) ---
 if [ $DEPLOY_OK -eq 0 ] && echo "$DEPLOY_JSON" | jq -e . >/dev/null 2>&1; then
     BIP9_STATUS=$(echo "$DEPLOY_JSON" | jq -r '.status // "unknown"')
-    BIP9_BIT=$(echo "$DEPLOY_JSON" | jq -r '.bit // "N/A"')
+    # v1.7.2: default to EMPTY, not "N/A". Under the v9.26.5 burial this
+    # RPC omits .bit entirely; an empty value lets the display default
+    # ${BIP9_BIT:-buried} fire and render "bit buried". The literal "N/A"
+    # is reserved for the RPC-unavailable branch below, where the bit is
+    # genuinely unknown rather than known-absent.
+    BIP9_BIT=$(echo "$DEPLOY_JSON" | jq -r '.bit // empty')
     QUORUM_REQUIRED=$(echo "$DEPLOY_JSON" | jq -r '.oracle_consensus_required // 7')
     TOTAL_SLOTS=$(echo "$DEPLOY_JSON" | jq -r '.oracle_total_slots // 35')
     MUSIG2_EPOCH=$(echo "$DEPLOY_JSON" | jq -r '.musig2_session.epoch // "N/A"')
@@ -920,6 +982,27 @@ fi
 #      "at least this" indicator and mark unreliable.
 ACTIVATION_HEIGHT=""
 ACTIVATION_HEIGHT_SOURCE="unresolved"
+
+# Source 1a (v1.7.0): v9.26.5 BIP90 burial. PR #429 replaces
+# .deployments.digidollar.bip9 with {"type":"buried","active":…,
+# "height":…}. Without this branch the .bip9 gate below fails on a
+# v9.26.5 daemon, Source 1 is skipped, and the chain falls through to
+# computed_from_window — the next-retarget-boundary wrong-height bug the
+# v1.6.3 critical fix eliminated, resurrected by the burial. The buried
+# .height is authoritative: use it, confirm status from .active, and let
+# the old Source 1 no-op naturally. On v9.26.4 .type is absent and this
+# branch does nothing at all.
+if [ $DEPLOY_STD_OK -eq 0 ] \
+   && [ "$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.type // empty' 2>/dev/null)" = "buried" ]; then
+    BURIED_HEIGHT=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.height // empty' 2>/dev/null)
+    if [ -n "$BURIED_HEIGHT" ] && [ "$BURIED_HEIGHT" != "null" ] && [[ "$BURIED_HEIGHT" =~ ^[0-9]+$ ]]; then
+        ACTIVATION_HEIGHT="$BURIED_HEIGHT"
+        ACTIVATION_HEIGHT_SOURCE="getdeploymentinfo_buried"
+    fi
+    if [ "$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.active // false' 2>/dev/null)" = "true" ]; then
+        BIP9_STATUS="active"
+    fi
+fi
 
 # Source 1: getdeploymentinfo (BIP9 standard)
 if [ $DEPLOY_STD_OK -eq 0 ] && echo "$DEPLOY_STD_JSON" | jq -e '.deployments.digidollar.bip9' >/dev/null 2>&1; then
@@ -966,6 +1049,13 @@ fi
 # for the birth announcement: never announce a window-math guess while active.
 if [ -z "$ACTIVATION_HEIGHT" ] && [ "$BIP9_STATUS" = "active" ]; then
     DGB_SINCE=$(echo "$DEPLOY_JSON" | jq -r '.since // empty' 2>/dev/null)
+    # v1.7.0: under the v9.26.5 burial getdigidollardeploymentinfo drops
+    # .since and carries .activation_height instead. Same meaning, new
+    # name — try it before giving up, so this belt still works when
+    # Source 1a is somehow unavailable.
+    if [ -z "$DGB_SINCE" ] || [ "$DGB_SINCE" = "null" ]; then
+        DGB_SINCE=$(echo "$DEPLOY_JSON" | jq -r '.activation_height // empty' 2>/dev/null)
+    fi
     if [ -n "$DGB_SINCE" ] && [ "$DGB_SINCE" != "null" ] && [[ "$DGB_SINCE" =~ ^[0-9]+$ ]]; then
         ACTIVATION_HEIGHT="$DGB_SINCE"
         ACTIVATION_HEIGHT_SOURCE="digidollardeploymentinfo_since_active"
@@ -1435,7 +1525,7 @@ MESSAGE="${STATUS_EMOJI} Oracle Network Status, ${NET_SEGMENT}${TIMESTAMP}
 Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL}, threshold: ${QUORUM_REQUIRED})
 Consensus price: \$${PRICE_USD} (status: ${PRICE_STATUS})
 MuSig2: epoch ${MUSIG2_EPOCH}, ${MUSIG2_STATE}, ${MUSIG2_NONCES}/${QUORUM_REQUIRED} nonces, ${MUSIG2_SIGS}/${QUORUM_REQUIRED} sigs
-BIP9: ${BIP9_STATUS} (bit ${BIP9_BIT})
+BIP9: ${BIP9_STATUS} (bit ${BIP9_BIT:-buried})
 Last bundle: block ${LAST_BUNDLE_HEIGHT}, signed by ${LAST_BUNDLE_SIGNERS} oracles"
 
 # v1.6.4: DD economy line — only when getdigidollarstats parsed cleanly.
@@ -1497,10 +1587,17 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
     end;
 
   # Map every oracle to {label, compliant} pairs, group by label, count.
-  # v1.6.1: three-tier sort priority:
-  #   0 = compliant (✅ block), sorted count DESC within
-  #   1 = non-compliant WITH a reported version (⚠️ block), count DESC
+  # v1.6.1 three-tier sort priority, v1.7.1 within-tier ordering:
+  #   0 = compliant (✅ block), sorted ASCENDING BY VERSION within
+  #   1 = non-compliant WITH a reported version (⚠️ block), same
   #   2 = "No version reported" (data-quality bucket), pinned to the end
+  # v1.7.1: within-tier order was count DESC (popularity), which said
+  # nothing about upgrade direction and reshuffled whenever one operator
+  # moved. Ascending by version reads oldest-to-newest, so laggards sit
+  # at the top of each block. The key is a NUMERIC array compare
+  # ([scan("[0-9]+") | tonumber]) — a text compare would sort v9.26.10
+  # before v9.26.9. "No version reported" yields [] and is alone in its
+  # tier, so its empty key is harmless. Needs regex-enabled jq (1.5+).
   # Reads like a report: healthy baseline on top, deviations in the
   # middle, unreported at the bottom. The unreported bucket inflates
   # on unhealthy networks (any inactive node lands there) so pinning
@@ -1520,7 +1617,7 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
      elif .label == "No version reported" then 2
      else 1
      end),
-    -.count
+    (.label | [scan("[0-9]+") | tonumber])
   ) |
   .[] |
   (if .compliant then "  ✅ " else "  ⚠️ " end) +
@@ -1736,7 +1833,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "Fresh: $FRESH_COUNT  Stale: $STALE_COUNT  Inactive: $INACTIVE_COUNT  Total: $TOTAL_ORACLES"
     echo "Quorum required: $QUORUM_REQUIRED  Status: $QUORUM_LABEL"
     echo "Price: \$$PRICE_USD ($PRICE_STATUS)  Stale: $PRICE_STALE"
-    echo "BIP9: $BIP9_STATUS (bit $BIP9_BIT)"
+    echo "BIP9: $BIP9_STATUS (bit ${BIP9_BIT:-buried})"
     echo "MuSig2: epoch $MUSIG2_EPOCH, state=$MUSIG2_STATE, nonces=$MUSIG2_NONCES, sigs=$MUSIG2_SIGS"
     echo "Bundles in window: $BUNDLE_COUNT  Last: block $LAST_BUNDLE_HEIGHT ($LAST_BUNDLE_SIGNERS signers)"
     echo ""
