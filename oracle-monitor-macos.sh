@@ -11,7 +11,7 @@
 # bash needed). The only dependency is jq.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
-readonly SCRIPT_VERSION="2.7.1-macos.1"
+readonly SCRIPT_VERSION="2.8.0-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -55,6 +55,14 @@ readonly SCRIPT_VERSION="2.7.1-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.8.0-macos.1 — Parity with Linux v2.8.0. Peer line shows inbound/
+#          outbound split + connection cap ("Peers: 41 connected (34 in /
+#          7 out, cap 125)") from getnetworkinfo + the daemon conf, with
+#          graceful fallback to the bare getconnectioncount total. Fixed
+#          "1 Warnings"/"1 Issues Detected" singularization. Default
+#          DIGIBYTE_UPDATE_TTL 86400 -> 21600 (a 24h TTL races a daily
+#          summary). Reworded the getoracleprice log-volume note to the
+#          mechanism (one line per block of the 24h window, ~5,760 blocks).
 #   v2.7.1 — The debug.log alert now links straight to the guide. The v2.7.0
 #            card ended with a bare filename ("ORACLE_HARDENING_GUIDE.md →
 #            ...") that Discord and email clients won't linkify, so an
@@ -67,8 +75,9 @@ readonly SCRIPT_VERSION="2.7.1-macos.1"
 #            2026 and just as true on a Mac: enabling any -debug category
 #            (the old oracle docs said debug=digidollar) silently disables
 #            the daemon's automatic startup log-shrink, oracle boxes never
-#            restart, and getoracleprice writes ~4,780 category-gated
-#            lines per call on v9.26.4 — so 5-minute monitoring multiplies
+#            restart, and getoracleprice writes one category-gated line
+#            per block of the 24h price window (~5,760 blocks, 4,780-5,800
+#            by miss rate) — so 5-minute monitoring multiplies
 #            growth (~374 MB/day measured with digidollar+net vs ~8 MB/day
 #            default). Four features + one compatibility fix:
 #            (1) DEBUG.LOG WATCHDOG (Check 13): size + growth/day + names
@@ -388,7 +397,7 @@ UPDATE_CHECK_TTL=86400
 # "vX.Y.Z available" note when a newer release exists. Silent on any
 # failure (blue line, no note). Set to "no" to disable.
 DIGIBYTE_UPDATE_CHECK="yes"
-DIGIBYTE_UPDATE_TTL=86400
+DIGIBYTE_UPDATE_TTL=21600
 
 # Oracle settings
 ORACLE_ID=0
@@ -451,7 +460,8 @@ DEBUG_LOG_KEEP=1
 
 # Run the getoracleprice freshness check (Check 5) on every Nth pass. On
 # a node with debug=digidollar enabled, every getoracleprice call writes
-# ~4,780 log lines (v9.26.4) — 3 here means one price check per 15
+# ~one line per block of the 24h price window (~5,760 blocks; 4,780-5,800
+# by miss rate) — 3 here means one price check per 15
 # minutes at the stock cron, a third of that log volume, at the cost of
 # up to 10 extra minutes' stale-price alert latency. 1 (default) = every
 # pass, exactly the pre-2.7.0 behavior. Summaries always check.
@@ -949,28 +959,54 @@ check_chain() {
 }
 
 # --- Check 4: Peer count ---
+# v2.8.0: inbound/outbound split + maxconnections cap. Total still drives
+# the MIN_PEERS threshold; the display line gains the breakdown and cap so
+# saturation is visible at a glance (connections_in serves wallets; near
+# the cap it bounces them). Display-only, graceful fallback throughout.
 check_peers() {
-    local peer_count
-    peer_count=$($CLI getconnectioncount 2>/dev/null)
-
-    if [ $? -ne 0 ]; then
-        DETAILS+="⚠️  Peers: could not query\n"
-        WARNINGS=$((WARNINGS + 1))
-        return
+    local ni total cin cout peer_detail=""
+    ni=$($CLI getnetworkinfo 2>/dev/null)
+    if [ -n "$ni" ]; then
+        read total cin cout < <(echo "$ni" | jq -r '"\(.connections) \(.connections_in) \(.connections_out)"' 2>/dev/null)
+        [ "$total" = "null" ] && total=""
+        if [ -n "$cin" ] && [ "$cin" != "null" ]; then
+            local maxc
+            maxc=$(peer_maxconnections)
+            peer_detail=" (${cin} in / ${cout} out, cap ${maxc})"
+        fi
     fi
 
-    if [ "$peer_count" -lt "$MIN_PEERS" ]; then
-        if should_alert "low_peers"; then
-            alert_yellow "⚠️  Low Peers" "Only $peer_count peers connected (minimum: $MIN_PEERS)."
+    if [ -z "$total" ]; then
+        total=$($CLI getconnectioncount 2>/dev/null)
+        peer_detail=""
+        if [ -z "$total" ]; then
+            DETAILS+="⚠️  Peers: could not query\n"
+            WARNINGS=$((WARNINGS + 1))
+            return
         fi
-        DETAILS+="⚠️  Peers: $peer_count (low!)\n"
+    fi
+
+    if [ "$total" -lt "$MIN_PEERS" ]; then
+        if should_alert "low_peers"; then
+            alert_yellow "⚠️  Low Peers" "Only $total peers connected (minimum: $MIN_PEERS)."
+        fi
+        DETAILS+="⚠️  Peers: ${total} connected${peer_detail} (low!)\n"
         WARNINGS=$((WARNINGS + 1))
     else
         if clear_alert "low_peers"; then
-            alert_green "✅ Peers Recovered" "Peer count back to $peer_count."
+            alert_green "✅ Peers Recovered" "Peer count back to $total."
         fi
-        DETAILS+="✅ Peers: $peer_count connected\n"
+        DETAILS+="✅ Peers: ${total} connected${peer_detail}\n"
     fi
+}
+
+# maxconnections from the daemon conf; absent/commented = built-in default
+# 125. macOS datadir lives under Application Support by default.
+peer_maxconnections() {
+    local conf="${DATADIR%/}/digibyte.conf" mc
+    [ -f "$conf" ] || { echo "125"; return; }
+    mc=$(grep -E '^[[:space:]]*maxconnections[[:space:]]*=' "$conf" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//;s/[[:space:]]*$//')
+    if [ -n "$mc" ] && [ "$mc" -eq "$mc" ] 2>/dev/null; then echo "$mc"; else echo "125"; fi
 }
 
 # --- Check 5: Oracle consensus price ---
@@ -1096,8 +1132,9 @@ check_disk() {
 # the one built-in bound never fires. Measured on my slot-17 VPS in July
 # 2026: ~374 MB/day with digidollar+net enabled (testnet26) vs ~8 MB/day
 # with default logging (mainnet) — same box, same monitor. The single
-# biggest amplifier is getoracleprice (~4,780 category-gated lines per
-# call on v9.26.4), so ordinary 5-minute monitoring multiplies the
+# biggest amplifier is getoracleprice (~one category-gated line per block
+# of the 24h price window, ~5,760 blocks; 4,780-5,800 by miss rate), so
+# ordinary 5-minute monitoring multiplies the
 # growth. This check makes the growth visible and names the cause;
 # rotate_debuglog() below bounds it.
 #
@@ -1266,7 +1303,8 @@ rotate_debuglog() {
 
 # --- Price-check interval gate (v2.7.0) ---
 # getoracleprice is the single loudest RPC a v9.26.4 node exposes when
-# debug=digidollar is enabled (~4,780 log lines per call). N=3 with the
+# debug=digidollar is enabled (~one line per block of the 24h window,
+# ~5,760 blocks; 4,780-5,800 by miss rate). N=3 with the
 # stock 5-minute schedule = one price check per 15 minutes — a third of
 # that log source for up to 10 extra minutes' stale-price latency.
 # Default 1 = every pass, exactly the pre-2.7.0 behavior. Counter lives
@@ -1843,10 +1881,12 @@ send_summary() {
 
     if [ $ISSUES -gt 0 ]; then
         color=16711680  # red
-        status="🔴 $ISSUES Issues Detected"
+        local issue_word="Issues"; [ "$ISSUES" -eq 1 ] && issue_word="Issue"
+        status="🔴 $ISSUES $issue_word Detected"
     elif [ $WARNINGS -gt 0 ]; then
         color=16776960  # yellow
-        status="⚠️  $WARNINGS Warnings"
+        local warn_word="Warnings"; [ "$WARNINGS" -eq 1 ] && warn_word="Warning"
+        status="⚠️  $WARNINGS $warn_word"
     fi
 
     local timestamp

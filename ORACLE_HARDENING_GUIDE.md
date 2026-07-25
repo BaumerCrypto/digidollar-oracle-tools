@@ -885,7 +885,7 @@ shrinkdebugfile=1
 
 **2. The shrink only runs at startup — and oracle boxes never restart.** Uptime discipline is a virtue everywhere else on an oracle node. Here it means the one built-in bound never fires.
 
-**3. Routine monitoring multiplies the growth.** On v9.26.4, a single `getoracleprice` call with `debug=digidollar` enabled writes **~4,780 log lines** — it scans the 24-hour price window (5,760 blocks) and logs one line per cache miss. The RPC itself is fast (~30 ms — this is a *logging* problem, not a performance problem), but a monitor calling it every 5 minutes turns one enabled category into a firehose.
+**3. Routine monitoring multiplies the growth.** With `debug=digidollar` enabled, a single `getoracleprice` call logs **one line per block of the 24-hour price window** — about 5,760 blocks, so **4,780-5,800 lines** depending on the cache-miss rate (I measured ~4,780 on testnet v9.26.4 at an ~83% miss rate, and ~5,800 on mainnet v9.26.5 running at essentially 100%). The RPC itself is fast (~30 ms — this is a *logging* problem, not a performance problem), but a monitor calling it every 5 minutes turns one enabled category into a firehose.
 
 **Measured on my slot-17 VPS, July 2026, same box, same monitor:**
 
@@ -908,6 +908,10 @@ digibyte-cli -testnet logging # testnet
 You can also flip categories live, no restart: `digibyte-cli logging '[]' '["digidollar"]'` disables it.
 
 **B. Let oracle-monitor v2.7.0 handle it (default ON).** The monitor now watches `debug.log` size and growth-per-day (Check 13), names any enabled categories right in the alert, and safely auto-rotates at 2 GB: copy to `debug.log.1`, truncate the live file **in place** (the daemon keeps writing — no restart), blue Discord card on every rotation, red card instead of rotation if free space can't hold the safety copy. Nothing is deleted until a *second* rotation overwrites `.1`, so ~4 GB of the newest history is always on disk for a developer. Knobs: `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, and `PRICE_CHECK_EVERY` to thin the loudest RPC.
+
+Both halves on a live testnet oracle — the yellow warning as the log crosses the warn threshold (categories named, guide linked), then the blue rotation card hours later at the 2 GB mark:
+
+![debug.log watchdog warning followed by the rotation card](Discord_alert-DebugLog-Pair.jpg)
 
 **C. Weekly cron truncate (belt-and-braces, or if you don't run the monitor).** Copy-then-truncate is the only safe pattern — the daemon holds the file open, so `rm`/`mv` leaks the space until restart:
 

@@ -50,6 +50,14 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.8.0-win.1 — Parity with Linux v2.8.0. Peer line shows inbound/
+#          outbound split + connection cap ("Peers: 41 connected (34 in /
+#          7 out, cap 125)") from getnetworkinfo + the daemon conf, with
+#          graceful fallback to the bare getconnectioncount total. Fixed
+#          "1 Warnings"/"1 Issues Detected" singularization. Default
+#          $DIGIBYTE_UPDATE_TTL 86400 -> 21600 (a 24h TTL races a daily
+#          summary). Reworded the getoracleprice log-volume note to the
+#          mechanism (one line per block of the 24h window, ~5,760 blocks).
 #   v2.7.1-win.2 — CRITICAL Windows-only parse fix (caught by DigiByte,
 #            mainnet post-activation). No Linux/macOS change — those use
 #            jq, which parses JSON arrays natively. Check-Quorum parsed the
@@ -79,7 +87,8 @@
 #            category (the old oracle docs said debug=digidollar)
 #            silently disables the daemon's automatic startup log-shrink,
 #            oracle boxes never restart, and getoracleprice writes
-#            ~4,780 category-gated lines per call on v9.26.4 — so
+#            ~one category-gated line per block of the 24h price window
+#            (~5,760 blocks, 4,780-5,800 by miss rate) — so
 #            5-minute monitoring multiplies growth (~374 MB/day measured
 #            with digidollar+net vs ~8 MB/day default). Four features +
 #            one compatibility fix:
@@ -319,7 +328,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.7.1-win.2"
+$SCRIPT_VERSION = "2.8.0-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -385,7 +394,7 @@ $UPDATE_CHECK_TTL = 86400
 # "vX.Y.Z available" note when a newer release exists. Silent on any
 # failure (blue line, no note). Set $DIGIBYTE_UPDATE_CHECK="no" to disable.
 $DIGIBYTE_UPDATE_CHECK = "yes"
-$DIGIBYTE_UPDATE_TTL   = 86400
+$DIGIBYTE_UPDATE_TTL   = 21600
 
 # Oracle settings
 $ORACLE_ID   = 0
@@ -465,7 +474,8 @@ $DEBUG_LOG_KEEP   = 1
 
 # Run the getoracleprice freshness check (Check 5) on every Nth pass. On
 # a node with debug=digidollar enabled, every getoracleprice call writes
-# ~4,780 log lines (v9.26.4) — 3 here means one price check per 15
+# ~one line per block of the 24h price window (~5,760 blocks; 4,780-5,800
+# by miss rate) — 3 here means one price check per 15
 # minutes at the stock schedule, a third of that log volume, at the cost
 # of up to 10 extra minutes' stale-price alert latency. 1 (default) =
 # every pass, exactly the pre-2.7.0 behavior. Summaries always check.
@@ -1089,33 +1099,65 @@ function Check-Chain {
 }
 
 # --- Check 4: Peer count ---
-function Check-Peers {
-    $raw = Invoke-DGBCli -RpcArgs @("getconnectioncount")
-
-    if ([string]::IsNullOrEmpty($raw)) {
-        $script:Details.Add("⚠️  Peers: could not query")
-        $script:Warnings++
-        return
-    }
-
-    $peerCount = 0
-    if (-not [int]::TryParse($raw.Trim(), [ref]$peerCount)) {
-        $script:Details.Add("⚠️  Peers: could not query")
-        $script:Warnings++
-        return
-    }
-
-    if ($peerCount -lt $MIN_PEERS) {
-        if (Test-ShouldAlert "low_peers") {
-            Alert-Yellow "⚠️  Low Peers" "Only $peerCount peers connected (minimum: $MIN_PEERS)."
+function Get-PeerMaxConnections {
+    # maxconnections from the daemon conf; absent/commented = built-in
+    # default 125. $DATADIR already points at the datadir for the debug.log
+    # watchdog, so digibyte.conf lives right there. Never throws.
+    $conf = Join-Path $DATADIR "digibyte.conf"
+    if (-not (Test-Path $conf)) { return "125" }
+    try {
+        $line = Select-String -Path $conf -Pattern '^\s*maxconnections\s*=' -ErrorAction Stop |
+                Select-Object -Last 1
+        if ($line) {
+            $val = ($line.Line -replace '.*=\s*', '' -replace '\s*$', '').Trim()
+            $n = 0
+            if ([int]::TryParse($val, [ref]$n)) { return "$n" }
         }
-        $script:Details.Add("⚠️  Peers: $peerCount (low!)")
+    } catch { }
+    return "125"
+}
+
+function Check-Peers {
+    # v2.8.0: inbound/outbound split + maxconnections cap. Total still
+    # drives the MIN_PEERS threshold; the line gains the breakdown and cap
+    # so saturation is visible at a glance. Display-only, graceful fallback.
+    $total = $null; $peerDetail = ""
+    $niRaw = Invoke-DGBCli -RpcArgs @("getnetworkinfo")
+    if (-not [string]::IsNullOrEmpty($niRaw)) {
+        $ni = $null
+        try { $ni = $niRaw | ConvertFrom-Json } catch { }
+        if ($null -ne $ni -and $null -ne $ni.connections) {
+            $total = [int]$ni.connections
+            if ($null -ne $ni.connections_in) {
+                $cap = Get-PeerMaxConnections
+                $peerDetail = " ($($ni.connections_in) in / $($ni.connections_out) out, cap $cap)"
+            }
+        }
+    }
+
+    if ($null -eq $total) {
+        $raw = Invoke-DGBCli -RpcArgs @("getconnectioncount")
+        $peerDetail = ""
+        $parsed = 0
+        if ([string]::IsNullOrEmpty($raw) -or -not [int]::TryParse($raw.Trim(), [ref]$parsed)) {
+            $script:Details.Add("⚠️  Peers: could not query")
+            $script:Warnings++
+            return
+        }
+        $total = $parsed
+    }
+
+    if ($total -lt $MIN_PEERS) {
+        if (Test-ShouldAlert "low_peers") {
+            Alert-Yellow "⚠️  Low Peers" "Only $total peers connected (minimum: $MIN_PEERS)."
+        }
+        $script:Details.Add("⚠️  Peers: $total connected$peerDetail (low!)")
         $script:Warnings++
     } else {
         if (Clear-AlertState "low_peers") {
-            Alert-Green "✅ Peers Recovered" "Peer count back to $peerCount."
+            Alert-Green "✅ Peers Recovered" "Peer count back to $total."
         }
-        $script:Details.Add("✅ Peers: $peerCount connected")
+        $script:Details.Add("✅ Peers: $total connected$peerDetail")
     }
 }
 
@@ -1260,8 +1302,9 @@ function Check-Disk {
 # so the one built-in bound never fires. Measured on my slot-17 VPS in
 # July 2026: ~374 MB/day with digidollar+net enabled vs ~8 MB/day with
 # default logging — same box, same monitor. The single biggest amplifier
-# is getoracleprice (~4,780 category-gated lines per call on v9.26.4),
-# so ordinary 5-minute monitoring multiplies the growth. This check
+# is getoracleprice (~one category-gated line per block of the 24h price
+# window, ~5,760 blocks; 4,780-5,800 by miss rate), so ordinary 5-minute
+# monitoring multiplies the growth. This check
 # makes the growth visible and names the cause; Rotate-Debuglog below
 # bounds it. Growth baseline lives in $STATE_DIR (file: debuglog_growth,
 # "epoch bytes", advances at most hourly; -DryRun reads, never writes).
@@ -1476,7 +1519,8 @@ function Rotate-Debuglog {
 
 # --- Price-check interval gate (v2.7.0) ---
 # getoracleprice is the single loudest RPC a v9.26.4 node exposes when
-# debug=digidollar is enabled (~4,780 log lines per call). N=3 with the
+# debug=digidollar is enabled (~one line per block of the 24h window,
+# ~5,760 blocks; 4,780-5,800 by miss rate). N=3 with the
 # stock 5-minute schedule = one price check per 15 minutes — a third of
 # that log source for up to 10 extra minutes' stale-price latency.
 # Default 1 = every pass, exactly the pre-2.7.0 behavior. Counter lives
@@ -2119,10 +2163,12 @@ function Send-Summary {
 
     if ($script:Issues -gt 0) {
         $color  = 16711680  # red
-        $status = "🔴 $($script:Issues) Issues Detected"
+        $issueWord = if ($script:Issues -eq 1) { "Issue" } else { "Issues" }
+        $status = "🔴 $($script:Issues) $issueWord Detected"
     } elseif ($script:Warnings -gt 0) {
         $color  = 16776960  # yellow
-        $status = "⚠️  $($script:Warnings) Warnings"
+        $warnWord = if ($script:Warnings -eq 1) { "Warning" } else { "Warnings" }
+        $status = "⚠️  $($script:Warnings) $warnWord"
     }
 
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")

@@ -73,7 +73,12 @@ UPDATE_CHECK="yes"
 # Uses the releases/latest endpoint, so you're never nudged toward an RC.
 # Set DIGIBYTE_UPDATE_CHECK="no" to disable.
 DIGIBYTE_UPDATE_CHECK="yes"
-# DIGIBYTE_UPDATE_TTL=86400  # seconds between GitHub release checks (default 1 day)
+# DIGIBYTE_UPDATE_TTL=21600  # seconds between GitHub release checks (default 6h)
+#   NOTE: keep this SHORTER than your summary interval. The version check
+#   runs only inside a summary (--summary), so if the TTL and the summary
+#   cadence are both ~24h they race — the cache can expire seconds after
+#   the summary reads it, and the "vX.Y.Z available" note then alternates
+#   on and off day to day. 6h is safely inside any sane summary schedule.
 
 # ---- Oracle Identity ----
 ORACLE_ID=0
