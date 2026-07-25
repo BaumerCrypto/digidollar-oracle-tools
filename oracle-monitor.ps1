@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.7.1-win.2
+# Version: 2.8.0-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh v2.7.1 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9

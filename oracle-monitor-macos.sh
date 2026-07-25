@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
-# Version: 2.7.1-macos.1
+# Version: 2.8.0-macos.1
 #
 # macOS port of my oracle-monitor.sh v2.7.1 (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation

@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.7.1
+# Version: 2.8.0
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
