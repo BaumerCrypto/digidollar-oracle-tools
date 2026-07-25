@@ -8,6 +8,18 @@ Maintained by **digibyte-maxi** (Oracle Slot 17) — see contact at the bottom.
 
 ---
 
+## In production
+
+These aren't demo scripts — this is the monitoring I run on my own oracle (Slot 17), which has been signing on DigiByte mainnet since the 2026-07-17 activation (block 23,869,440) and on testnet26 alongside it:
+
+- [`oracle-network-status.sh`](oracle-network-status.sh) is the shared network-status bot for the DigiDollar community, posting health summaries to [`#digidollar:gitter.im`](https://app.gitter.im/#/room/#digidollar:gitter.im) — one instance covering mainnet + testnet for the whole room.
+- [`oracle-monitor.sh`](oracle-monitor.sh) and its Windows and macOS ports run on operator boxes across all three platforms, giving each operator private Discord + email alerts for their own node.
+- The hardening guides come straight from my live VPS setup — reboot-verified and soak-tested with multiple concurrent daemons.
+
+Beyond the tooling, I've taken part in the DigiDollar launch discussions with the core developers, including the frozen-roster launch strategy and oracle-roster mechanics.
+
+---
+
 ## What's in this repo
 
 | File | Purpose |
@@ -175,7 +187,7 @@ _The transition image is older than the rest — a fresh capture needs an organi
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS) — for Windows and macOS, see [Platform support](#platform-support) above
-- DigiByte Core **v9.26.4** (also compatible with v9.26.2/v9.26.3 and RC44–RC46; **v9.26.5-ready** — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles`, and `logging` RPCs)
+- DigiByte Core **v9.26.5** (also compatible with v9.26.2/v9.26.3/v9.26.4 and RC44–RC46 — uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles`, and `logging` RPCs)
 - `jq` (for JSON parsing — install with `sudo apt install jq`)
 - `curl` with SMTP support (stock Ubuntu ships this — verify with `curl --version | grep smtp`)
 - A Discord webhook URL — create one at: *Server Settings → Integrations → Webhooks → New Webhook*
@@ -342,7 +354,7 @@ With `QUORUM_HYSTERESIS=0`, recovery fires at the exact threshold (v2.0 behavior
 
 ### RPC field reference
 
-Both scripts parse specific fields from DigiByte Core RPCs. If a future release renames a field, these scripts may need updates. Known field names as of v9.26.4:
+Both scripts parse specific fields from DigiByte Core RPCs. If a future release renames a field, these scripts may need updates. Known field names as of v9.26.5:
 
 | RPC | Field used |
 |-----|-----------|
@@ -399,9 +411,10 @@ MuSig2: epoch 3061, complete, 7/7 nonces, 7/7 sigs
 BIP9: active (bit 23)
 Last bundle: block 122446, signed by 7 oracles
 
-Software (accepted: v9.26.2 / v9.26.3 / v9.26.4):
-  ✅ v9.26.4: 7 operators
-  ✅ v9.26.3: 5 operators
+Software (accepted: v9.26.2 / v9.26.3 / v9.26.4 / v9.26.5):
+  ✅ v9.26.5: 6 operators
+  ✅ v9.26.4: 4 operators
+  ✅ v9.26.3: 2 operators
   ✅ v9.26.2: 1 operator
   ⚠️ v9.26.0rc46 (pre-release): 12 operators
   ⚠️ v9.26.1-pre2 (pre-release): 1 operator
@@ -463,7 +476,7 @@ v1.6.2 splits these into two phases: Phase 1 (`getblockchaininfo`, `getdeploymen
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.4** (also compatible with v9.26.2/v9.26.3 and RC44–RC46)
+- DigiByte Core **v9.26.5** (also compatible with v9.26.2/v9.26.3/v9.26.4 and RC44–RC46)
 - `jq`, `curl`
 - A [Matrix](https://matrix.org) bot account joined to `#digidollar:gitter.im`
 
@@ -561,7 +574,7 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | Component | Version |
 |-----------|---------|
 | OS | Linux (Ubuntu 24.04 LTS), Windows 10/11 (PowerShell 5.1+), macOS (bash 3.2+) |
-| DigiByte Core | v9.26.4 (also compatible with v9.26.2, v9.26.3, and RC44/RC45/RC46; **v9.26.5-ready**) |
+| DigiByte Core | v9.26.5 (also compatible with v9.26.2, v9.26.3, v9.26.4, and RC44/RC45/RC46) |
 | Chain | mainnet (DigiDollar active since block 23,869,440) + testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
 | oracle-monitor.sh | v2.8.0 |
