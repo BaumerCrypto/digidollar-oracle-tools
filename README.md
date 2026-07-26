@@ -1,5 +1,9 @@
 # digidollar-oracle-tools
 
+[![Latest release](https://img.shields.io/github/v/release/BaumerCrypto/digidollar-oracle-tools?label=latest&color=blue)](https://github.com/BaumerCrypto/digidollar-oracle-tools/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/BaumerCrypto/digidollar-oracle-tools?color=green)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](CROSS_PLATFORM_SETUP.md)
+
 Operator tools and monitoring scripts for [DigiByte](https://www.digibyte.org/) DigiDollar Oracle nodes.
 
 Maintained by **digibyte-maxi** (Oracle Slot 17), see contact at the bottom.
