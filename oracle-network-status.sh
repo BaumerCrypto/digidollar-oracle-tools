@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.7.2
+# Version: 1.7.3
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel every 12 hours. Community-facing — reports network-wide status,
@@ -76,6 +76,31 @@
 #                                          read by the 12hr standby pass)
 #
 # CHANGELOG:
+#   v1.7.3 — Two lines, both in the version-compliance path, both
+#          producing public @-mentions that named the wrong release.
+#          (1) ACCEPTED_VERSIONS DEFAULT now includes v9.26.5. The list
+#          is a fixed whitelist rather than a comparison, so ANY release
+#          not named in it is flagged non-compliant even when it is
+#          NEWER than everything listed. v9.26.5 shipped and the default
+#          was never updated, so a freshly published bot would flag the
+#          most current release as out of date and @-mention its
+#          operator to upgrade. Caught as a near-miss on 2026-07-21
+#          before a v9.26.5 operator was publicly nudged; my own two
+#          instances were patched config-side that day, but the DEFAULT
+#          in this file, the one every new operator inherits, was not.
+#          (2) UPGRADE NUDGE now names the NEWEST accepted release
+#          instead of the oldest. The message built its target with
+#          `awk '{print $1}'`, which takes the FIRST entry in the list.
+#          With the list written oldest-first that produced "Please
+#          upgrade to v9.26.2 or newer" while v9.26.5 was current: true,
+#          because of "or newer", but it publicly pointed operators at a
+#          release three behind. Now `tr ' ' '\n' | sort -V | tail -1`,
+#          which is order-independent, so an operator who writes the
+#          list newest-first still gets the right target.
+#          Neither is the real fix. The whitelist itself is the trap and
+#          it will recur on v9.26.6. Replacing it with a real version
+#          comparison stays queued for v1.8.0; this is the stopgap that
+#          stops the published default misfiring in the meantime.
 #   v1.7.2 — Cosmetic follow-up to the v1.7.0 burial work, caught on the
 #          first live v9.26.5 card. The card rendered "BIP9: active (bit
 #          N/A)" instead of "(bit buried)". Cause: the deployment read
@@ -390,7 +415,13 @@ NETWORK_LABEL=""
 #
 # Dual-instance operators override per-config: testnet may accept broader,
 # mainnet may narrow to a specific release once Jared confirms.
-ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4"
+#
+# KEEP THIS CURRENT (v1.7.3). This is a fixed whitelist, not a version
+# comparison, so a release NEWER than everything listed is still flagged
+# non-compliant, and with the nudge on it @-mentions that operator in the
+# room. Add each new release here as it ships. Replacing the whitelist
+# with a real comparison is queued for v1.8.0.
+ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4 v9.26.5"
 
 # Turn the Upgrade nudge section on/off. If false, non-compliant operators
 # are still flagged in the Software section with the yellow icon, but no
@@ -1705,7 +1736,7 @@ ${line}"
         if [ "$UPGRADE_COUNT" -gt 0 ]; then
             MESSAGE="${MESSAGE}
 
-📢 Please upgrade to $(echo "$ACCEPTED_VERSIONS" | awk '{print $1}') or newer:
+📢 Please upgrade to $(echo "$ACCEPTED_VERSIONS" | tr ' ' '\n' | sort -V | tail -1) or newer:
 ${UPGRADE_SECTION}"
         fi
     fi
