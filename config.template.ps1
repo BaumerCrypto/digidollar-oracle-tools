@@ -96,9 +96,21 @@ $ORACLE_NAME = "my-oracle"
 $CLI_PATH = "C:\Program Files\DigiByte\daemon\digibyte-cli.exe"
 
 # Network arguments passed to every CLI call.
-# Testnet:  @("-testnet")        Mainnet:  @()
-# Dual-instance mainnet with conf file:
-#   @("-conf=C:\Users\YOUR_USER\AppData\Roaming\DigiByte\mainnet.conf")
+# Single-chain PC:
+#   Testnet:  @("-testnet")        Mainnet:  @()
+#
+# RUNNING BOTH CHAINS ON ONE PC? Do NOT leave $CLI_ARGS empty for the
+# mainnet instance (#42). With no network argument, digibyte-cli.exe reads
+# the default digibyte.conf, and on a dual-instance setup that file is the
+# TESTNET conf and carries testnet=1, so the client connects to the testnet
+# RPC port while your mainnet daemon runs with its own -conf= that the bare
+# client never reads. Nothing errors. You get a health summary titled
+# "Mainnet" reporting testnet block heights, testnet quorum, and testnet
+# prices. The only visible tell is the chain name on the Chain line, e.g.
+# "Chain: synced at block 178878 (test)" sitting under a Mainnet title.
+# Pin the chain explicitly on BOTH instances:
+#   Testnet:  @("-testnet")
+#   Mainnet:  @("-conf=C:\Users\YOUR_USER\AppData\Roaming\DigiByte\mainnet.conf")
 $CLI_ARGS    = @("-testnet")
 $WALLET_FLAG = "-rpcwallet=oracle"
 
@@ -278,6 +290,25 @@ $QUORUM_HYSTERESIS = 3
 # Leave empty for the generic "Oracle" label.
 $NETWORK_LABEL = ""
 
+# Optional glyph in front of $NETWORK_LABEL on every alert title, email
+# subject, health summary header, and the watch mode banner (v2.9.0, #41).
+# Empty by default. If you run two instances, marking just one is usually
+# enough: leave the production instance empty so its cards look exactly as
+# they always have, and flag the test one. Requires $NETWORK_LABEL to be set.
+#   Testnet:  $NETWORK_EMOJI = "🚧"
+#   Mainnet:  $NETWORK_EMOJI = ""
+$NETWORK_EMOJI = ""
+
+# ---- DigiDollar Economy Line (v2.9.0-win.1+) ----
+# One info line under Price on the health summary: "DD economy: $40,932.07
+# DD minted, 40,461,618 DGB locked (332% collateralized)", the same wording
+# the Gitter status bot uses. Summary card only, never the scheduled
+# 5-minute checks. Information only: it never alerts and never changes the
+# card color. Silently omitted if the RPC is unavailable, and it shows a
+# standby line before DigiDollar activates on your chain.
+# Set to "no" to skip the getdigidollarstats call entirely.
+$DD_ECONOMY_ENABLED = "yes"
+
 # ---- Dual-Instance Monitoring (v2.3-win.1+) ----
 # oracle-monitor.ps1 supports -Config /path to run against a separate
 # config file. This lets you monitor testnet and mainnet from one PC
@@ -296,7 +327,8 @@ $NETWORK_LABEL = ""
 #        $env:USERPROFILE\.oracle-monitor-mainnet\config.ps1
 #
 #   # Edit the mainnet config to override at least:
-#   #   $CLI_ARGS         = @()                          (no -testnet)
+#   #   $CLI_ARGS         = @("-conf=$env:APPDATA\DigiByte\mainnet.conf")
+#   #                                                    (NOT @() - see #42)
 #   #   $SWAP_THRESHOLD_MB = 1500                        (dual-daemon baseline)
 #   #   $QUORUM_GREEN     = 12; $QUORUM_YELLOW = 10      (tighter for production)
 #   #   $NETWORK_LABEL    = "Mainnet"                    (shows in card titles + email subjects)

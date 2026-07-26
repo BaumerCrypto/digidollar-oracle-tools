@@ -1,13 +1,13 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.8.0
+# Version: 2.9.0
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.8.0"
+readonly SCRIPT_VERSION="2.9.0"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +35,35 @@ readonly SCRIPT_VERSION="2.8.0"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.9.0 — Two changes, both on the health summary card.
+#          (1) DD ECONOMY LINE (#40, requested in the DigiDollar Gitter
+#          room). One info line under Price: "DD economy: $40,932.07 DD
+#          minted, 40,461,618 DGB locked (332% collateralized)", identical
+#          wording to the Gitter bot's FULL card so the two tools share a
+#          vocabulary. Reads getdigidollarstats (total_dd_supply in CENTS,
+#          total_collateral_dgb, health_percentage), field map verified on
+#          v9.26.4 and v9.26.5 and cross-checked against nodes.bi-co.net.
+#          Summary card only, never the 5-minute checks, so the RPC fires
+#          twice a day per instance rather than 288 times. Information
+#          only: no alert, no effect on the warning/issue totals, no
+#          change to the card color. Silent-degrade on a missing RPC or a
+#          field-map miss, DD_ACTIVE standby line pre-activation. New
+#          DD_ECONOMY_ENABLED (default yes). Measured at 11ms and ~1-2
+#          debug.log lines per call, so no interval gate needed. Idea
+#          credit Bastian for the original bot-side line.
+#          (2) NETWORK LABEL NOW LEADS THE SUMMARY TITLE (#41). Operators
+#          reported they could not tell a Testnet26 card from a Mainnet
+#          card in the same channel: two healthy cards opened with an
+#          identical 24-character run and differed by one word mid-title.
+#          Root cause was a v2.5.3 gap, send_discord and send_email both
+#          prefix the label but send_summary built its title separately.
+#          Title is now "Testnet26 Health Summary — ✅ All Systems
+#          Healthy", matching every alert card and email subject, with
+#          status at the tail where the embed border color already carries
+#          it. Adds optional NETWORK_EMOJI (default empty, no change for
+#          anyone who leaves it unset) which prefixes the label everywhere
+#          via a single derived NETWORK_TAG, computed once at config load
+#          so the emoji cannot double up on the email path.
 #   v2.8.0 — Peer line now shows inbound/outbound split and the connection
 #          cap: "Peers: 41 connected (34 in / 7 out, cap 125)". connections_in
 #          is what serves wallets; near the cap a node starts bouncing them,
@@ -425,6 +454,27 @@ UPDATE_CHECK_TTL=86400
 DIGIBYTE_UPDATE_CHECK="yes"
 DIGIBYTE_UPDATE_TTL=21600
 
+# DigiDollar economy line (v2.9.0, #40). Adds one info line under Price on
+# the health summary showing network-wide DD minted, DGB locked, and the
+# collateralization ratio, read from getdigidollarstats. Summary card only,
+# never on the 5-minute checks, because a network-wide total under a
+# "Node Down" card is noise at the exact moment you want signal.
+# Information only: it never alerts, never counts toward the warning or
+# issue totals, and never changes the card color. Silently omitted if the
+# RPC is unavailable or its field names don't match, and it shows a standby
+# line when DigiDollar isn't active on this chain. Set to "no" to skip the
+# RPC call entirely.
+DD_ECONOMY_ENABLED="yes"
+
+# Optional glyph placed in front of NETWORK_LABEL on every alert title,
+# email subject, and health summary header (v2.9.0, #41). Empty by default,
+# so nothing changes for anyone who doesn't set it. Dual-instance operators
+# can mark one instance so the two are distinguishable at a glance. The
+# recommendation is to leave the production instance empty and flag the
+# test one, e.g. NETWORK_EMOJI="🚧" in the testnet config. Has no effect
+# unless NETWORK_LABEL is also set.
+NETWORK_EMOJI=""
+
 # Oracle settings
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
@@ -557,6 +607,23 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 mkdir -p "$STATE_DIR"
+
+# v2.9.0 (#41): derive the display tag ONCE, here, right after the config
+# is sourced. Every site that used to interpolate NETWORK_LABEL now reads
+# NETWORK_TAG instead. Computing it in one place is what makes the emoji
+# impossible to double up: send_summary deliberately hands send_email a
+# tag-free subject because send_email prefixes at its own chokepoint, and
+# applying the emoji separately in both would render it twice.
+# Empty NETWORK_LABEL leaves NETWORK_TAG empty, so single-instance
+# operators see no change at all.
+NETWORK_TAG=""
+if [ -n "${NETWORK_LABEL:-}" ]; then
+    if [ -n "${NETWORK_EMOJI:-}" ]; then
+        NETWORK_TAG="${NETWORK_EMOJI} ${NETWORK_LABEL}"
+    else
+        NETWORK_TAG="${NETWORK_LABEL}"
+    fi
+fi
 
 # Runtime flag — set by --dry-run
 DRY_RUN=false
@@ -709,8 +776,10 @@ send_discord() {
     # routes through here, so this covers Node Down, Oracle Stopped, Chain
     # Synced, Quorum Lost, etc. in one place instead of patching each call
     # site. No-op for single-instance operators who haven't set NETWORK_LABEL.
-    if [ -n "${NETWORK_LABEL:-}" ]; then
-        title="${NETWORK_LABEL} — ${title}"
+    # v2.9.0 (#41): reads NETWORK_TAG, which is NETWORK_LABEL optionally
+    # prefixed by NETWORK_EMOJI. Derived once at config load.
+    if [ -n "${NETWORK_TAG:-}" ]; then
+        title="${NETWORK_TAG} — ${title}"
     fi
 
     if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
@@ -750,8 +819,10 @@ send_email() {
     [ "${EMAIL_ENABLED}" = "true" ] || return 0
 
     # v2.5.3 parity: label the subject for dual-instance operators
-    if [ -n "${NETWORK_LABEL:-}" ]; then
-        subject="${NETWORK_LABEL} — ${subject}"
+    # v2.9.0 (#41): NETWORK_TAG carries the optional NETWORK_EMOJI too.
+    # Callers must pass a tag-free subject; the prefix belongs here only.
+    if [ -n "${NETWORK_TAG:-}" ]; then
+        subject="${NETWORK_TAG} — ${subject}"
     fi
 
     if [ "$DRY_RUN" = true ]; then
@@ -1089,6 +1160,98 @@ check_price() {
         fi
         DETAILS+="✅ Price: \$$price_usd (fresh)\n"
     fi
+}
+
+# --- DD economy line (v2.9.0, #40): INFORMATION ONLY, summary card only ---
+#
+# Requested in the DigiDollar Gitter room: show the network-wide DigiDollar
+# economy on the monitor card the way oracle-network-status.sh has shown it
+# on the Gitter card since bot v1.6.4. Identical wording between the two
+# tools, so there is no new vocabulary for operators to learn.
+#
+# Called from send_summary() ONLY, never from run_checks(). The 5-minute
+# runs post single-purpose alert cards ("Node Down", "Disk Filling Up")
+# that carry no status block, so there is nowhere for this line to live
+# there, and a network-wide total under a Node Down card would be noise at
+# the exact moment the operator wants signal. Summary-only also keeps the
+# RPC at two calls a day per instance instead of 288.
+#
+# This function never alerts and never touches WARNINGS or ISSUES. An
+# all-green card stays all-green. Worst case it appends nothing at all.
+#
+# COST (measured 2026-07-25, mainnet block 23,917,448, 129 open positions):
+# 11 ms per call, and roughly 1-2 lines written to debug.log per call with
+# debug=digidollar,net enabled. No interval gate needed, unlike
+# getoracleprice which writes ~5,800 lines per call under the same
+# settings (see PRICE_CHECK_EVERY).
+#
+# FIELD MAP (verified live on v9.26.4 testnet26 AND v9.26.5 mainnet,
+# identical on both, so the BIP90 burial did not move these the way it
+# moved .since in the two deployment RPCs):
+#   total_dd_supply       cents, so 4093207 renders as $40,932.07
+#   total_collateral_dgb  raw DGB with a long decimal tail, shown whole
+#   health_percentage     collateralization ratio, integer percent
+# Cross-checked against nodes.bi-co.net the same day: 40,932.07 DD /
+# 40,461,618.46 DGB / 129 positions, matching this node exactly.
+#
+# Do NOT read oracle_price_cents from this RPC. It returns 0 while
+# oracle_price_micro_usd carries the real value.
+#
+# Silent-degrade is the whole contract: a missing RPC, an error, a parse
+# failure, or a field-map miss all omit the line rather than render
+# something wrong or block the card.
+
+# Thousands separator, pure bash, no external process. Deliberately not
+# the sed loop the Gitter bot uses: sed label syntax differs subtly between
+# GNU and BSD, and this runs identically on bash 3.2 (stock macOS) and
+# bash 5, so the Linux and macOS ports share it byte for byte. Also avoids
+# a fork per call. Input must already be an integer string.
+group_thousands() {
+    local n="$1" out=""
+    while [ ${#n} -gt 3 ]; do
+        out=",${n: -3}${out}"
+        n="${n:0:${#n}-3}"
+    done
+    printf '%s%s' "$n" "$out"
+}
+
+check_dd_economy() {
+    [ "${DD_ECONOMY_ENABLED:-yes}" = "yes" ] || return 0
+
+    # Pre-activation chains have no economy to report. Matches the standby
+    # wording the oracle, price, and quorum checks already use.
+    if [ "$DD_ACTIVE" = "false" ]; then
+        DETAILS+="ℹ️  DD economy: standby (DigiDollar deployment: $DD_STATUS)\n"
+        return 0
+    fi
+
+    local stats
+    stats=$($CLI getdigidollarstats 2>/dev/null) || return 0
+    echo "$stats" | jq -e . >/dev/null 2>&1 || return 0
+
+    local supply_cents collateral_dgb ratio
+    supply_cents=$(echo "$stats" | jq -r '.total_dd_supply // empty' 2>/dev/null)
+    collateral_dgb=$(echo "$stats" | jq -r '.total_collateral_dgb // empty' 2>/dev/null)
+    ratio=$(echo "$stats" | jq -r '.health_percentage // empty' 2>/dev/null)
+
+    # Field-map miss or a non-numeric value: omit the line entirely rather
+    # than render a wrong number. This is the branch that fires if a future
+    # release renames a field.
+    [[ "$supply_cents" =~ ^[0-9]+$ ]] || return 0
+    [[ "$collateral_dgb" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
+
+    local supply_display locked_display ratio_display
+    supply_display="$(group_thousands "$((supply_cents / 100))").$(printf '%02d' "$((supply_cents % 100))")"
+    locked_display=$(group_thousands "${collateral_dgb%%.*}")
+
+    # The ratio is a nice-to-have, not load-bearing. If it is missing or
+    # non-numeric the line still renders without the parenthetical.
+    ratio_display=""
+    if [[ "$ratio" =~ ^[0-9]+$ ]]; then
+        ratio_display=" (${ratio}% collateralized)"
+    fi
+
+    DETAILS+="ℹ️  DD economy: \$${supply_display} DD minted, ${locked_display} DGB locked${ratio_display}\n"
 }
 
 # --- Check 6: Disk space ---
@@ -1866,6 +2029,7 @@ send_summary() {
     check_chain
     check_peers
     check_price
+    check_dd_economy          # v2.9.0: #40 — summary only, never run_checks()
     check_disk
     check_debuglog            # v2.7.0: Check 13 — debug.log watchdog
     rotate_debuglog           # v2.7.0: safe auto-rotation (default ON)
@@ -1899,7 +2063,7 @@ send_summary() {
 
     if [ "$DRY_RUN" = true ] || [ -z "$DISCORD_WEBHOOK" ]; then
         echo "======================================="
-        echo " ${NETWORK_LABEL:-Oracle} Health Summary — $(date)"
+        echo " ${NETWORK_TAG:-Oracle} Health Summary — $status — $(date)"
         echo "======================================="
         echo -e "$desc"
         echo "======================================="
@@ -1919,9 +2083,14 @@ send_summary() {
 
     # v2.5.4: payload built with jq -n (matches send_discord hardening).
     # v2.6.0: footer via build_footer() — two lines when an update exists.
+    # v2.9.0 (#41): the network leads the title now, matching every alert
+    # card and email subject. Two healthy instances used to open with an
+    # identical 24-character run and differ only by one word mid-string.
+    # Status moves to the tail, where the embed border color already
+    # carries it.
     local payload
     payload=$(jq -n \
-        --arg title "$status — ${NETWORK_LABEL:-Oracle} Health Summary" \
+        --arg title "${NETWORK_TAG:-Oracle} Health Summary — $status" \
         --arg desc "$desc" \
         --argjson color "$color" \
         --arg footer "$(build_footer)" \

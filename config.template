@@ -80,15 +80,48 @@ DIGIBYTE_UPDATE_CHECK="yes"
 #   the summary reads it, and the "vX.Y.Z available" note then alternates
 #   on and off day to day. 6h is safely inside any sane summary schedule.
 
+
+# ---- v2.9.0: DD economy line + network emoji --------------------------------
+
+# DigiDollar economy line on the health summary (#40). One info line under
+# Price: "DD economy: $40,932.07 DD minted, 40,461,618 DGB locked
+# (332% collateralized)", the same wording the Gitter status bot uses.
+# Summary card only, never the 5-minute checks. Information only: it never
+# alerts and never changes the card color. Silently omitted if the RPC is
+# unavailable, and it shows a standby line before DigiDollar activates.
+# Set to "no" to skip the getdigidollarstats call entirely.
+DD_ECONOMY_ENABLED="yes"
+
+# Optional glyph in front of NETWORK_LABEL on every alert title, email
+# subject, and health summary header (#41). Empty by default. If you run
+# two instances, marking just one is usually enough: leave the production
+# instance empty so its cards look exactly as they always have, and flag
+# the test one. Requires NETWORK_LABEL to be set.
+#   Testnet:  NETWORK_EMOJI="🚧"
+#   Mainnet:  NETWORK_EMOJI=""
+NETWORK_EMOJI=""
+
 # ---- Oracle Identity ----
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
 
 # ---- RPC Settings ----
-# Testnet:  CLI="digibyte-cli -testnet"
-# Mainnet:  CLI="digibyte-cli"
-# Dual-instance mainnet with conf file:
-#   CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
+# Single-chain box:
+#   Testnet:  CLI="digibyte-cli -testnet"
+#   Mainnet:  CLI="digibyte-cli"
+#
+# RUNNING BOTH CHAINS ON ONE BOX? Do NOT use bare "digibyte-cli" for the
+# mainnet instance (#42). Bare digibyte-cli reads ~/.digibyte/digibyte.conf,
+# and on a dual-instance setup that file is the TESTNET conf and carries
+# testnet=1, so the client connects to the testnet RPC port while your
+# mainnet daemon runs with its own -conf= that the bare client never reads.
+# Nothing errors. You get a health summary titled "Mainnet" reporting
+# testnet block heights, testnet quorum, and testnet prices. The only
+# visible tell is the chain name on the Chain line, e.g.
+# "Chain: synced at block 178878 (test)" sitting under a Mainnet title.
+# Pin the chain explicitly on BOTH instances:
+#   Testnet:  CLI="digibyte-cli -testnet"
+#   Mainnet:  CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
 CLI="digibyte-cli -testnet"
 WALLET_FLAG="-rpcwallet=oracle"
 
@@ -343,7 +376,8 @@ MENTION_MAX=6
 #   ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
 #
 #   # Edit the mainnet config:
-#   #   CLI="digibyte-cli"                       (no -testnet flag)
+#   #   CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
+#   #                                            (NOT bare digibyte-cli, see #42)
 #   #   SERVICE_NAME="digibyted-mainnet.service" (match your unit name)
 #   #   SWAP_THRESHOLD_MB=1500                   (dual-daemon baseline)
 #   #   QUORUM_GREEN=12, QUORUM_YELLOW=10        (tighter for production)

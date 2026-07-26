@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.8.0-win.1
+# Version: 2.9.0-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh v2.7.1 (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -50,6 +50,34 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.9.0-win.1 — Parity with Linux v2.9.0. Two changes, both on the
+#          health summary card.
+#          (1) DD ECONOMY LINE (#40, requested in the DigiDollar Gitter
+#          room). One info line under Price: "DD economy: $40,932.07 DD
+#          minted, 40,461,618 DGB locked (332% collateralized)", identical
+#          wording to the Gitter bot's FULL card. Reads getdigidollarstats
+#          (total_dd_supply in CENTS, total_collateral_dgb,
+#          health_percentage), field map verified on v9.26.4 and v9.26.5.
+#          Summary card only, never the scheduled 5-minute checks.
+#          Information only: no alert, no effect on warning/issue totals,
+#          no change to the card color. Silent-degrade on a missing RPC or
+#          a field-map miss, DdActive standby line pre-activation. New
+#          $DD_ECONOMY_ENABLED (default "yes"). Number grouping pinned to
+#          InvariantCulture so a comma-decimal locale cannot render
+#          "40.461.618". Idea credit Bastian for the original bot line.
+#          (2) NETWORK LABEL NOW LEADS THE SUMMARY TITLE (#41). Operators
+#          reported they could not tell a Testnet26 card from a Mainnet
+#          card in the same channel: two healthy cards opened with an
+#          identical run of characters and differed by one word mid-title.
+#          Root cause was a v2.5.3 gap, Send-Discord and Send-Email both
+#          prefix the label but Send-Summary built its title separately.
+#          Title is now "Testnet26 Health Summary — ✅ All Systems
+#          Healthy", matching every alert card and email subject. Adds
+#          optional $NETWORK_EMOJI (default empty, no change for anyone
+#          who leaves it unset) which prefixes the label everywhere via a
+#          single derived $NETWORK_TAG, computed once at config load so
+#          the emoji cannot double up on the email path. $NETWORK_TAG also
+#          reaches the watch mode banner.
 #   v2.8.0-win.1 — Parity with Linux v2.8.0. Peer line shows inbound/
 #          outbound split + connection cap ("Peers: 41 connected (34 in /
 #          7 out, cap 125)") from getnetworkinfo + the daemon conf, with
@@ -328,7 +356,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.8.0-win.1"
+$SCRIPT_VERSION = "2.9.0-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -428,6 +456,27 @@ $SERVICE_NAME = ""
 # (Declared here since v2.5.4-win.1 so the defaults block is complete
 # and the script runs clean under Set-StrictMode.)
 $NETWORK_LABEL = ""
+
+# Optional glyph placed in front of $NETWORK_LABEL on every alert title,
+# email subject, health summary header, and the watch mode banner
+# (v2.9.0-win.1, #41). Empty by default, so nothing changes for anyone who
+# doesn't set it. Dual-instance operators can mark one instance so the two
+# are distinguishable at a glance. The recommendation is to leave the
+# production instance empty and flag the test one. Has no effect unless
+# $NETWORK_LABEL is also set.
+$NETWORK_EMOJI = ""
+
+# DigiDollar economy line (v2.9.0-win.1, #40). Adds one info line under
+# Price on the health summary showing network-wide DD minted, DGB locked,
+# and the collateralization ratio, read from getdigidollarstats. Summary
+# card only, never on the scheduled 5-minute checks, because a network-wide
+# total under a "Node Down" card is noise at the exact moment you want
+# signal. Information only: it never alerts, never counts toward the
+# warning or issue totals, and never changes the card color. Silently
+# omitted if the RPC is unavailable or its field names don't match, and it
+# shows a standby line when DigiDollar isn't active on this chain.
+# Set to "no" to skip the RPC call entirely.
+$DD_ECONOMY_ENABLED = "yes"
 
 # Drive letter to watch for free disk space (where your DigiByte datadir
 # lives — datadir default is %APPDATA%\DigiByte on drive C).
@@ -555,6 +604,23 @@ if (Test-Path $CONFIG_FILE) {
 }
 
 New-Item -ItemType Directory -Force -Path $STATE_DIR | Out-Null
+
+# v2.9.0-win.1 (#41): derive the display tag ONCE, here, right after the
+# config is dot-sourced. Every site that used to interpolate
+# $NETWORK_LABEL now reads $NETWORK_TAG instead. Computing it in one place
+# is what makes the emoji impossible to double up: Send-Summary
+# deliberately hands Send-Email a tag-free subject because Send-Email
+# prefixes at its own chokepoint, and applying the emoji separately in
+# both would render it twice. An empty $NETWORK_LABEL leaves $NETWORK_TAG
+# empty, so single-instance operators see no change at all.
+$NETWORK_TAG = ""
+if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
+    if (-not [string]::IsNullOrEmpty($NETWORK_EMOJI)) {
+        $NETWORK_TAG = "$NETWORK_EMOJI $NETWORK_LABEL"
+    } else {
+        $NETWORK_TAG = $NETWORK_LABEL
+    }
+}
 
 # Runtime flag — set by -DryRun
 $script:DRY_RUN = [bool]$DryRun
@@ -792,8 +858,10 @@ function Send-Discord {
     # alone. Single chokepoint — every Alert-Red/Yellow/Green/Blue call routes
     # through here. No-op for single-instance operators without NETWORK_LABEL
     # set. Ports the same fix shipped in oracle-monitor.sh v2.5.3.
-    if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
-        $Title = "$NETWORK_LABEL — $Title"
+    # v2.9.0-win.1 (#41): reads $NETWORK_TAG, which is $NETWORK_LABEL
+    # optionally prefixed by $NETWORK_EMOJI. Derived once at config load.
+    if (-not [string]::IsNullOrEmpty($NETWORK_TAG)) {
+        $Title = "$NETWORK_TAG — $Title"
     }
 
     if ($script:DRY_RUN -or [string]::IsNullOrEmpty($DISCORD_WEBHOOK)) {
@@ -854,8 +922,10 @@ function Send-Email {
     }
 
     # v2.5.3-win.1 parity: label the subject for dual-instance operators
-    if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
-        $Subject = "$NETWORK_LABEL — $Subject"
+    # v2.9.0-win.1 (#41): $NETWORK_TAG carries the optional $NETWORK_EMOJI
+    # too. Callers must pass a tag-free subject; the prefix belongs here.
+    if (-not [string]::IsNullOrEmpty($NETWORK_TAG)) {
+        $Subject = "$NETWORK_TAG — $Subject"
     }
 
     if ($script:DRY_RUN) {
@@ -1225,6 +1295,91 @@ function Check-Price {
         }
         $script:Details.Add("✅ Price: `$$priceUsd (fresh)")
     }
+}
+
+# --- DD economy line (v2.9.0-win.1, #40): INFORMATION ONLY, summary only ---
+#
+# Requested in the DigiDollar Gitter room: show the network-wide DigiDollar
+# economy on the monitor card the way oracle-network-status.sh has shown it
+# on the Gitter card since bot v1.6.4. Identical wording between the two
+# tools, so there is no new vocabulary for operators to learn.
+#
+# Called from Send-Summary ONLY, never from Invoke-Checks. The scheduled
+# 5-minute runs post single-purpose alert cards ("Node Down", "Disk Filling
+# Up") that carry no status block, so there is nowhere for this line to
+# live there, and a network-wide total under a Node Down card would be
+# noise at the exact moment the operator wants signal.
+#
+# This function never alerts and never touches $script:Warnings or
+# $script:Issues. Worst case it appends nothing at all.
+#
+# FIELD MAP (verified live on v9.26.4 testnet26 AND v9.26.5 mainnet,
+# identical on both, so the BIP90 burial did not move these the way it
+# moved .since in the two deployment RPCs):
+#   total_dd_supply       cents, so 4093207 renders as $40,932.07
+#   total_collateral_dgb  raw DGB with a long decimal tail, shown whole
+#   health_percentage     collateralization ratio, integer percent
+#
+# Do NOT read oracle_price_cents from this RPC. It returns 0 while
+# oracle_price_micro_usd carries the real value.
+#
+# PS 5.1 only: no ternary, no null-coalescing. Number grouping uses
+# "{0:N0}" with InvariantCulture so a comma-decimal locale (de-DE, fr-FR)
+# cannot flip the separators and produce "40.461.618".
+function Check-DDEconomy {
+    if ($DD_ECONOMY_ENABLED -ne "yes") { return }
+
+    # Pre-activation chains have no economy to report. Matches the standby
+    # wording Check-Oracle, Check-Price, and Check-Quorum already use.
+    if ($script:DdActive -eq $false) {
+        $script:Details.Add("ℹ️  DD economy: standby (DigiDollar deployment: $($script:DdStatus))")
+        return
+    }
+
+    $raw = Invoke-DGBCli -RpcArgs @("getdigidollarstats")
+    if ([string]::IsNullOrEmpty($raw)) { return }
+
+    $stats = $null
+    try { $stats = $raw | ConvertFrom-Json } catch { return }
+    if ($null -eq $stats) { return }
+
+    # Field-map miss: omit the line entirely rather than render a wrong
+    # number. The null checks come BEFORE the casts on purpose, because
+    # [long]$null is 0 rather than an error, so a renamed field would
+    # otherwise render a confident "$0.00 DD minted" instead of nothing.
+    if ($null -eq $stats.total_dd_supply)      { return }
+    if ($null -eq $stats.total_collateral_dgb) { return }
+
+    # InvariantCulture is not optional here. The -f operator and a bare
+    # ToString() both follow the current culture, so on a de-DE or fr-FR
+    # box "N0" would render 40461618 as "40.461.618" and the decimal point
+    # in the DD figure would flip to a comma.
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+
+    $supplyCents = $null
+    $collateral  = $null
+    try {
+        $supplyCents = [long]$stats.total_dd_supply
+        $collateral  = [double]$stats.total_collateral_dgb
+    } catch { return }
+
+    $whole = [math]::Floor($supplyCents / 100)
+    $cents = $supplyCents % 100
+    $supplyDisplay = $whole.ToString("N0", $inv) + "." + $cents.ToString("D2", $inv)
+    $lockedDisplay = ([math]::Floor($collateral)).ToString("N0", $inv)
+
+    # The ratio is a nice-to-have, not load-bearing. If it is missing or
+    # non-numeric the line still renders without the parenthetical.
+    $ratioDisplay = ""
+    if ($null -ne $stats.health_percentage) {
+        try {
+            $ratioDisplay = " (" + ([long]$stats.health_percentage).ToString($inv) + "% collateralized)"
+        } catch {
+            $ratioDisplay = ""
+        }
+    }
+
+    $script:Details.Add("ℹ️  DD economy: `$$supplyDisplay DD minted, $lockedDisplay DGB locked$ratioDisplay")
 }
 
 # --- Check 6: Disk space ---
@@ -2148,6 +2303,7 @@ function Send-Summary {
     Check-Chain
     Check-Peers
     Check-Price
+    Check-DDEconomy          # v2.9.0-win.1: #40 — summary only, never Invoke-Checks
     Check-Disk
     Check-Debuglog           # v2.7.0: Check 13 — debug.log watchdog
     Rotate-Debuglog          # v2.7.0: safe auto-rotation (default ON)
@@ -2182,11 +2338,11 @@ function Send-Summary {
 
     $desc = ($script:Details -join "`n") + "`n⏱️ Uptime: $uptimeStr"
 
-    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
+    $label = if ([string]::IsNullOrEmpty($NETWORK_TAG)) { "Oracle" } else { $NETWORK_TAG }
 
     if ($script:DRY_RUN -or [string]::IsNullOrEmpty($DISCORD_WEBHOOK)) {
         Write-Output "======================================="
-        Write-Output " $label Health Summary — $(Get-Date)"
+        Write-Output " $label Health Summary — $status — $(Get-Date)"
         Write-Output "======================================="
         Write-Output $desc
         Write-Output "======================================="
@@ -2208,7 +2364,7 @@ function Send-Summary {
     $payload = @{
         embeds = @(
             @{
-                title       = "$status — $label Health Summary"
+                title       = "$label Health Summary — $status"
                 description = $desc
                 color       = $color
                 footer      = @{ text = (Build-Footer) }
@@ -2348,7 +2504,7 @@ if ($Test) {
     # the scheduled Task Scheduler checks. Ctrl+C to exit.
     if ($RefreshSeconds -lt 5) { $RefreshSeconds = 5 }
     $script:DRY_RUN = $true
-    $label = if ([string]::IsNullOrEmpty($NETWORK_LABEL)) { "Oracle" } else { $NETWORK_LABEL }
+    $label = if ([string]::IsNullOrEmpty($NETWORK_TAG)) { "Oracle" } else { $NETWORK_TAG }
     while ($true) {
         Clear-Host
         Write-Host "🔭 $label Monitor — watch mode (refreshes every ${RefreshSeconds}s, Ctrl+C to exit)"
