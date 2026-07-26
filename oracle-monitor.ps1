@@ -1,9 +1,9 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.9.0-win.1
+# Version: 2.10.0-win.1
 #
-# Windows PowerShell port of my oracle-monitor.sh v2.7.1 (Linux). Same checks,
+# Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
 # pre-activation guard, same auto-detect for headless vs Qt wallet, same
 # email-plus-Discord dual-channel alerts, same daily update check — all
@@ -12,6 +12,7 @@
 # natively.
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
+# SPDX-License-Identifier: MIT
 #
 # SETUP:
 #   1. Save this script somewhere permanent, e.g.:
@@ -50,6 +51,61 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.10.0-win.1 — Parity with Linux v2.10.0. Chain-vs-label mismatch
+#          warning (#43), an SPDX header line, and one corrected
+#          instruction.
+#          (1) MISMATCH WARNING (#43). $NETWORK_LABEL is free text the
+#          monitor took entirely on trust, so an operator whose CLI args
+#          resolved to the wrong daemon got a card titled "Mainnet Health
+#          Summary" reporting testnet heights, quorum and prices, and
+#          nothing errored. Check-Chain now compares the label against
+#          the chain the node reports and adds a SECOND line when they
+#          clearly disagree, rather than recoloring the sync line: the
+#          node really is synced, and "your label is wrong" is a separate
+#          claim that also has to hold when the node is BEHIND. No new
+#          RPC call and no new parse, both values were already in scope.
+#          Counts as a warning and fires one yellow alert through
+#          Test-ShouldAlert, which is a latch rather than a TTL, so a
+#          persistent misconfiguration alerts ONCE instead of every 5
+#          minutes and clears green when the config is fixed.
+#          The comparison is deliberately ASYMMETRIC. The chain value is
+#          a fixed enum (main/test/regtest/signet) so it is matched
+#          EXACTLY, which keeps regtest from colliding with the substring
+#          "test"; only the label is free text, so only the label is
+#          matched loosely, and it must clearly NAME a chain to be judged
+#          at all. The pattern needs "mainnet" or "testnet" with an
+#          optional separator and a word boundary in front, so "domain"
+#          and "Latest net" cannot fire. Silent on an empty label, a
+#          label naming neither chain, a label naming both, and on
+#          regtest, signet or an unknown chain.
+#          CULTURE NOTE: folding uses .ToLowerInvariant() and matching
+#          uses -cmatch (case-SENSITIVE against already-invariant text).
+#          Plain .ToLower() would follow the current culture, and under
+#          tr-TR the dotless-i rule folds "MAINNET" to "maınnet", which
+#          silently stops matching. Same class of bug as the de-DE number
+#          formatting caught in v2.9.0-win.1.
+#          (2) DEBUG_LOG_ROTATE="no" NOTE CORRECTED, and the coexistence
+#          rule documented. The Check 13 note named developer log capture
+#          as the only reason rotation would be off and told the operator
+#          to rotate by hand, which is wrong advice for anyone who turned
+#          it off because a scheduled task or another tool owns the file.
+#          Raised by Aussie Epic in the DigiDollar Gitter room; his
+#          config then showed the real hazard is CADENCE rather than
+#          tidiness. An external rotator sharing $DEBUG_LOG_MAX_MB as
+#          its own size threshold never fires, because this monitor
+#          checks every 5 minutes, reaches the threshold first and
+#          truncates to zero, so the external "rotate N" chain never
+#          builds up: ONE generation on disk while the operator believes
+#          there are N. Nothing errors and nothing warns. The rule, now
+#          in all three templates and in ORACLE_HARDENING_GUIDE.md: the
+#          faster checker RESETS the condition the slower one waits for,
+#          so pick ONE owner of rotation. The debug.log.1 filename clash
+#          is a consequence of sharing the job, not the headline.
+#          (3) SPDX-License-Identifier: MIT added to the header block, so
+#          the licence travels with any single-file copy. The decorative
+#          "port of v2.7.1" reference in the header was deleted rather
+#          than bumped: it had been stale since v2.8.0, and a decorative
+#          version string is better removed than re-synced.
 #   v2.9.0-win.1 — Parity with Linux v2.9.0. Two changes, both on the
 #          health summary card.
 #          (1) DD ECONOMY LINE (#40, requested in the DigiDollar Gitter
@@ -356,7 +412,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.9.0-win.1"
+$SCRIPT_VERSION = "2.10.0-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -1130,6 +1186,65 @@ function Check-Oracle {
 }
 
 # --- Check 3: Chain sync status ---
+# --- v2.10.0-win.1 (#43): does the label agree with the reported chain? ---
+# $NETWORK_LABEL is free text the monitor otherwise takes entirely on trust.
+# When the CLI args resolve to the wrong daemon the whole card is titled for
+# one chain and populated from another, and nothing errors.
+#
+# The comparison is ASYMMETRIC on purpose:
+#   - $chain is a fixed enum from getblockchaininfo (main/test/regtest/
+#     signet), so it is compared EXACTLY. regtest therefore never collides
+#     with the substring "test", by construction rather than by special case.
+#   - $NETWORK_LABEL is free text, so it is matched loosely, but it must
+#     clearly NAME a chain before any judgement is made.
+#
+# The leading word boundary is what stops "Primary domain oracle" and
+# "Latest net" from firing, and the absence of a trailing boundary is what
+# lets "Testnet26" still match. A false warning here would be worse than the
+# silence it replaces, because it would fire on correctly configured boxes.
+function Test-LabelVsChain {
+    param($chain)
+
+    $mismatch = $false
+
+    if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
+        if ($chain -eq "main" -or $chain -eq "test") {
+            # ToLowerInvariant, never ToLower: .ToLower() follows the CURRENT
+            # culture, and under tr-TR the dotless-i rule folds "MAINNET" to
+            # something that no longer contains "mainnet". -cmatch is then
+            # case-SENSITIVE against already-invariant text, so no culture
+            # can reach the comparison at all.
+            $lbl = $NETWORK_LABEL.ToLowerInvariant()
+            $reMain = '(^|[^a-z0-9])main[ _.-]?net'
+            $reTest = '(^|[^a-z0-9])test[ _.-]?net'
+            $saysMain = $lbl -cmatch $reMain
+            $saysTest = $lbl -cmatch $reTest
+            # Differ means exactly one matched. Both or neither: intent is
+            # unknown, so stay quiet.
+            if ($saysMain -ne $saysTest) {
+                if ($chain -eq "test" -and $saysMain) { $mismatch = $true }
+                elseif ($chain -eq "main" -and $saysTest) { $mismatch = $true }
+            }
+        }
+    }
+
+    # Every non-mismatch path clears, including the ones that fell through for
+    # an empty or unjudgeable label. Leaving the latch set would suppress a
+    # later real mismatch.
+    if (-not $mismatch) {
+        if (Clear-AlertState "chain_label_mismatch") {
+            Alert-Green "✅ Chain/Label Mismatch Resolved" "NETWORK_LABEL and the chain this node reports ($chain) no longer disagree."
+        }
+        return
+    }
+
+    $script:Details.Add("⚠️  Label/chain mismatch: label `"$NETWORK_LABEL`", node reports ($chain). Check CLI_ARGS in your config.")
+    $script:Warnings++
+    if (Test-ShouldAlert "chain_label_mismatch") {
+        Alert-Yellow "⚠️  Chain/Label Mismatch" "NETWORK_LABEL is `"$NETWORK_LABEL`" but this node reports chain ($chain).`nEvery other value on this card came from the ($chain) chain, so the block height, quorum and price are all from the wrong network.`nFix `$CLI_ARGS in your config. On a PC running both chains, pin the chain explicitly on BOTH instances (see issue #42). With no network argument digibyte-cli.exe reads the default conf, which may carry testnet=1."
+    }
+}
+
 function Check-Chain {
     $raw = Invoke-DGBCli -RpcArgs @("getblockchaininfo")
 
@@ -1166,6 +1281,10 @@ function Check-Chain {
         }
         $script:Details.Add("✅ Chain: synced at block $blocks ($chain)")
     }
+
+    # v2.10.0-win.1 (#43): runs on BOTH branches above, because a node can be
+    # behind AND pointed at the wrong chain at the same time.
+    Test-LabelVsChain $chain
 }
 
 # --- Check 4: Peer count ---
@@ -1539,9 +1658,9 @@ function Check-Debuglog {
                 $fix = "The daemon truncates it automatically on the next restart (shrinkdebugfile default)."
             }
             if ($DEBUG_LOG_ROTATE -eq "yes") {
-                $rotNote = "Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted."
+                $rotNote = "Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted. If a scheduled task or another tool also rotates this file, only ONE should own it: see ORACLE_HARDENING_GUIDE.md."
             } else {
-                $rotNote = "Auto-rotation is OFF (`$DEBUG_LOG_ROTATE=`"no`"). Manual: stop the daemon, rename debug.log, restart — or set shrinkdebugfile=1 in digibyte.conf and restart."
+                $rotNote = "Auto-rotation is OFF (`$DEBUG_LOG_ROTATE=`"no`"). If a scheduled task or another tool owns this file, nothing to do here. Otherwise: stop the daemon, rename debug.log, restart — or set shrinkdebugfile=1 in digibyte.conf and restart."
             }
             Alert-Yellow "⚠️  debug.log Growing Large" "debug.log is ${sizeMB}MB${rateNote}.`n${why}`n${fix}`n${rotNote}`nFull guidance: https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#debuglog-growth-rotation-and-the-disappearing-disk"
         }

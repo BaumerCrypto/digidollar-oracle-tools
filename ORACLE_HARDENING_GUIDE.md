@@ -896,7 +896,11 @@ shrinkdebugfile=1
 
 That is ~11 GB/month on a "normal-looking" testnet oracle. On a 100 GB VPS shared with a mainnet chain, that is the disk gone in months.
 
+A second mainnet oracle independently reported **11.4 MB/day** in July 2026, which puts default logging in the 8 to 12 MB/day range and the categories-on case roughly 30x above it. That ratio is the single biggest factor in whether any of the rotation machinery below ever runs: at 11 MB/day a 2 GB threshold is reached about twice a year, at 374 MB/day it is reached every five or six days.
+
 ### The fix, in order of preference
+
+**Before the list: pick ONE owner of rotation.** Option B is **on by default** in oracle-monitor v2.7.0 and later, so adding C or D without turning B off leaves two tools rotating the same file. That is not belt-and-braces. Two rotators sharing a size threshold means the faster one wins every time and starves the slower one; two rotators sharing a filename means one silently overwrites the other's history. Both failures are silent, and both are covered under D below. Set `DEBUG_LOG_ROTATE="no"` in `~/.oracle-monitor/config` whenever something else owns the file.
 
 **A. Turn the category off unless you are actively debugging.** `debug=digidollar` is a troubleshooting tool, not a requirement. The oracle signs fine without it. Remove the `debug=` line(s) from `digibyte.conf` and restart at your next maintenance window. Check what's currently enabled without restarting:
 
@@ -913,15 +917,15 @@ Both halves on a live testnet oracle — the yellow warning as the log crosses t
 
 ![debug.log watchdog warning followed by the rotation card](Discord_alert-DebugLog-Pair.jpg)
 
-**C. Weekly cron truncate (belt-and-braces, or if you don't run the monitor).** Copy-then-truncate is the only safe pattern — the daemon holds the file open, so `rm`/`mv` leaks the space until restart:
+**C. Weekly cron truncate (if you are not using the monitor's own rotation).** Copy-then-truncate is the only safe pattern — the daemon holds the file open, so `rm`/`mv` leaks the space until restart. Note the `.weekly` suffix: option B writes `debug.log.1`, so a cron job that also wrote `.1` would overwrite the monitor's safety copy and be overwritten by it in turn. A distinct name means the two cannot destroy each other, though you should still run only one of them:
 
 ```bash
 # crontab -e — Sundays 04:00, keep one previous copy
-0 4 * * 0 cp ~/.digibyte/debug.log ~/.digibyte/debug.log.1 && truncate -s 0 ~/.digibyte/debug.log
-0 4 * * 0 cp ~/.digibyte/testnet26/debug.log ~/.digibyte/testnet26/debug.log.1 && truncate -s 0 ~/.digibyte/testnet26/debug.log
+0 4 * * 0 cp ~/.digibyte/debug.log ~/.digibyte/debug.log.weekly && truncate -s 0 ~/.digibyte/debug.log
+0 4 * * 0 cp ~/.digibyte/testnet26/debug.log ~/.digibyte/testnet26/debug.log.weekly && truncate -s 0 ~/.digibyte/testnet26/debug.log
 ```
 
-**D. logrotate, if you prefer the system tool.** The critical directive is `copytruncate` — same reason as above:
+**D. logrotate, if you prefer the system tool.** The critical directive is `copytruncate` — same reason as above. Set `DEBUG_LOG_ROTATE="no"` in your monitor config first, so logrotate is the only owner:
 
 ```
 # /etc/logrotate.d/digibyte
@@ -934,6 +938,72 @@ Both halves on a live testnet oracle — the yellow warning as the log crosses t
     notifempty
 }
 ```
+
+
+### Running logrotate and the monitor together: the cadence trap
+
+If you leave `DEBUG_LOG_ROTATE="yes"` and also point logrotate at the same file, the
+two do not layer. They compete, and the loser fails silently.
+
+Seen live on an operator's mainnet box, July 2026:
+
+```
+# /etc/logrotate.d/digibyte
+/home/YOUR_USER/.digibyte/debug.log {
+    size 2048M
+    rotate 5
+    missingok
+    copytruncate
+}
+```
+
+That config looks like five generations of history. It delivers one. `size 2048M` is
+the same number as the monitor's `DEBUG_LOG_MAX_MB` default of 2048, but the monitor
+evaluates it every five minutes while logrotate runs once a day from `cron.daily`. The
+monitor reaches 2048 first on essentially every crossing and truncates the live file to
+zero, so logrotate's daily pass never sees a file large enough to rotate. `rotate 5`
+never builds up. One generation on disk, five believed, nothing logged and nothing
+warned.
+
+**The rule: a five-minute checker and a daily one sharing a size threshold is not
+belt-and-braces, because the faster one resets the condition the slower one is waiting
+for.** Whichever tool checks more often owns rotation, whether you intended that or
+not.
+
+So choose deliberately:
+
+| You want | Monitor config | logrotate config |
+|---|---|---|
+| logrotate owns rotation | `DEBUG_LOG_ROTATE="no"` | `size` or `weekly` plus `rotate N` to taste |
+| monitor owns it, logrotate as a backstop | `DEBUG_LOG_ROTATE="yes"` | `size` at **2x `DEBUG_LOG_MAX_MB` or more** |
+
+The backstop row is the one people get wrong, because matching the two numbers feels
+like the careful choice. It is not insurance, it is a tool that can only ever fire in
+the few minutes before the monitor acts. Set it well above and it fires only when the
+monitor has genuinely failed: cron stopped, rotation blocked on low disk, or the safety
+copy itself failing.
+
+**Three smaller traps in the same area:**
+
+- **Filename clash.** The monitor writes `debug.log.1`. A logrotate stanza without
+  `compress` writes that same name, and whichever runs last overwrites the other's
+  history. `compress` resolves it, because logrotate then produces `debug.log.1.gz`.
+  Do **not** add `delaycompress`: it deliberately leaves the newest generation
+  uncompressed as `debug.log.1`, which puts the clash straight back.
+- **Lowering `rotate N` strands the older generations.** logrotate only manages
+  generations up to its rotate count, so going from `rotate 5` to `rotate 1` does not
+  clean up `.2` through `.5`, it abandons them. The operator above had a 5.9 GB
+  `debug.log.4` left over from a pre-rotation era; under `rotate 5` it would have aged
+  out in two more passes, and under `rotate 1` it is permanent. Run
+  `ls -lh ~/.digibyte/debug.log*` after any change and remove the strays by hand.
+- **Compression is not optional at these sizes.** Five uncompressed 2048M generations
+  is up to 10 GB before you count the live file. This kind of repetitive text log packs
+  down roughly ten to one, so `compress` turns that into about 1 GB.
+
+**Check 13 measures the live `debug.log` only**, never the rotated generations beside
+it. A card can read `debug.log: 17MB (+11.4 MB/day)` and look completely healthy while
+several GB of old generations sit in the same directory. The disk line is what catches
+that, so read the two together.
 
 > ⚠️ **Never `rm` or `mv` a live debug.log.** The daemon keeps the deleted inode open: `df` shows no space reclaimed, `du` can't find the file, and the confusion usually ends in an unnecessary restart. Truncate in place, always.
 

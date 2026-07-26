@@ -13,7 +13,7 @@ authors:
 repository-code: "https://github.com/BaumerCrypto/digidollar-oracle-tools"
 url: "https://github.com/BaumerCrypto/digidollar-oracle-tools"
 license: MIT
-version: "2.9.0"
+version: "2.10.0"
 date-released: "2026-07-26"
 keywords:
   - digibyte

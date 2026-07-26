@@ -28,17 +28,17 @@ Beyond the tooling, I've taken part in the DigiDollar launch discussions with th
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.9.0, 13 checks (daemon, oracle, chain sync, peers, consensus price, disk, **debug.log growth**, memory, swap pressure, service status, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu, no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. v2.6.2 cleans up the version line (`ℹ️  DigiByte: v9.26.4` instead of `ℹ️  /DigiByte:9.26.4/`), switches the email `Time:` line to UTC for operators on VPS in different timezones than their home, and pressure-gates the swap alert so a stale swap fill left over from a past reindex no longer fires a false red (only alerts on real current pressure via Linux PSI or a RAM-headroom threshold). v2.6.3 makes the version line update-aware, ✅ green when running the latest DigiByte Core release, ℹ️ blue `— vX.Y.Z available` when a newer release is out (GitHub `releases/latest`, cached daily), and adds a `SERVICE_NAME="none"` escape hatch for operators running headless without systemd. **v2.7.0 disk-safety net:** a debug.log watchdog (Check 13) that names enabled debug categories in the alert via the `logging` RPC, safe copy-then-truncate auto-rotation (default ON, announced on every rotation, skipped when free space can't hold the safety copy), a yellow disk-usage band ahead of the red floor (closes #33), and `PRICE_CHECK_EVERY` to thin the loudest RPC, plus dual-shape parsing so the monitor is **v9.26.5-ready**. **v2.9.0:** a DigiDollar economy line on the health summary (`DD economy: $40,932.07 DD minted, 40,461,618 DGB locked (332% collateralized)`, #40) sourced from `getdigidollarstats`, information only and summary-card only; plus the summary title now leads with `NETWORK_LABEL` like every other card does (#41), with an optional `NETWORK_EMOJI` for operators who want one instance visually flagged. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.9.0, 13 checks (daemon, oracle, chain sync, peers, consensus price, disk, **debug.log growth**, memory, swap pressure, service status, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu, no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. v2.6.2 cleans up the version line (`ℹ️  DigiByte: v9.26.4` instead of `ℹ️  /DigiByte:9.26.4/`), switches the email `Time:` line to UTC for operators on VPS in different timezones than their home, and pressure-gates the swap alert so a stale swap fill left over from a past reindex no longer fires a false red (only alerts on real current pressure via Linux PSI or a RAM-headroom threshold). v2.6.3 makes the version line update-aware, ✅ green when running the latest DigiByte Core release, ℹ️ blue `— vX.Y.Z available` when a newer release is out (GitHub `releases/latest`, cached daily), and adds a `SERVICE_NAME="none"` escape hatch for operators running headless without systemd. **v2.7.0 disk-safety net:** a debug.log watchdog (Check 13) that names enabled debug categories in the alert via the `logging` RPC, safe copy-then-truncate auto-rotation (default ON, announced on every rotation, skipped when free space can't hold the safety copy), a yellow disk-usage band ahead of the red floor (closes #33), and `PRICE_CHECK_EVERY` to thin the loudest RPC, plus dual-shape parsing so the monitor is **v9.26.5-ready**. **v2.9.0:** a DigiDollar economy line on the health summary (`DD economy: $40,932.07 DD minted, 40,461,618 DGB locked (332% collateralized)`, #40) sourced from `getdigidollarstats`, information only and summary-card only; plus the summary title now leads with `NETWORK_LABEL` like every other card does (#41), with an optional `NETWORK_EMOJI` for operators who want one instance visually flagged. **v2.10.0:** a chain-vs-label mismatch warning (#43) that catches a `CLI` pointed at the wrong daemon, an `SPDX-License-Identifier` header, and log-rotation coexistence guidance. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.7.2, posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. **v9.26.5-ready:** the BIP90 burial reshapes both deployment RPCs, and v1.7.x reads the buried forms for activation height and status. Software rows sort ascending by version within each compliance tier. See file for full description. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only, never push to GitHub. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. v2.7.0 additions: the disk/debug.log safety knobs (`DISK_USED_PCT_WARN`, `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, `PRICE_CHECK_EVERY`). v2.9.0 additions: `DD_ECONOMY_ENABLED`, `NETWORK_EMOJI`, and rewritten dual-instance `CLI` guidance (#42). |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. v2.7.0 additions: the disk/debug.log safety knobs (`DISK_USED_PCT_WARN`, `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, `PRICE_CHECK_EVERY`). v2.9.0 additions: `DD_ECONOMY_ENABLED`, `NETWORK_EMOJI`, and rewritten dual-instance `CLI` guidance (#42). v2.10.0: the `DEBUG_LOG_ROTATE` block now documents both legitimate reasons to turn rotation off, and the cadence rule for coexisting with an external log rotator. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.5.0, SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection, plus **new in v1.5.0:** a full `debug.log` growth/rotation section (why `debug=digidollar` silently disables the daemon's auto-shrink, measured growth rates, safe rotation and `logrotate copytruncate` recipes) and hardware sizing (RAM floors, pruning does not reduce daemon RAM; pruned-vs-full disk footprints). Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide, Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.9.0-win.1, full logic parity with Linux v2.9.0, including the v2.7.0 disk-safety net (debug.log watchdog, safe auto-rotation with a documented Windows file-lock divergence, disk warning band, `PRICE_CHECK_EVERY`), the v2.6.0 email + auto update-check features, the v2.6.1 cosmetic spacing fix, the v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert, and the v2.6.3 update-aware DigiByte version line + `SERVICE_NAME="none"` escape hatch. PS 5.1 and PS 7 compatible, zero external dependencies (native JSON parsing, .NET's built-in `System.Net.Mail.SmtpClient` for email). Includes watch mode (`-Watch`), `-Config` for dual-instance monitoring, and `-TestEmail` for SMTP diagnostics. Ships UTF-8 with BOM. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.10.0-win.1, full logic parity with Linux v2.10.0, including the v2.7.0 disk-safety net (debug.log watchdog, safe auto-rotation with a documented Windows file-lock divergence, disk warning band, `PRICE_CHECK_EVERY`), the v2.6.0 email + auto update-check features, the v2.6.1 cosmetic spacing fix, the v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert, and the v2.6.3 update-aware DigiByte version line + `SERVICE_NAME="none"` escape hatch. PS 5.1 and PS 7 compatible, zero external dependencies (native JSON parsing, .NET's built-in `System.Net.Mail.SmtpClient` for email). Includes watch mode (`-Watch`), `-Config` for dual-instance monitoring, and `-TestEmail` for SMTP diagnostics. Ships UTF-8 with BOM. |
 | [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. v2.6.0-win.1: email + update-check sections mirror the Linux template. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.9.0-macos.1, stock bash 3.2 compatible, jq is the only dependency (curl SMTP support ships with modern macOS). Full logic parity with Linux v2.9.0 (v2.7.0 disk-safety net with BSD-native idioms, `stat -f%z`, `df -m`, `: >` in place of `truncate(1)`; v2.6.0 email + update-check + v2.6.1 spacing fix + v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert + v2.6.3 update-aware version line + `LAUNCHD_LABEL="none"` escape hatch). Includes watch mode (`--watch`), `--config` for dual-instance monitoring, and `--test-email` for SMTP diagnostics. |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.10.0-macos.1, stock bash 3.2 compatible, jq is the only dependency (curl SMTP support ships with modern macOS). Full logic parity with Linux v2.10.0 (v2.7.0 disk-safety net with BSD-native idioms, `stat -f%z`, `df -m`, `: >` in place of `truncate(1)`; v2.6.0 email + update-check + v2.6.1 spacing fix + v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert + v2.6.3 update-aware version line + `LAUNCHD_LABEL="none"` escape hatch). Includes watch mode (`--watch`), `--config` for dual-instance monitoring, and `--test-email` for SMTP diagnostics. |
 | [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. v2.6.0-macos.1: email + update-check sections mirror the Linux template. |
 | [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports, installation, config, Task Scheduler/cron, watch mode, email SMTP setup per platform, troubleshooting. |
 
@@ -64,9 +64,9 @@ The monitor runs natively on all three major platforms. Same 13 checks, same Dig
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
-| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.9.0 |
-| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.9.0-win.1 |
-| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.9.0-macos.1 |
+| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.10.0 |
+| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.10.0-win.1 |
+| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.10.0-macos.1 |
 
 Windows needs no dependencies at all (PowerShell parses JSON natively; .NET's built-in `SmtpClient` handles email). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with (curl SMTP support ships with modern macOS). Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
 
@@ -155,6 +155,53 @@ Mainnet Health Summary — ✅ All Systems Healthy
 ```
 
 Status moves to the tail, where the embed border colour already carries it. Optional `NETWORK_EMOJI` (empty by default, so nothing changes unless you set it) prefixes the label everywhere. Marking only the exception is usually enough: leave your production instance unset so its cards look exactly as they always have, and flag the test one with `NETWORK_EMOJI="🚧"`. Internally the label and emoji are combined once into a single derived value at config load, which is what keeps the emoji from doubling up on the email path.
+
+### v2.10.0: chain/label mismatch warning + log-rotation coexistence
+
+`NETWORK_LABEL` was free text the monitor took entirely on trust. If your `CLI` line
+resolves to the wrong daemon you get a card titled "Mainnet Health Summary" reporting
+testnet block heights, quorum and prices, and nothing errors. The only tell was the
+chain name already printed on the Chain line, sitting beside a green checkmark where
+nobody looks for a contradiction. Issue #42 fixed the documentation side in v2.9.0;
+this is the runtime check that catches it either way.
+
+`check_chain` now compares the two and adds a second line when they clearly disagree:
+
+```
+✅ Chain: synced at block 178878 (test)
+⚠️  Label/chain mismatch: label "Mainnet", node reports (test). Check CLI in your config.
+```
+
+It is a second line rather than a recoloured Chain line because the node really is
+synced, and "your label is wrong" is a separate claim that also has to hold when the
+node is behind. One yellow alert fires, latched, so a persistent misconfiguration
+alerts once instead of every five minutes and clears green when you fix the config.
+
+The comparison is deliberately lenient, because a false warning here would be worse
+than the silence it replaces: it would fire on correctly configured boxes and teach
+operators to ignore the line. The chain value is matched exactly, so `regtest` never
+collides with the substring `test`. Only the label is matched loosely, and it has to
+clearly name a chain to be judged at all. `Testnet26`, `Main Net Oracle` and
+`my-mainnet-box` all match; `Primary domain oracle`, `Latest net`, `Main Oracle Box`,
+a label naming both chains, and an empty label are all left alone. There is no config
+toggle, because the check costs nothing at runtime and a label that names no chain
+already opts out.
+
+**Log-rotation coexistence, raised by Aussie Epic.** The `DEBUG_LOG_ROTATE="no"`
+guidance named developer log capture as the only reason to turn rotation off, when
+coexisting with logrotate is an equally valid one. His own config then showed the real
+hazard is cadence rather than tidiness: logrotate at `size 2048M rotate 5` against the
+monitor's `DEBUG_LOG_MAX_MB` default of 2048 is the same threshold, but the monitor
+checks every five minutes while logrotate runs once a day. The monitor gets there
+first and truncates to zero, so logrotate never sees a file big enough to rotate and
+`rotate 5` never builds up. One generation on disk while the operator believes there
+are five, with nothing erroring and nothing warning. All three config templates and
+the [hardening guide](ORACLE_HARDENING_GUIDE.md#running-logrotate-and-the-monitor-together-the-cadence-trap) now carry the rule: a faster checker resets the
+condition a slower one is waiting for, so only one tool should own rotation.
+
+All three scripts also gained an `SPDX-License-Identifier: MIT` header line, so the
+licence travels with any single-file copy. Shipped cross-platform as `2.10.0` /
+`2.10.0-win.1` / `2.10.0-macos.1`.
 
 ### Email alert examples
 
@@ -281,6 +328,33 @@ _The transition image is older than the rest, a fresh capture needs an organic q
    */5 * * * * $HOME/oracle-monitor.sh 2>/dev/null
    0 */12 * * * $HOME/oracle-monitor.sh --summary 2>/dev/null
 ```
+
+### Upgrading
+
+Aussie Epic's method, and the one I would recommend:
+
+1. Download the fresh script **and the fresh `config.template`** from this repo.
+2. Migrate your settings from your existing `~/.oracle-monitor/config` into the new
+   template, rather than patching the old config.
+3. Move the edited template over your config.
+
+Working from the new template matters more than it looks. The template is where new
+settings arrive with their reasoning attached, so this way you read the guidance
+instead of copying a key name out of a changelog. Your state files, cron entries and
+alert latches are untouched by any of it.
+
+```bash
+wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/oracle-monitor.sh
+wget https://raw.githubusercontent.com/BaumerCrypto/digidollar-oracle-tools/main/config.template
+chmod +x oracle-monitor.sh
+# migrate your settings into config.template, then:
+cp config.template ~/.oracle-monitor/config
+chmod 600 ~/.oracle-monitor/config
+./oracle-monitor.sh --dry-run
+```
+
+Windows and macOS operators: the same three steps with the platform files, see
+[CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
 
 ### Flags
 
@@ -618,9 +692,9 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | DigiByte Core | v9.26.5 (also compatible with v9.26.2, v9.26.3, v9.26.4, and RC44/RC45/RC46) |
 | Chain | mainnet (DigiDollar active since block 23,869,440) + testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.9.0 |
-| oracle-monitor.ps1 | v2.9.0-win.1 |
-| oracle-monitor-macos.sh | v2.9.0-macos.1 |
+| oracle-monitor.sh | v2.10.0 |
+| oracle-monitor.ps1 | v2.10.0-win.1 |
+| oracle-monitor-macos.sh | v2.10.0-macos.1 |
 | oracle-network-status.sh | v1.7.2 |
 
 If you're running a different release and something breaks, please open an issue.

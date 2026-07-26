@@ -192,10 +192,40 @@ DEBUG_LOG_WARN_MB=1024
 # place (daemon keeps writing, no restart). Previous .1 only overwritten
 # by the NEXT rotation (~2x threshold of newest history always kept).
 # Every rotation posts a blue card; skipped with a red card if free
-# space can't hold the safety copy. "no" opts out (e.g. while capturing
-# logs for a developer). DEBUG_LOG_KEEP = rotated copies to retain
-# (values >1 chain .1→.2→…; 0 is treated as 1 — never truncate without
-# a copy).
+# space can't hold the safety copy. DEBUG_LOG_KEEP = rotated copies to
+# retain (values >1 chain .1→.2→…; 0 is treated as 1 — never truncate
+# without a copy).
+#
+# TWO reasons to set "no", both legitimate (v2.10.0):
+#   1. You are capturing logs for a developer and need to keep
+#      everything.
+#   2. An external rotator ALREADY handles debug.log. Do not run both.
+#      On Linux that normally means logrotate.
+#
+# "Do not run both" is not tidiness. A 5-minute checker and a daily one
+# sharing a size threshold is NOT belt-and-braces, because the faster
+# one RESETS the condition the slower one is waiting for. Seen live on
+# a Linux operator's box (2026-07-26): logrotate at "size 2048M
+# rotate 5" against a rotation threshold of 2048, the SAME number. The
+# monitor got there first nearly every time and truncated to zero, so
+# logrotate never saw a file big enough to rotate. "rotate 5" never
+# built up: ONE generation on disk while the operator believed there
+# were five. Nothing errored and nothing warned.
+#
+# Pick ONE owner of rotation:
+#   external rotator owns it: set this to "no". Check 13 keeps the
+#        watchdog, size, growth rate and debug-category reporting, and
+#        stops touching the file. Add "compress" on that side. Five
+#        2048M generations is up to 10 GB uncompressed, and this kind
+#        of repetitive log packs down roughly 10:1.
+#   this monitor owns it: leave this "yes" and set the external
+#        rotator's size WELL above DEBUG_LOG_MAX_MB (2x or more), so
+#        it is a real backstop for a dead monitor rather than a
+#        competitor.
+#
+# The debug.log.1 filename clash is a CONSEQUENCE of sharing the job,
+# not the headline. Full detail, including why "delaycompress"
+# reintroduces that clash, is in ORACLE_HARDENING_GUIDE.md.
 DEBUG_LOG_ROTATE="yes"
 DEBUG_LOG_MAX_MB=2048
 DEBUG_LOG_KEEP=1

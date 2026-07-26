@@ -1,13 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.9.0
+# Version: 2.10.0
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
-readonly SCRIPT_VERSION="2.9.0"
+# SPDX-License-Identifier: MIT
+readonly SCRIPT_VERSION="2.10.0"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -35,6 +36,62 @@ readonly SCRIPT_VERSION="2.9.0"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.10.0 — Chain-vs-label mismatch warning (#43), plus an SPDX header
+#          line and one corrected instruction.
+#          (1) MISMATCH WARNING (#43). NETWORK_LABEL is free text that the
+#          monitor took entirely on trust, so an operator whose CLI
+#          resolved to the wrong daemon got a card titled "Mainnet Health
+#          Summary" reporting testnet heights, quorum and prices, and
+#          nothing errored. The only tell was the chain name already
+#          printed on the Chain line, sitting beside a green checkmark
+#          where nobody looks for a contradiction. check_chain now
+#          compares the two and adds a SECOND line when they clearly
+#          disagree, rather than recoloring the sync line: the node
+#          really is synced, and "your label is wrong" is a different
+#          claim that also has to hold when the node is BEHIND. No new
+#          RPC and no new parse, both values were already in scope.
+#          Counts as a warning and fires one yellow alert through
+#          should_alert, which is a latch rather than a TTL, so a
+#          persistent misconfiguration alerts ONCE instead of every 5
+#          minutes and clears green when the config is fixed.
+#          The comparison is deliberately ASYMMETRIC. The chain value is
+#          a fixed enum (main/test/regtest/signet) so it is matched
+#          EXACTLY, which is what keeps regtest from colliding with the
+#          substring "test"; only the label is free text, so only the
+#          label is matched loosely. A label must clearly NAME a chain to
+#          be judged at all: the pattern needs "mainnet" or "testnet"
+#          with an optional separator and a word boundary in front, so
+#          "domain" and "Latest net" cannot fire. Silent on an empty
+#          label, on a label naming neither chain, on a label naming
+#          both, and on regtest, signet or an unknown chain. A false
+#          warning here would be worse than the silence it replaces: it
+#          would fire on correctly configured boxes and teach operators
+#          to ignore the line. No config toggle by design, since the
+#          check costs nothing at runtime and a label that names no chain
+#          already opts out.
+#          (2) DEBUG_LOG_ROTATE="no" NOTE CORRECTED, and the coexistence
+#          rule documented. The Check 13 note named developer log capture
+#          as the only reason rotation would be off and told the operator
+#          to rotate by hand, which is wrong advice for anyone who turned
+#          it off because logrotate owns the file. Raised by Aussie Epic
+#          in the DigiDollar Gitter room; his own config then showed the
+#          real hazard is CADENCE rather than tidiness. He had logrotate
+#          at "size 2048M rotate 5" against this monitor's
+#          DEBUG_LOG_MAX_MB default of 2048, the SAME threshold. The
+#          monitor checks every 5 minutes and logrotate runs daily, so
+#          the monitor reaches 2048 first nearly every time and
+#          truncates to zero, and logrotate never sees a file big enough
+#          to rotate. "rotate 5" never builds up: ONE generation on disk
+#          while the operator believes there are five, with nothing
+#          erroring and nothing warning. Same silent-misconfiguration
+#          class as #42. The rule, now in all three templates and in
+#          ORACLE_HARDENING_GUIDE.md: a 5-minute checker and a daily one
+#          sharing a threshold is not belt-and-braces, because the
+#          faster one RESETS the condition the slower one waits for.
+#          Pick ONE owner of rotation. The debug.log.1 filename clash is
+#          a consequence of sharing the job, not the headline.
+#          (3) SPDX-License-Identifier: MIT added to the header block, so
+#          the licence travels with any single-file copy.
 #   v2.9.0 — Two changes, both on the health summary card.
 #          (1) DD ECONOMY LINE (#40, requested in the DigiDollar Gitter
 #          room). One info line under Price: "DD economy: $40,932.07 DD
@@ -1014,6 +1071,71 @@ check_oracle() {
 }
 
 # --- Check 3: Chain sync status ---
+# --- v2.10.0 (#43): does the label agree with the chain the node reports? ---
+# NETWORK_LABEL is free text the monitor otherwise takes entirely on trust.
+# When CLI resolves to the wrong daemon the whole card is titled for one
+# chain and populated from another, and nothing errors.
+#
+# The comparison is ASYMMETRIC on purpose:
+#   - $chain is a fixed enum from getblockchaininfo (main/test/regtest/
+#     signet), so it is compared EXACTLY. regtest therefore never collides
+#     with the substring "test", by construction rather than by special case.
+#   - NETWORK_LABEL is free text, so it is matched loosely, but it must
+#     clearly NAME a chain before any judgement is made.
+#
+# The leading word boundary is what stops "Primary domain oracle" and
+# "Latest net" from firing, and the absence of a trailing boundary is what
+# lets "Testnet26" still match. Silent on an empty label, a label naming
+# neither chain, a label naming both, and any chain value other than
+# main or test. A false warning here would be worse than the silence it
+# replaces, because it would fire on correctly configured boxes.
+check_label_vs_chain() {
+    local chain="$1"
+    local mismatch=0
+
+    if [ -n "${NETWORK_LABEL:-}" ]; then
+        case "$chain" in
+            main|test)
+                local lbl says_main says_test
+                lbl=$(printf '%s' "$NETWORK_LABEL" | tr '[:upper:]' '[:lower:]')
+                # Patterns live in variables: the right-hand side of =~ must
+                # not be quoted, and an inline literal would need escaping.
+                local re_main='(^|[^a-z0-9])main[ _.-]?net'
+                local re_test='(^|[^a-z0-9])test[ _.-]?net'
+                says_main=0
+                says_test=0
+                if [[ "$lbl" =~ $re_main ]]; then says_main=1; fi
+                if [[ "$lbl" =~ $re_test ]]; then says_test=1; fi
+                # Names both, or names neither: intent is unknown, stay quiet.
+                if [ $((says_main + says_test)) -eq 1 ]; then
+                    if [ "$chain" = "test" ] && [ "$says_main" -eq 1 ]; then
+                        mismatch=1
+                    elif [ "$chain" = "main" ] && [ "$says_test" -eq 1 ]; then
+                        mismatch=1
+                    fi
+                fi
+                ;;
+        esac
+    fi
+
+    # Every non-mismatch path clears, including the ones that returned early
+    # for an empty or unjudgeable label. Leaving the latch set would suppress
+    # a later real mismatch.
+    if [ "$mismatch" -eq 0 ]; then
+        if clear_alert "chain_label_mismatch"; then
+            alert_green "✅ Chain/Label Mismatch Resolved" "NETWORK_LABEL and the chain this node reports ($chain) no longer disagree."
+        fi
+        return 0
+    fi
+
+    DETAILS+="⚠️  Label/chain mismatch: label \"$NETWORK_LABEL\", node reports ($chain). Check CLI in your config.\n"
+    WARNINGS=$((WARNINGS + 1))
+    if should_alert "chain_label_mismatch"; then
+        alert_yellow "⚠️  Chain/Label Mismatch" "NETWORK_LABEL is \"$NETWORK_LABEL\" but this node reports chain ($chain)."$'\n'"Every other value on this card came from the ($chain) chain, so the block height, quorum and price are all from the wrong network."$'\n'"Fix the CLI line in your config. On a box running both chains, pin the chain explicitly on BOTH instances (see issue #42). Bare digibyte-cli reads the default conf, which may carry testnet=1."
+    fi
+    return 0
+}
+
 check_chain() {
     local chain_info
     chain_info=$($CLI getblockchaininfo 2>/dev/null)
@@ -1043,6 +1165,10 @@ check_chain() {
         fi
         DETAILS+="✅ Chain: synced at block $blocks ($chain)\n"
     fi
+
+    # v2.10.0 (#43): runs on BOTH branches above, because a node can be
+    # behind AND pointed at the wrong chain at the same time.
+    check_label_vs_chain "$chain"
 }
 
 # --- Check 4: Peer count (v2.8.0: inbound/outbound split + cap) ---
@@ -1414,9 +1540,9 @@ check_debuglog() {
             fi
             local rot_note
             if [ "${DEBUG_LOG_ROTATE:-yes}" = "yes" ]; then
-                rot_note="Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB:-2048}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted."
+                rot_note="Auto-rotation is ON: at ${DEBUG_LOG_MAX_MB:-2048}MB this monitor will copy to debug.log.1 and truncate in place — newest history preserved, blue card posted. If logrotate or another tool also rotates this file, only ONE should own it: see ORACLE_HARDENING_GUIDE.md."
             else
-                rot_note="Auto-rotation is OFF (DEBUG_LOG_ROTATE=\"no\"). Manual: cp ${log_path} ${log_path}.1 && truncate -s 0 ${log_path}"
+                rot_note="Auto-rotation is OFF (DEBUG_LOG_ROTATE=\"no\"). If logrotate or another tool owns this file, nothing to do here. Otherwise rotate manually: cp ${log_path} ${log_path}.1 && truncate -s 0 ${log_path}"
             fi
             alert_yellow "⚠️  debug.log Growing Large" "debug.log is ${size_mb}MB${rate_note}."$'\n'"${why}"$'\n'"${fix}"$'\n'"${rot_note}"$'\n'"Full guidance: https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#debuglog-growth-rotation-and-the-disappearing-disk"
         fi

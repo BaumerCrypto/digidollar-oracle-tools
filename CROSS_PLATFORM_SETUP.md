@@ -10,9 +10,9 @@ My [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools
 | macOS | [`oracle-monitor-macos.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor-macos.sh) | [`config-macos.template`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config-macos.template) |
 | Linux (VPS) | [`oracle-monitor.sh`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/oracle-monitor.sh) | [`config.template`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/config.template) |
 
-All three are logic-identical at v2.2: the same 11 health checks, the same heartbeat-based quorum counting, the same anti-flap cooldown + hysteresis, the same Discord embeds. If you've seen my alerts in #oracle-alerts, these produce the same ones. The only differences are the platform plumbing underneath.
+All three are logic-identical: the same 13 health checks, the same heartbeat-based quorum counting, the same anti-flap cooldown + hysteresis, the same Discord embeds. If you've seen my alerts in #oracle-alerts, these produce the same ones. The only differences are the platform plumbing underneath.
 
-What the monitor watches (all platforms): node process alive, oracle running and signing (`listoracle`), chain sync, peer count, consensus price freshness + degraded-network status, disk space, memory, service status, node version, NTP clock offset, and network-wide quorum margin with MuSig2 session health.
+What the monitor watches (all platforms): node process alive, oracle running and signing (`listoracle`), chain sync, peer count, consensus price freshness + degraded-network status, disk space, debug.log growth, memory, swap pressure, service status, node version, NTP clock offset, and network-wide quorum margin with MuSig2 session health.
 
 ---
 
@@ -67,7 +67,7 @@ That's every 5 minutes for health checks (alerts only fire on problems and recov
 .\oracle-monitor.ps1 -Watch -RefreshSeconds 30   # or your own interval
 ```
 
-It redraws the full 11-check status block in place until you Ctrl+C. Watch mode never sends Discord alerts and never touches the alert state files, so it's completely safe to leave running alongside the scheduled tasks — the two don't interfere.
+It redraws the full 13-check status block in place until you Ctrl+C. Watch mode never sends Discord alerts and never touches the alert state files, so it's completely safe to leave running alongside the scheduled tasks — the two don't interfere.
 
 ![Watch mode in PowerShell — full status refreshed every 60 seconds](watch-mode-windows.png)
 
@@ -138,10 +138,12 @@ All three config files expose the same knobs with the same defaults: alert thres
 
 **Platform truncation notes.** macOS ships no `truncate(1)`, so the macOS port truncates with `: > debug.log` — the identical in-place primitive for a file the daemon holds open. On Windows, if the daemon holds `debug.log` with an exclusive lock the in-place truncate is impossible from a second process: the monitor makes the safety copy, posts **one** yellow card naming the durable fix (`shrinkdebugfile=1` + a daemon restart, or removing the `debug=` line), and stops re-attempting until the file next drops under the threshold. It never crashes and never deletes anything. The full explanation of the quorum bands and anti-flap design is in the main [`README`](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/README.md).
 
-Switching any platform from testnet to mainnet is one config line: drop the `-testnet` argument (`$CLI_ARGS = @()` on Windows, `CLI="digibyte-cli"` on macOS/Linux).
+**v2.10.0 adds a chain-vs-label check on every platform (#43).** If `NETWORK_LABEL` clearly names one chain and the node reports the other, the card gains a warning line and one yellow alert fires. The comparison is deliberately lenient: the chain value is matched exactly while the label is matched loosely, and a label that names neither chain (or both) is left alone, so a correctly configured box never sees it. v2.10.0 also documents the rule for coexisting with an external log rotator, which is that only one tool should own rotation. See the [hardening guide's cadence section](https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/ORACLE_HARDENING_GUIDE.md#running-logrotate-and-the-monitor-together-the-cadence-trap).
+
+Switching any platform from testnet to mainnet is one config line: drop the `-testnet` argument (`$CLI_ARGS = @()` on Windows, `CLI="digibyte-cli"` on macOS/Linux). Set `NETWORK_LABEL` to match, and the new check will tell you if you miss a step.
 
 ## A note on parity and testing
 
-I built these as faithful ports, not rewrites. The quorum state machine, the alert text, the band logic, the state-file format — all identical to the Linux original, so the scripts can be diffed side by side and a fix to one is a mechanical fix to the others. Version strings track the Linux release with a platform suffix (`2.7.1-win.2`, `2.7.1-macos.1`) to make the lineage explicit — the Windows suffix runs ahead because a PS 5.1-only parse fix shipped after v2.7.1 (see the README). Both ports also carry a `watch` mode (live refreshing console dashboard). A unified Python version that replaces all three remains on my roadmap as v3.0 (tracked in [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11)).
+I built these as faithful ports, not rewrites. The quorum state machine, the alert text, the band logic, the state-file format — all identical to the Linux original, so the scripts can be diffed side by side and a fix to one is a mechanical fix to the others. Version strings track the Linux release with a platform suffix (`2.10.0-win.1`, `2.10.0-macos.1`) to make the lineage explicit. A suffix can run ahead of the Linux number when a platform-only fix ships between releases, as `-win.2` did after v2.7.1. Both ports also carry a `watch` mode (live refreshing console dashboard). A unified Python version that replaces all three remains on my roadmap as v3.0 (tracked in [issue #11](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues/11)).
 
 Testing status, honestly stated: the macOS script's logic has been exercised end-to-end in a harness with mocked macOS commands and canned RC44 RPC responses — every alert path, every recovery, the one-shot dedup, and the full quorum anti-flap state machine (escalation, hysteresis dead zone, cooldown suppression and expiry, empty roster). The PowerShell port follows the same verified logic line for line and has been hand-audited against the known PowerShell 5.1 traps, but hasn't yet executed on a real Windows box. Neither has run against a live node on real Apple/Microsoft hardware — that's where you come in. I run the Linux script in production on my own oracle (slot 17); if you run one of these ports and something misbehaves, [open an issue](https://github.com/BaumerCrypto/digidollar-oracle-tools/issues) or ping me on Gitter (digibyte-maxi). Field reports from real Windows/Mac oracle setups are exactly what these need next.
