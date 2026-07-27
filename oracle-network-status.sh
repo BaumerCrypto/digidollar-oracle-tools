@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.8.0
+# Version: 1.8.1
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel once per day. Community-facing — reports network-wide status,
@@ -77,6 +77,21 @@
 #                                          read by the daily standby pass)
 #
 # CHANGELOG:
+#   v1.8.1 — BUGFIX: the v1.7.x ACCEPTED_VERSIONS compatibility path was
+#          unreachable. The built-in MIN_ACCEPTED_VERSION default was
+#          assigned BEFORE the config is sourced, so after sourcing a
+#          legacy config (which sets only ACCEPTED_VERSIONS) the variable
+#          was never empty and the lowest-entry derivation never ran: the
+#          floor silently stayed at the built-in v9.26.2 instead of the
+#          list's lowest entry. Permissive-direction failure only, nobody
+#          was falsely nudged, but the documented precedence was wrong.
+#          Fix: the default now lives in the resolution block, applied
+#          AFTER the legacy-list check. Behavior is unchanged for configs
+#          that set MIN_ACCEPTED_VERSION and for configs that set neither.
+#          Also: a failed Gitter post now prints the whole Matrix error
+#          body rather than only its first line.
+#          Also: the DD economy formatter can no longer double-emit on a
+#          non-numeric value (defensive; unreachable with current RPCs).
 #   v1.8.0 — Version compliance is now a COMPARISON, not a whitelist.
 #          MIN_ACCEPTED_VERSION replaces ACCEPTED_VERSIONS: any release at
 #          or above the floor is compliant, so every future DigiByte
@@ -461,7 +476,12 @@ NETWORK_LABEL=""
 #
 # Dual-instance operators override per-config: testnet may set a lower
 # floor, mainnet may raise it once Jared confirms.
-MIN_ACCEPTED_VERSION="v9.26.2"
+#
+# Left EMPTY here on purpose (v1.8.1): the effective default (v9.26.2) is
+# applied in the resolution block below, AFTER a legacy ACCEPTED_VERSIONS
+# list has had the chance to set the floor. A non-empty default here made
+# the v1.7.x compatibility path unreachable.
+MIN_ACCEPTED_VERSION=""
 
 # BACKWARD COMPATIBILITY (v1.8.0). Configs written for v1.7.x and earlier
 # set ACCEPTED_VERSIONS instead. Left empty here so a config that still
@@ -544,7 +564,9 @@ fi
 # Precedence:
 #   1. MIN_ACCEPTED_VERSION from the config, if set
 #   2. lowest entry of a legacy ACCEPTED_VERSIONS list, if the config set one
-#   3. the built-in default above
+#   3. the built-in default (v9.26.2), applied HERE and not at the
+#      declaration above. Putting it at the declaration is what made
+#      step 2 unreachable before v1.8.1.
 # Step 2 is the v1.7.x compatibility path. sort -V is used ONLY here, to pick
 # the lowest entry of an operator's own list; it never decides compliance.
 if [ -z "$MIN_ACCEPTED_VERSION" ] && [ -n "$ACCEPTED_VERSIONS" ]; then
@@ -798,7 +820,10 @@ post_to_gitter() {
         return 0
     else
         echo "[$(date -u)] ERROR: Gitter post failed (HTTP $http_code)"
-        echo "$response" | head -1
+        # v1.8.1: print the WHOLE error body, dropping only the http-code
+        # line that -w appended. Matrix errors are often multi-line JSON,
+        # and head -1 threw away everything after the first line.
+        echo "$response" | sed '$d'
         return 1
     fi
 }
@@ -1218,7 +1243,7 @@ fi
 
 # v1.6.3: surface the resolution result in dry-run on EVERY mode. This is
 # the debug line that would have caught the ACTIVE-state math bug in the
-# Session 31 testnet dry-run (FULL mode never displays activation height).
+# 2026-07-12 testnet dry-run (FULL mode never displays activation height).
 if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] Activation height: ${ACTIVATION_HEIGHT:-unresolved} (source: ${ACTIVATION_HEIGHT_SOURCE}), blocks remaining: ${BLOCKS_REMAINING}"
 fi
@@ -1527,8 +1552,15 @@ if [ $DDSTATS_OK -eq 0 ] && echo "$DDSTATS_JSON" | jq -e . >/dev/null 2>&1; then
             int=$(echo "$int" | rev | sed 's/\([0-9]\{3\}\)/\1,/g' | rev | sed 's/^,//')
             echo "${int}${frac}"
         }
-        DD_SUPPLY_DISPLAY=$(_fmt_thousands "$(printf '%.2f' "$DD_SUPPLY_USD" 2>/dev/null || echo "$DD_SUPPLY_USD")")
-        DD_LOCKED_DISPLAY=$(_fmt_thousands "$(printf '%.0f' "$DD_LOCKED_DGB" 2>/dev/null || echo "$DD_LOCKED_DGB")")
+        # v1.8.1: the printf and its fallback must be SEPARATE statements.
+        # Inline as `$(printf ... || echo ...)` both halves land in the same
+        # capture on a non-numeric input, because printf still writes "0.00"
+        # to stdout before returning non-zero: "abc" rendered as "0.00abc".
+        # Defensive only, the RPC has never returned a non-numeric here.
+        _sup=$(printf '%.2f' "$DD_SUPPLY_USD" 2>/dev/null) || _sup="$DD_SUPPLY_USD"
+        _lck=$(printf '%.0f' "$DD_LOCKED_DGB" 2>/dev/null) || _lck="$DD_LOCKED_DGB"
+        DD_SUPPLY_DISPLAY=$(_fmt_thousands "$_sup")
+        DD_LOCKED_DISPLAY=$(_fmt_thousands "$_lck")
         if [ -n "$DD_COLLAT_PCT" ]; then
             DD_COLLAT_DISPLAY=" (${DD_COLLAT_PCT}% collateralized)"
         fi
