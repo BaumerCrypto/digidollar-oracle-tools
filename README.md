@@ -29,7 +29,7 @@ Beyond the tooling, I've taken part in the DigiDollar launch discussions with th
 | File | Purpose |
 |------|---------|
 | [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.10.0, 13 checks (daemon, oracle, chain sync, peers, consensus price, disk, **debug.log growth**, memory, swap pressure, service status, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu, no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. v2.6.2 cleans up the version line (`ℹ️  DigiByte: v9.26.4` instead of `ℹ️  /DigiByte:9.26.4/`), switches the email `Time:` line to UTC for operators on VPS in different timezones than their home, and pressure-gates the swap alert so a stale swap fill left over from a past reindex no longer fires a false red (only alerts on real current pressure via Linux PSI or a RAM-headroom threshold). v2.6.3 makes the version line update-aware, ✅ green when running the latest DigiByte Core release, ℹ️ blue `— vX.Y.Z available` when a newer release is out (GitHub `releases/latest`, cached daily), and adds a `SERVICE_NAME="none"` escape hatch for operators running headless without systemd. **v2.7.0 disk-safety net:** a debug.log watchdog (Check 13) that names enabled debug categories in the alert via the `logging` RPC, safe copy-then-truncate auto-rotation (default ON, announced on every rotation, skipped when free space can't hold the safety copy), a yellow disk-usage band ahead of the red floor (closes #33), and `PRICE_CHECK_EVERY` to thin the loudest RPC, plus dual-shape parsing so the monitor is **v9.26.5-ready**. **v2.9.0:** a DigiDollar economy line on the health summary (`DD economy: $40,932.07 DD minted, 40,461,618 DGB locked (332% collateralized)`, #40) sourced from `getdigidollarstats`, information only and summary-card only; plus the summary title now leads with `NETWORK_LABEL` like every other card does (#41), with an optional `NETWORK_EMOJI` for operators who want one instance visually flagged. **v2.10.0:** a chain-vs-label mismatch warning (#43) that catches a `CLI` pointed at the wrong daemon, an `SPDX-License-Identifier` header, and log-rotation coexistence guidance. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
-| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.7.3, posts automated oracle network health summaries to the DigiDollar Gitter channel every 12 hours via Matrix API. **v9.26.5-ready:** the BIP90 burial reshapes both deployment RPCs, and v1.7.x reads the buried forms for activation height and status. Software rows sort ascending by version within each compliance tier. **v1.7.3** adds v9.26.5 to the default `ACCEPTED_VERSIONS` and points the upgrade nudge at the newest accepted release instead of the first one listed. See file for full description. |
+| [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.8.0, posts automated oracle network health summaries to the DigiDollar Gitter channel once per day via Matrix API. **v1.8.0:** version compliance is a numeric comparison against `MIN_ACCEPTED_VERSION` instead of a fixed whitelist, so every future DigiByte release passes with no edit; release candidates are excluded by an explicit rule, and an oracle reporting no version is treated as unknown and never @-mentioned. **v9.26.5-ready:** the BIP90 burial reshapes both deployment RPCs, and the script reads the buried forms for activation height and status. Software rows sort ascending by version within each compliance tier. See file for full description. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to `~/.oracle-monitor/oracle-roster.conf` and populate with real Matrix IDs. The populated file stays on VPS only, never push to GitHub. |
 | [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. v2.7.0 additions: the disk/debug.log safety knobs (`DISK_USED_PCT_WARN`, `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, `PRICE_CHECK_EVERY`). v2.9.0 additions: `DD_ECONOMY_ENABLED`, `NETWORK_EMOJI`, and rewritten dual-instance `CLI` guidance (#42). v2.10.0: the `DEBUG_LOG_ROTATE` block now documents both legitimate reasons to turn rotation off, and the cadence rule for coexisting with an external log rotator. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
@@ -492,7 +492,7 @@ Both scripts parse specific fields from DigiByte Core RPCs. If a future release 
 
 ## `oracle-network-status.sh`
 
-Community-facing Gitter bot that posts oracle network health summaries to the [DigiDollar Gitter channel](https://app.gitter.im/#/room/#digidollar:gitter.im) every 12 hours. Unlike `oracle-monitor.sh` (which watches your own node and alerts you privately via Discord + email), this script monitors the entire oracle network and reports publicly.
+Community-facing Gitter bot that posts oracle network health summaries to the [DigiDollar Gitter channel](https://app.gitter.im/#/room/#digidollar:gitter.im) once per day. Unlike `oracle-monitor.sh` (which watches your own node and alerts you privately via Discord + email), this script monitors the entire oracle network and reports publicly.
 
 ### What it reports
 
@@ -502,7 +502,7 @@ Community-facing Gitter bot that posts oracle network health summaries to the [D
 - **MuSig2 session**, current epoch, signing state, nonce and signature counts
 - **BIP9 activation**, deployment status and signaling bit
 - **Last bundle**, most recent on-chain price bundle block height and signer count
-- **Software versions** (v1.6+), all versions with compliance icons per the `ACCEPTED_VERSIONS` list. Three tiers in order: compliant (✅), then non-compliant with a reported version (⚠️), then "No version reported" pinned at the end. Within each tier, rows sort **ascending by version** (v1.7.1) so the card reads oldest-to-newest and the upgrade story is visible at a glance. Long/short git-hash variants collapse to one canonical line per base version. Note that `ACCEPTED_VERSIONS` is a fixed list, not a comparison, a release newer than every entry is flagged non-compliant until you add it, so keep it current.
+- **Software versions** (v1.6+), all versions with compliance icons. Three tiers in order: compliant (✅), then flagged with a reported version (⚠️), then "No version reported" pinned at the end. Within each tier, rows sort **ascending by version** (v1.7.1) so the card reads oldest-to-newest and the upgrade story is visible at a glance. Long/short git-hash variants collapse to one canonical line per base version. Compliance (v1.8.0) is a numeric comparison against `MIN_ACCEPTED_VERSION`: anything at or above the floor passes, so a new release needs no config edit. Release candidates and pre-releases never pass, even when their numbers sit above the floor. An oracle reporting no version is treated as unknown, shown here but never @-mentioned.
 - **Upgrade nudge** (v1.6+, 📢), fresh operators running non-compliant versions get a light @ mention. Same 6-ping cap as the stale/inactive nudges (no spam). Skipped for stale/inactive operators since they're already pinged in those sections.
 - **Stale oracles** (⚠️), were running, went down (liveness concern). Operators are @ mentioned in Gitter for up to 6 cycles (3 days), then suppressed but still listed.
 - **Inactive oracles** (❌), have key or wallet issues on the current network. Same @ mention behavior as stale.
@@ -526,7 +526,7 @@ MuSig2: epoch 3061, complete, 7/7 nonces, 7/7 sigs
 BIP9: active (bit 23)
 Last bundle: block 122446, signed by 7 oracles
 
-Software (accepted: v9.26.2 / v9.26.3 / v9.26.4 / v9.26.5):
+Software (minimum: v9.26.2):
   ✅ v9.26.5: 6 operators
   ✅ v9.26.4: 4 operators
   ✅ v9.26.3: 2 operators
@@ -535,7 +535,7 @@ Software (accepted: v9.26.2 / v9.26.3 / v9.26.4 / v9.26.5):
   ⚠️ v9.26.1-pre2 (pre-release): 1 operator
   ⚠️ No version reported: 9 operators
 
-📢 Please upgrade to v9.26.5 or newer:
+📢 Please upgrade to v9.26.2 or newer:
   — ID 9 Ogilvie @ogilvie:gitter.im
   — ID 18 Anthony @usascholar:gitter.im
   — ID 26 HashedMax @hashedmax:gitter.im
@@ -626,7 +626,7 @@ nano ~/.oracle-monitor/oracle-roster.conf
 8. Test: `./oracle-network-status.sh --dry-run`
 9. Test: `./oracle-network-status.sh --test`
 10. Test mentions: `./oracle-network-status.sh --test-mention`
-11. Add to cron: `5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null`
+11. Add to cron: `5 0 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null`
 
 ### Flags
 
@@ -644,10 +644,10 @@ nano ~/.oracle-monitor/oracle-roster.conf
 Run two independent instances from the same script using `--config`, one per chain:
 
 ```cron
-# Testnet 12hr status pulse (default config)
-5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
-# Mainnet 12hr status pulse (custom config)
-10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+# Testnet daily status pulse (default config)
+5 0 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
+# Mainnet daily status pulse (custom config)
+10 0 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 ```
 
 The hourly `--endgame-only` ticker that ran alongside these through the mainnet countdown is no longer needed post-activation, it silent-exits every time. Add it back only if you're tracking a chain toward a future activation.
@@ -665,7 +665,7 @@ ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-rost
 
 ### Note on running your own instance
 
-This script is the reference implementation for the Gitter network status bot posting to `#digidollar:gitter.im`. First deployed 2026-06-16 (v1.2, GitHub issue #18), maintained and iterated continuously since. Currently at v1.7.2 with dual-instance testnet + mainnet monitoring running under my authorship.
+This script is the reference implementation for the Gitter network status bot posting to `#digidollar:gitter.im`. First deployed 2026-06-16 (v1.2, GitHub issue #18), maintained and iterated continuously since. Currently at v1.8.0 with dual-instance testnet + mainnet monitoring running under my authorship.
 
 **ONE bot per network is sufficient to serve the room.** Running a second instance against the same Gitter channel produces duplicate posts, splits @ mention tracking, and confuses operators. My testnet + mainnet instances (using `--config` for dual-instance) currently cover the network and coordinate with Jared and DigiSwarm on cadence and content.
 
@@ -695,7 +695,7 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | oracle-monitor.sh | v2.10.0 |
 | oracle-monitor.ps1 | v2.10.0-win.1 |
 | oracle-monitor-macos.sh | v2.10.0-macos.1 |
-| oracle-network-status.sh | v1.7.2 |
+| oracle-network-status.sh | v1.8.0 |
 
 If you're running a different release and something breaks, please open an issue.
 

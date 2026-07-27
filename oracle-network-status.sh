@@ -1,13 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.7.3
+# Version: 1.8.0
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
-# channel every 12 hours. Community-facing — reports network-wide status,
+# channel once per day. Community-facing — reports network-wide status,
 # not individual node health (that's oracle-monitor.sh).
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0
+# SPDX-License-Identifier: MIT
 #
 # SETUP (one-time):
 #   1. Create a Matrix bot account at https://app.element.io/#/register
@@ -31,7 +32,7 @@
 #   8. Test:  ./oracle-network-status.sh --test
 #   9. Test:  ./oracle-network-status.sh --test-mention
 #  10. Test:  ./oracle-network-status.sh --endgame-only --dry-run
-#  11. Cron:  5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
+#  11. Cron:  5 0 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
 #
 # FLAGS:
 #   (none)              Collect data and post to Gitter
@@ -42,13 +43,13 @@
 #   --endgame-only      Mainnet endgame ticker (v1.6). Posts ONLY if
 #                       LOCKED_IN + <24h to activation, OR ACTIVE + birth
 #                       announcement not yet fired. Silent exit otherwise.
-#                       Designed for hourly cron alongside regular 12hr cron.
+#                       Designed for hourly cron alongside the daily cron.
 #
 # DUAL-INSTANCE EXAMPLE (testnet + mainnet on one VPS):
-#   # Testnet (default config, 12hr status pulse)
-#   5 */12 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
-#   # Mainnet (custom config, 12hr status pulse)
-#   10 */12 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
+#   # Testnet (default config, daily status pulse)
+#   5 0 * * * /home/YOUR_USER/oracle-network-status.sh 2>/dev/null
+#   # Mainnet (custom config, daily status pulse)
+#   10 0 * * * /home/YOUR_USER/oracle-network-status.sh --config ~/.oracle-monitor-mainnet/config 2>/dev/null
 #   # Mainnet (hourly endgame ticker, silent outside 24h band)
 #   #   NOTE (v1.7.2): only useful on a chain still heading TO activation.
 #   #   Once a chain is active this silent-exits on every run — mainnet
@@ -73,9 +74,41 @@
 #   ~/.oracle-monitor/activation_state   — v1.6, one-shot dedup for DD mainnet birth
 #   ~/.oracle-monitor/endgame_last_post  — v1.6.3, in-band dedup marker (written
 #                                          on successful standby/endgame posts,
-#                                          read by the 12hr standby pass)
+#                                          read by the daily standby pass)
 #
 # CHANGELOG:
+#   v1.8.0 — Version compliance is now a COMPARISON, not a whitelist.
+#          MIN_ACCEPTED_VERSION replaces ACCEPTED_VERSIONS: any release at
+#          or above the floor is compliant, so every future DigiByte
+#          release passes without editing this script. The whitelist
+#          flagged anything newer than its own list as non-compliant and
+#          @-mentioned those operators telling them to install an older
+#          build. On 2026-07-26 that would have hit 18 of 35 operators the
+#          day v9.26.6 shipped.
+#          Comparison is numeric on MAJOR.MINOR.PATCH after the existing
+#          canonical form, inside the same jq filters that already used a
+#          numeric-array sort key. A leading "v" is ignored on both sides,
+#          which removes a false-positive class: a bash "sort -V" approach
+#          flags a compliant "9.26.5" against a "v9.26.2" floor, because
+#          it orders bare-numeric strings below v-prefixed ones.
+#          Release candidates stay non-compliant by an explicit rule, not
+#          by luck. "v9.26.6rc1" is numerically above a "v9.26.2" floor
+#          and would otherwise pass; rc/pre builds are not release
+#          software.
+#          Third fix: an operator reporting NO version is now UNKNOWN
+#          rather than non-compliant. It is still shown in the Software
+#          section but is never @-mentioned. Before this, a fresh oracle
+#          with an unreadable version was publicly told to upgrade. Latent
+#          on 2026-07-26 only because both unreported operators were
+#          inactive, and inactive operators are excluded from the nudge.
+#          Backward compatible: a config that still sets ACCEPTED_VERSIONS
+#          and no MIN_ACCEPTED_VERSION derives the floor from the lowest
+#          entry in that list, so existing configs keep working unchanged
+#          and become forward-compatible automatically.
+#          Also: cadence text corrected to once per day (cron moved to
+#          daily 2026-07-26); the getdigidollarstats comment claiming a
+#          UTXO-set scan corrected with measured figures; SPDX identifier
+#          added.
 #   v1.7.3 — Two lines, both in the version-compliance path, both
 #          producing public @-mentions that named the wrong release.
 #          (1) ACCEPTED_VERSIONS DEFAULT now includes v9.26.5. The list
@@ -403,25 +436,40 @@ MENTION_MAX=6
 # Override examples: "Testnet26", "Mainnet", "Testnet"
 NETWORK_LABEL=""
 
-# Accepted software versions (v1.6). Space-separated list of version strings
-# whose oracles are considered compliant with the network's software rules.
-# Matching uses startswith(): "v9.26.4" matches "v9.26.4" AND "v9.26.4-gABC123"
-# (release builds carrying a git hash suffix pass), while "v9.26.0rc46-gABC"
-# does NOT match "v9.26.4" and is flagged as non-compliant.
+# Minimum accepted software version (v1.8.0). Any oracle running THIS
+# VERSION OR NEWER is compliant. Nothing needs editing when a new
+# DigiByte release ships.
+#
+# This replaced the fixed ACCEPTED_VERSIONS whitelist, which flagged every
+# release newer than its own list as non-compliant and @-mentioned those
+# operators telling them to install something older.
+#
+# Comparison is numeric on MAJOR.MINOR.PATCH after canonicalisation, so
+# release builds carrying a git-hash suffix ("v9.26.4-gABC123") pass. A
+# leading "v" is optional on both sides.
+#
+# Release candidates and pre-releases are NEVER compliant regardless of
+# their numbers: "v9.26.6rc1" sits above "v9.26.2" numerically but is
+# still flagged, because rc/pre builds are not release software.
+#
+# An absent or unreadable version is UNKNOWN, not non-compliant. It is
+# shown in the Software section but never @-mentioned, because the bot
+# cannot know what that operator is running.
 #
 # Default rule (Bastian, Gitter 2026-07-11): "any v9.26 will do to run
-# the oracle service." Update per Jared's guidance for mainnet if the
-# rule tightens post-activation.
+# the oracle service." Update per Jared's guidance if the rule tightens.
 #
-# Dual-instance operators override per-config: testnet may accept broader,
-# mainnet may narrow to a specific release once Jared confirms.
-#
-# KEEP THIS CURRENT (v1.7.3). This is a fixed whitelist, not a version
-# comparison, so a release NEWER than everything listed is still flagged
-# non-compliant, and with the nudge on it @-mentions that operator in the
-# room. Add each new release here as it ships. Replacing the whitelist
-# with a real comparison is queued for v1.8.0.
-ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4 v9.26.5"
+# Dual-instance operators override per-config: testnet may set a lower
+# floor, mainnet may raise it once Jared confirms.
+MIN_ACCEPTED_VERSION="v9.26.2"
+
+# BACKWARD COMPATIBILITY (v1.8.0). Configs written for v1.7.x and earlier
+# set ACCEPTED_VERSIONS instead. Left empty here so a config that still
+# sets it is detected after sourcing: the LOWEST entry in that list then
+# becomes the floor, which keeps an existing config working unchanged and
+# makes it forward-compatible with releases that are not in its list.
+# Scheduled for removal one release after the known configs have migrated.
+ACCEPTED_VERSIONS=""
 
 # Turn the Upgrade nudge section on/off. If false, non-compliant operators
 # are still flagged in the Software section with the yellow icon, but no
@@ -435,11 +483,11 @@ VERSION_NUDGE_ENABLED=true
 BLOCK_TIME_SECS=15
 
 # v1.6.3: in-band dedup window. Inside the final 24h before activation the
-# 12hr standby pass silent-exits if the hourly endgame ticker posted within
+# daily standby pass silent-exits if the hourly endgame ticker posted within
 # this many seconds. Default 3540 (59 min): the ticker fires at :15 and the
 # standby at :10, a 55-minute (3300s) gap, so 3540 comfortably covers cron
 # jitter and script runtime while staying under 3600, which means a broken
-# or stalled hourly ticker (marker older than one hour) lets the 12hr
+# or stalled hourly ticker (marker older than one hour) lets the daily
 # standby post as backup.
 STANDBY_DEDUP_WINDOW_SECS=3540
 
@@ -490,6 +538,21 @@ ENDGAME_LAST_POST_FILE="${MONITOR_DIR}/endgame_last_post"
 if [ -f "$CONFIG_FILE" ]; then
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
+fi
+
+# --- v1.8.0: resolve the compliance floor -----------------------------------
+# Precedence:
+#   1. MIN_ACCEPTED_VERSION from the config, if set
+#   2. lowest entry of a legacy ACCEPTED_VERSIONS list, if the config set one
+#   3. the built-in default above
+# Step 2 is the v1.7.x compatibility path. sort -V is used ONLY here, to pick
+# the lowest entry of an operator's own list; it never decides compliance.
+if [ -z "$MIN_ACCEPTED_VERSION" ] && [ -n "$ACCEPTED_VERSIONS" ]; then
+    MIN_ACCEPTED_VERSION=$(echo "$ACCEPTED_VERSIONS" | tr ' ' '\n' \
+        | grep -v '^$' | sort -V | head -1)
+fi
+if [ -z "$MIN_ACCEPTED_VERSION" ]; then
+    MIN_ACCEPTED_VERSION="v9.26.2"
 fi
 
 # Runtime flag
@@ -636,7 +699,7 @@ case "$ACTION_FLAG" in
         txn_id="testmention_$(date +%s)"
         mention_array=$(echo "$test_handle" | jq -R . | jq -s .)
         payload=$(jq -n \
-            --arg body "🟢 Bot account test, please ignore | ${test_handle} testing 12hr Oracle Monitor Bot @ mention feature!" \
+            --arg body "🟢 Bot account test, please ignore | ${test_handle} testing Oracle Monitor Bot @ mention feature!" \
             --argjson mentions "$mention_array" \
             '{msgtype: "m.text", body: $body, "m.mentions": {user_ids: $mentions}}')
         response=$(curl -s -w "\n%{http_code}" -X PUT \
@@ -1175,7 +1238,7 @@ fi
 #   3. ENDGAME mode:  Same trigger conditions as STANDBY, but from the
 #                     hourly --endgame-only cron. Post only when inside the
 #                     24h band; silent exit otherwise. STANDBY (from the
-#                     regular 12hr cron) always posts to keep operators
+#                     regular daily cron) always posts to keep operators
 #                     informed regardless of band.
 #   4. FULL mode:     Testnet always (DD active since block 600), or
 #                     mainnet after DD activation. Regular network status
@@ -1255,12 +1318,12 @@ if [ "$DD_IS_ACTIVE" != true ] && [ "$CHAIN_NAME" = "main" ]; then
             exit 0
         fi
     else
-        # v1.6.3: in-band duplicate suppression for the 12hr standby pass.
+        # v1.6.3: in-band duplicate suppression for the daily standby pass.
         # Inside the final 24h the hourly endgame ticker (:15) already posts
-        # a countdown; the 12hr standby (:10) landing 55 minutes later was a
+        # a countdown; the daily standby (:10) landing 55 minutes later was a
         # near-duplicate. Skip when the marker is younger than the window.
         # A marker older than the window (ticker broken/stalled) lets the
-        # 12hr standby post as backup. Applies in dry-run too so dry-run
+        # daily standby post as backup. Applies in dry-run too so dry-run
         # output matches what a real pass would do.
         if [ "$SECS_REMAINING" -gt 0 ] && [ "$SECS_REMAINING" -lt 86400 ] && [ -f "$ENDGAME_LAST_POST_FILE" ]; then
             LAST_POST_TS=$(cat "$ENDGAME_LAST_POST_FILE" 2>/dev/null)
@@ -1276,7 +1339,7 @@ if [ "$DD_IS_ACTIVE" != true ] && [ "$CHAIN_NAME" = "main" ]; then
 
     STANDBY_MESSAGE=$(build_standby_message)
     # v1.6.3: dedup marker written only when the post actually landed
-    # (was unconditional). Written by both the 12hr standby and the hourly
+    # (was unconditional). Written by both the daily standby and the hourly
     # endgame ticker, since both flow through this shared post path.
     if post_to_gitter "$STANDBY_MESSAGE" "" ""; then
         if [ "$DRY_RUN" != true ]; then
@@ -1290,7 +1353,7 @@ fi
 # (Endgame ticker is a mainnet-pre-activation feature. Testnet DD is active
 # since block 600, so there's nothing to count down to. Already-active mainnet
 # has already fired birth above and continues to full-status mode via the
-# regular 12hr cron path, not the hourly endgame cron.)
+# regular daily cron path, not the hourly endgame cron.)
 if [ "$ENDGAME_ONLY" = true ]; then
     [ "$DRY_RUN" = true ] && echo "[endgame-only] Not applicable this run (chain=$CHAIN_NAME, dd_active=$DD_IS_ACTIVE). Silent exit."
     exit 0
@@ -1356,9 +1419,14 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # --- Phase 2d. getdigidollarstats — DD economy totals (v1.6.4) ---
-# Node-level RPC (since v9.26.2), no digidollarstatsindex required: the
-# index only serves historical per-height queries; current totals come
-# from a UTXO-set scan inside the RPC. Fine at 12h cadence.
+# Node-level RPC (since v9.26.2), no digidollarstatsindex required.
+# MEASURED 2026-07-26 on mainnet at block 23,917,448 with 129 open
+# positions: 11 ms per call, roughly 1 to 2 debug.log lines with
+# debug=digidollar,net enabled, and getindexinfo showing only txindex
+# while the call still returned correct totals. An earlier comment here
+# claimed a UTXO-set scan and called it acceptable only at a 12h cadence;
+# both claims were wrong and one of them steered a design decision. The
+# call is cheap enough that cadence is not a consideration.
 # Silent-degrade by design: if the RPC is missing, errors, or the field
 # map below doesn't match, DD_ECON_OK stays false and the economy line
 # is simply omitted from the card. Never blocks the post.
@@ -1518,22 +1586,25 @@ fi
 if [ -f "$MENTION_STATE_FILE" ] && [ "$DRY_RUN" != true ]; then
     while read -r ok_id; do
         reset_mention_count "u${ok_id}"
-    done < <(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+    done < <(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION" '
       def canonical:
         if . == null or . == "" then ""
         else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
         end;
-      def is_compliant($ok):
+      def vnum: [scan("[0-9]+") | tonumber];
+      def compliance($m):
         . as $sv |
-        if $sv == null or $sv == "" then false
+        if $sv == null or $sv == "" then "unknown"
         else
-          ($ok | split(" ")) as $list |
           ($sv | canonical) as $c |
-          any($list[]; . == $c)
+          if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+          elif ($c | vnum) >= ($m | vnum) then "compliant"
+          else "outdated"
+          end
         end;
       .[] |
       select(.heartbeat_status == "fresh") |
-      select(.software_version | is_compliant($accepted)) |
+      select((.software_version | compliance($min)) == "compliant") |
       .oracle_id')
 fi
 
@@ -1572,11 +1643,15 @@ fi
 #
 # Groups all oracles by canonical display version (rc46 hash variants
 # collapse to one line), counts total operators per group (matches the
-# DigiByte Stats dashboard exactly), sorts descending by count.
+# DigiByte Stats dashboard exactly). Three-tier sort, ascending by version
+# within each tier (v1.7.1).
 #
-# Compliance is determined by the ACCEPTED_VERSIONS config list using a
-# startswith() rule so "v9.26.4-g5bcd3a8" matches "v9.26.4".
-# Compliant: ✅  Non-compliant (pre-release / unknown): ⚠️
+# Compliance (v1.8.0) is a numeric comparison against MIN_ACCEPTED_VERSION,
+# not a list membership test: anything at or above the floor passes, so
+# "v9.26.4-g5bcd3a8" canonicalises to "v9.26.4" and clears a "v9.26.2"
+# floor. rc/pre builds never pass. An absent version is UNKNOWN and is
+# displayed without ever triggering a nudge.
+# Compliant: ✅  Outdated / pre-release / unknown: ⚠️
 #
 # Display canonicalization:
 #   v9.26.4                        -> v9.26.4
@@ -1586,21 +1661,32 @@ fi
 #   v9.26.1-pre2-g47fa47f9128c...  -> v9.26.1-pre2 (pre-release)       (pre + hash)
 #   null / ""                      -> No version reported
 
-SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION" '
   # Strip -g<hash> and long bare -<hash> suffixes for a canonical form.
   def canonical:
     if . == null or . == "" then ""
     else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
     end;
 
-  # Compliance: canonical form must exactly match one of the accepted list.
-  def is_compliant($ok):
+  # v1.8.0 numeric version key. scan() never sees a leading "v", so
+  # "v9.26.5" and "9.26.5" both become [9,26,5] and the prefix cannot
+  # cause a mismatch. Array compare is numeric, so v9.26.10 > v9.26.9.
+  def vnum: [scan("[0-9]+") | tonumber];
+
+  # v1.8.0 compliance, three-valued. Replaces the exact-match whitelist:
+  #   "unknown"    absent/unreadable version. Displayed, NEVER nudged.
+  #   "prerelease" rc/pre build. Flagged regardless of its numbers.
+  #   "compliant"  at or above the floor.
+  #   "outdated"   below the floor.
+  def compliance($m):
     . as $sv |
-    if $sv == null or $sv == "" then false
+    if $sv == null or $sv == "" then "unknown"
     else
-      ($ok | split(" ")) as $list |
       ($sv | canonical) as $c |
-      any($list[]; . == $c)
+      if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+      elif ($c | vnum) >= ($m | vnum) then "compliant"
+      else "outdated"
+      end
     end;
 
   # Display label: adds "(pre-release)" tag for rc/pre versions; special
@@ -1635,7 +1721,7 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
   # it at the end keeps real version distribution visually clean.
   [.[] | {
     label: (.software_version | display_label),
-    compliant: (.software_version | is_compliant($accepted))
+    compliant: ((.software_version | compliance($min)) == "compliant")
   }] |
   group_by(.label) |
   map({
@@ -1660,7 +1746,7 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIO
 if [ -n "$SOFTWARE_SECTION" ]; then
     MESSAGE="${MESSAGE}
 
-Software (accepted: $(echo "$ACCEPTED_VERSIONS" | sed 's/ / \/ /g')):
+Software (minimum: ${MIN_ACCEPTED_VERSION}):
 ${SOFTWARE_SECTION}"
 fi
 
@@ -1668,7 +1754,8 @@ fi
 # v1.6: UPGRADE NUDGE SECTION (fresh + non-compliant, roster-handle-aware)
 # ============================================================================
 #
-# Lists FRESH oracles whose canonical version is NOT in ACCEPTED_VERSIONS.
+# Lists FRESH oracles whose canonical version is BELOW MIN_ACCEPTED_VERSION
+# (or is an rc/pre build). Unknown versions are excluded.
 # Reuses the existing MENTION_MAX cap and mention_state file to avoid
 # spamming operators. Stale/inactive operators are NOT included here (they
 # are already pinged in the Stale/Inactive sections; version-nudging them
@@ -1676,22 +1763,29 @@ fi
 
 if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
     # Extract fresh + non-compliant IDs, names, and canonical labels.
-    UPGRADE_ROWS=$(echo "$ORACLES_JSON" | jq -r --arg accepted "$ACCEPTED_VERSIONS" '
+    UPGRADE_ROWS=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION" '
       def canonical:
         if . == null or . == "" then ""
         else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
         end;
-      def is_compliant($ok):
+      def vnum: [scan("[0-9]+") | tonumber];
+      def compliance($m):
         . as $sv |
-        if $sv == null or $sv == "" then false
+        if $sv == null or $sv == "" then "unknown"
         else
-          ($ok | split(" ")) as $list |
           ($sv | canonical) as $c |
-          any($list[]; . == $c)
+          if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+          elif ($c | vnum) >= ($m | vnum) then "compliant"
+          else "outdated"
+          end
         end;
+      # v1.8.0: nudge fires on "outdated" and "prerelease" only. "unknown"
+      # is deliberately excluded, so an operator whose version the bot
+      # cannot read is never publicly told to upgrade.
       [.[] |
         select(.heartbeat_status == "fresh") |
-        select((.software_version | is_compliant($accepted)) | not) |
+        select((.software_version | compliance($min)) as $s
+               | $s == "outdated" or $s == "prerelease") |
         {oid: .oracle_id, name: .name, sv: (.software_version // "")}
       ] |
       .[] | "\(.oid)|\(.name // "unknown")|\(.sv)"
@@ -1736,7 +1830,7 @@ ${line}"
         if [ "$UPGRADE_COUNT" -gt 0 ]; then
             MESSAGE="${MESSAGE}
 
-📢 Please upgrade to $(echo "$ACCEPTED_VERSIONS" | tr ' ' '\n' | sort -V | tail -1) or newer:
+📢 Please upgrade to ${MIN_ACCEPTED_VERSION} or newer:
 ${UPGRADE_SECTION}"
         fi
     fi

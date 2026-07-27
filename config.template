@@ -362,14 +362,22 @@ MENTION_MAX=6
 # yellow triangle. Default rule (Bastian, Gitter 2026-07-11): any v9.26
 # release will do. Narrow per-network if guidance tightens post-activation.
 #
-# IMPORTANT — this is a fixed whitelist, not a comparison: a version NEWER
-# than every entry falls through as non-compliant exactly like an outdated
-# one, so an early adopter gets flagged and @-pinged to "upgrade" to
-# something older than what they are already running. Add each new release
-# here as it ships. (Hit live on 2026-07-21: the first operator running
-# v9.26.5 was about to be publicly nudged — and it was the author of that
-# very release.)
-# ACCEPTED_VERSIONS="v9.26.2 v9.26.3 v9.26.4 v9.26.5"
+# MIN_ACCEPTED_VERSION (v1.8.0) sets a FLOOR, not a list. Any oracle at or
+# above it is compliant, so a new DigiByte release needs no edit here.
+# Release candidates and pre-releases never pass, even when their numbers
+# sit above the floor. An oracle reporting no version is treated as
+# unknown: shown in the Software section, never @-mentioned.
+#
+# This replaced a fixed whitelist, where a version NEWER than every entry
+# fell through as non-compliant exactly like an outdated one, so an early
+# adopter got flagged and @-pinged to "upgrade" to something older than
+# what they were already running. (Hit live on 2026-07-21: the first
+# operator running v9.26.5 was about to be publicly nudged, and it was the
+# author of that very release.)
+#
+# Configs written for v1.7.x that still set ACCEPTED_VERSIONS keep working
+# unchanged: the lowest entry in that list becomes the floor.
+# MIN_ACCEPTED_VERSION="v9.26.2"
 
 # Upgrade nudge toggle. If false, non-compliant operators are still flagged
 # in the Software section but no @ pings fire. Some operators may want this
@@ -425,7 +433,7 @@ MENTION_MAX=6
 #   2-59/5 * * * *  /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
 #   0 1,13 * * *    /home/YOUR_USER/oracle-monitor.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --summary 2>/dev/null
 #   # (offset from the testnet bot's :05 so the two Gitter posts don't collide)
-#   10 */12 * * *   /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
+#   10 0 * * *      /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config 2>/dev/null
 #   # Hourly endgame countdown ticker (v1.6.2+, silent outside the final 24h):
 #   15 * * * *      /home/YOUR_USER/oracle-network-status.sh --config /home/YOUR_USER/.oracle-monitor-mainnet/config --endgame-only 2>/dev/null
 #
