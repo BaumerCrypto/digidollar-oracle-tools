@@ -76,6 +76,8 @@ Windows needs no dependencies at all (PowerShell parses JSON natively; .NET's bu
 
 ### What it checks (every 5 minutes by default)
 
+Two of the items below (service status, version drift) are gathered for the 12-hour health summary rather than alerted on the 5-minute pass; everything else runs every pass.
+
 - `digibyted` daemon process alive (auto-detects headless `digibyted` or Qt wallet `digibyte-qt`, configurable via `DAEMON_PROCESS` override)
 - Oracle is `running` in `listoracle`
 - Chain sync (`blocks` vs `headers` from `getblockchaininfo`, alerts when the node falls more than `MAX_CHAIN_BEHIND` blocks behind)
@@ -85,9 +87,9 @@ Windows needs no dependencies at all (PowerShell parses JSON natively; .NET's bu
 - Disk space, free, total, and used% (default min: 5GB free); the Low Disk alert names your `DATADIR` on its own line so you know exactly where to clean up (v2.5.5). **v2.7.0** adds a yellow warning band at `DISK_USED_PCT_WARN` (default 80% used) so you get a calm heads-up long before the red floor
 - **debug.log size + growth (v2.7.0, Check 13)**, tracks the daemon's `debug.log` size and MB/day, and names any enabled debug categories (via the `logging` RPC) right in the alert. Paired with safe auto-rotation (default ON) that bounds the file without losing history. Full detail in the [v2.7.0 section](#v270-the-disk-safety-release) below
 - Memory usage
-- **Swap pressure**, alerts when swap usage exceeds threshold (default 100 MB). On a properly tuned box with `swappiness=10`, any meaningful swap usage signals real memory pressure before things get critical (v2.4)
-- `digibyted.service` and oracle process status via `listoracle` RPC, systemd unit check auto-skips with an INFO line when the Qt wallet is the running daemon (Qt operators typically run outside systemd)
-- Binary version drift detection via RPC (`getnetworkinfo` → `.subversion`), works identically for Qt and headless (v2.5)
+- **Swap pressure**, alerts when swap usage exceeds the threshold (default 100 MB) AND current memory pressure is real: Linux PSI or RAM headroom must corroborate (v2.6.2). A stale fill left over from a past reindex shows as an ℹ️ info line instead of a warning
+- `digibyted.service` and oracle process status via `listoracle` RPC (reported in the 12-hour health summary; the 5-minute pass already catches a dead daemon via the process check). Systemd unit check auto-skips with an INFO line when the Qt wallet is the running daemon (Qt operators typically run outside systemd)
+- Binary version drift detection via RPC (`getnetworkinfo` → `.subversion`), reported in the 12-hour health summary; works identically for Qt and headless (v2.5)
 - NTP time synchronization
 - **Quorum margin tracking**, counts online oracles via `getoracles true` using `heartbeat_status` (stable across MuSig2 round transitions, matches dashboard's "Online Heartbeats" metric), compares against on-chain quorum threshold from `getdigidollardeploymentinfo`, reports MuSig2 session health. Anti-flap: cooldown timer throttles recovery alerts during volatile periods, hysteresis buffer prevents oscillation at band boundaries
 
@@ -450,10 +452,10 @@ Same disk, same numbers, but each card tells you which daemon fired (`NETWORK_LA
 
 | Active oracles | Status | Escalation alert | Recovery alert |
 |----------------|--------|------------------|----------------|
-| 🟢 12+ | Comfortable |, | `✅ Quorum Healthy` |
-| 🟡 10–11 | Getting thin | `⚠️ Quorum Getting Thin` | `✅ Quorum Improved — Getting Thin → Healthy` |
-| 🔴 7–9 | At quorum edge | `🚨 Quorum at Edge` | `✅ Quorum Improved — At Edge → Getting Thin` |
-| 💀 Below 7 | DD signing halted | `🚨 QUORUM LOST` | `✅ Quorum Recovered — LOST → At Edge` |
+| 🟢 12+ | Comfortable | *(none)* | `✅ Quorum Healthy` |
+| 🟡 10–11 | Getting thin | `⚠️  Quorum Getting Thin` | `✅ Quorum Margin Improving` |
+| 🔴 7–9 | At quorum edge | `🔴 Quorum At Edge` | `✅ Quorum Recovering` |
+| 💀 Below 7 | DD signing halted | `💀 QUORUM LOST` | *(recovery always lands in a better band, see the rows above)* |
 
 **Escalation** (count drops into a worse band) always fires immediately. **Recovery** (count rises into a better band) is throttled by `QUORUM_COOLDOWN` and requires the count to exceed the threshold by `QUORUM_HYSTERESIS` oracles. This prevents a single oracle bouncing around a boundary from generating a stream of alerts.
 
