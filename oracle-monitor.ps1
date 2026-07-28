@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.10.1-win.1
+# Version: 2.10.1-win.2
 #
 # Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -51,6 +51,12 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.10.1-win.2 — Check-Chain now guards .blocks and .headers before the
+#          [long] casts: a degenerate getblockchaininfo response becomes a
+#          "Chain: could not parse height data" warning line instead of a
+#          silent behind=0 that reads as in-sync. Closes the parity gap the
+#          v2.10.1-win.1 entry declared ("no Windows counterpart yet");
+#          all three platforms are logic-identical again.
 #   v2.10.1-win.1 — Version-parity release with Linux v2.10.1. No
 #          functional change on Windows: the truncate result is already
 #          checked (the .NET SetLength path sets a $truncated latch and
@@ -421,7 +427,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.10.1-win.1"
+$SCRIPT_VERSION = "2.10.1-win.2"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -1271,8 +1277,22 @@ function Check-Chain {
         return
     }
 
-    $blocks  = [long]$info.blocks
-    $headers = [long]$info.headers
+    # v2.10.1-win.2: guard the height fields before the [long] casts. A
+    # degenerate response with missing or non-numeric blocks/headers becomes
+    # a warning line instead of a silent behind=0 that reads as in-sync.
+    # Mirrors the Linux v2.10.1 check_chain guard, including the early
+    # return: Test-LabelVsChain is skipped for the pass, so the #43 latch
+    # neither sets nor clears until the next good pass.
+    $blocksRaw  = "$($info.blocks)"
+    $headersRaw = "$($info.headers)"
+    if ($blocksRaw -notmatch '^\d+$' -or $headersRaw -notmatch '^\d+$') {
+        $script:Details.Add("⚠️  Chain: could not parse height data")
+        $script:Warnings++
+        return
+    }
+
+    $blocks  = [long]$blocksRaw
+    $headers = [long]$headersRaw
     $chain   = "unknown"
     if ($null -ne $info.PSObject.Properties['chain']) { $chain = $info.chain }
 
