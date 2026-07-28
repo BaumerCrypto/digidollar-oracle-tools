@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.10.0-win.1
+# Version: 2.10.1-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -51,6 +51,15 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.10.1-win.1 — Version-parity release with Linux v2.10.1. No
+#          functional change on Windows: the truncate result is already
+#          checked (the .NET SetLength path sets a $truncated latch and
+#          fires its own rotation-stalled card), .NET already supplies
+#          the Date and Message-ID email headers, Check-Memory already
+#          guards its query, and Check 8 and Check 9 already carry the
+#          "summary only" label. The Linux check_chain numeric guard has
+#          no Windows counterpart yet: Check-Chain still casts .blocks
+#          and .headers with [long] and is unchanged in this release.
 #   v2.10.0-win.1 — Parity with Linux v2.10.0. Chain-vs-label mismatch
 #          warning (#43), an SPDX header line, and one corrected
 #          instruction.
@@ -412,7 +421,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.10.0-win.1"
+$SCRIPT_VERSION = "2.10.1-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).

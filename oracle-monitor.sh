@@ -1,14 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.10.0
+# Version: 2.10.1
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
 # SPDX-License-Identifier: MIT
-readonly SCRIPT_VERSION="2.10.0"
+readonly SCRIPT_VERSION="2.10.1"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -36,6 +36,16 @@ readonly SCRIPT_VERSION="2.10.0"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.10.1 — Hardening polish, no new features. (1) rotate_debuglog now
+#          verifies the truncate step: if the safety copy landed but the
+#          live file could not be truncated, a red "Rotation Incomplete"
+#          card fires instead of a silent success. (2) check_memory and
+#          check_chain gained numeric guards so a degenerate free/RPC
+#          response becomes a warning line, not a bash arithmetic error.
+#          (3) Emails now carry Date and Message-ID headers (RFC 5322
+#          hygiene). (4) Comment parity with the ports: Check 8 and
+#          Check 9 headers marked "(summary only)", STALE_PRICE_MINUTES
+#          marked reserved.
 #   v2.10.0 — Chain-vs-label mismatch warning (#43), plus an SPDX header
 #          line and one corrected instruction.
 #          (1) MISMATCH WARNING (#43). NETWORK_LABEL is free text that the
@@ -541,7 +551,7 @@ WALLET_FLAG="-rpcwallet=oracle"
 # Thresholds — basic health
 MIN_PEERS=3
 MIN_DISK_GB=5
-STALE_PRICE_MINUTES=30
+STALE_PRICE_MINUTES=30  # Reserved for future use — staleness currently from RPC
 MEM_THRESHOLD=90
 SWAP_THRESHOLD_MB=100
 # v2.6.2 — Swap "pressure" is only real when RAM is actually tight. A
@@ -922,7 +932,8 @@ $(build_footer)"
     local tmpfile
     tmpfile=$(mktemp /tmp/oracle-alert-XXXXXX.eml 2>/dev/null) || return 1
 
-    printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n' \
+    printf 'Date: %s\r\nMessage-ID: <om.%s.%s@%s>\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n' \
+        "$(LC_ALL=C date '+%a, %d %b %Y %H:%M:%S %z')" "$(date +%s)" "$$" "${from_addr#*@}" \
         "$from_display" "$EMAIL_TO" "$subject" "$full_body" > "$tmpfile"
 
     local curl_opts=(
@@ -1150,6 +1161,12 @@ check_chain() {
     blocks=$(echo "$chain_info" | jq -r '.blocks' 2>/dev/null)
     headers=$(echo "$chain_info" | jq -r '.headers' 2>/dev/null)
     chain=$(echo "$chain_info" | jq -r '.chain // "unknown"' 2>/dev/null)
+
+    if ! [[ "$blocks" =~ ^[0-9]+$ ]] || ! [[ "$headers" =~ ^[0-9]+$ ]]; then
+        DETAILS+="⚠️  Chain: could not parse height data\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
 
     local behind=$((headers - blocks))
 
@@ -1622,7 +1639,12 @@ rotate_debuglog() {
         fi
         return 1
     fi
-    truncate -s 0 "$log_path" 2>/dev/null
+    if ! truncate -s 0 "$log_path" 2>/dev/null; then
+        if should_alert "debuglog_rotate_blocked"; then
+            alert_red "🔴 debug.log Rotation Incomplete" "The safety copy landed at ${log_path}.1 but the live file could not be truncated, so both copies are now on disk. Check permissions and attributes on ${log_path}."
+        fi
+        return 1
+    fi
 
     clear_alert "debuglog_rotate_blocked" > /dev/null 2>&1
     clear_alert "debuglog_large" > /dev/null 2>&1
@@ -1660,6 +1682,12 @@ maybe_check_price() {
 check_memory() {
     local mem_pct
     mem_pct=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+
+    if ! [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
+        DETAILS+="⚠️  Memory: could not query\n"
+        WARNINGS=$((WARNINGS + 1))
+        return
+    fi
 
     if [ "$mem_pct" -gt "$MEM_THRESHOLD" ]; then
         if should_alert "high_memory"; then
@@ -1762,7 +1790,7 @@ check_swap() {
     fi
 }
 
-# --- Check 8: Systemd service status ---
+# --- Check 8: Systemd service status (summary only) ---
 # v2.5: Reads SERVICE_NAME config var (defaults to digibyted.service).
 #       Adds DD_ACTIVE guard for oracle process (standby → INFO not warn).
 # v2.5.2: Skips systemd unit check with INFO line when the Qt wallet is
@@ -1812,7 +1840,7 @@ check_services() {
     fi
 }
 
-# --- Check 9: Node version (+ latest-release comparison, v2.6.3) ---
+# --- Check 9: Node version (summary only; + latest-release comparison, v2.6.3) ---
 # v2.5: Read version via RPC (getnetworkinfo → .subversion) instead of
 # `digibyted --version`. The old approach pulled whichever `digibyted`
 # lived in $PATH, which read the wrong binary in dual-daemon setups.

@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor-macos.sh — DGB Oracle Health Monitor with Discord + Email Alerts (macOS)
-# Version: 2.10.0-macos.1
+# Version: 2.10.1-macos.1
 #
 # macOS port of my oracle-monitor.sh (Linux). Same checks, same quorum
 # state machine, same anti-flap logic, same DigiDollar BIP9 pre-activation
@@ -12,7 +12,7 @@
 #
 # Author: digibyte-maxi (Oracle ID 17) | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 — July 2026
 # SPDX-License-Identifier: MIT
-readonly SCRIPT_VERSION="2.10.0-macos.1"
+readonly SCRIPT_VERSION="2.10.1-macos.1"
 #
 # SETUP:
 #   1. Copy this script to your Mac: ~/oracle-monitor-macos.sh
@@ -56,6 +56,11 @@ readonly SCRIPT_VERSION="2.10.0-macos.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.10.1-macos.1 — Parity with Linux v2.10.1: rotate_debuglog now
+#          verifies the truncate step (red "Rotation Incomplete" card when
+#          the live file could not be emptied after the safety copy), and
+#          emails carry Date and Message-ID headers. The numeric guards
+#          from the Linux release were already present in this port.
 #   v2.10.0-macos.1 — Chain-vs-label mismatch warning (#43), plus an SPDX
 #          header line and one corrected instruction. Port of Linux
 #          v2.10.0; check_label_vs_chain is byte-identical to the Linux
@@ -904,7 +909,8 @@ $(build_footer)"
     local tmpfile
     tmpfile=$(mktemp -t oracle-alert 2>/dev/null) || return 1
 
-    printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n' \
+    printf 'Date: %s\r\nMessage-ID: <om.%s.%s@%s>\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n' \
+        "$(LC_ALL=C date '+%a, %d %b %Y %H:%M:%S %z')" "$(date +%s)" "$$" "${from_addr#*@}" \
         "$from_display" "$EMAIL_TO" "$subject" "$full_body" > "$tmpfile"
 
     # curl on macOS supports the same options as Linux curl for SMTP.
@@ -1584,7 +1590,12 @@ rotate_debuglog() {
         fi
         return 1
     fi
-    : > "$log_path"
+    if ! { : > "$log_path"; } 2>/dev/null; then
+        if should_alert "debuglog_rotate_blocked"; then
+            alert_red "🔴 debug.log Rotation Incomplete" "The safety copy landed at ${log_path}.1 but the live file could not be truncated, so both copies are now on disk. Check permissions and attributes on ${log_path}."
+        fi
+        return 1
+    fi
 
     clear_alert "debuglog_rotate_blocked" > /dev/null 2>&1
     clear_alert "debuglog_large" > /dev/null 2>&1
