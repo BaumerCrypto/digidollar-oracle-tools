@@ -105,6 +105,15 @@ NETWORK_EMOJI=""
 ORACLE_ID=0
 ORACLE_NAME="my-oracle"
 
+# ---- Gitter post footer (oracle-network-status.sh v1.8.2+) ----
+# One attribution line appended to every post the bot makes, so readers
+# know who runs it without asking in channel. Leave this commented out and
+# it is generated from ORACLE_NAME and ORACLE_ID above, but only once you
+# have changed ORACLE_NAME from the "my-oracle" default, so an unconfigured
+# install never posts a placeholder name to a public room.
+# Set it to a string of your own to override, or to "" to post anonymously.
+# POST_FOOTER="Oracle Network Monitor, run by my-oracle (oracle 0)."
+
 # ---- RPC Settings ----
 # Single-chain box:
 #   Testnet:  CLI="digibyte-cli -testnet"
@@ -440,3 +449,19 @@ MENTION_MAX=6
 # Override these if your roster or state files live somewhere else:
 # ROSTER_FILE="${HOME}/.oracle-monitor/oracle-roster.conf"
 # MENTION_STATE_FILE="${HOME}/.oracle-monitor/mention_state"
+#
+# Running the bot on ONE chain only? Point ROSTER_FILE at that instance's
+# own directory rather than sharing one file between instances. Operator
+# assignments are per chain: a slot can be held by different people on
+# mainnet and testnet, and a shared roster will ping the wrong one.
+#
+# ---- Roster file format (v1.8.2+) ----
+#   ID|@handle:server                  ping only, name comes from the daemon
+#   ID|@handle:server|Display Name     ping plus a display-name override
+#
+# The optional third field replaces the name getoracles reports for that
+# slot, in the operator rows and in the HTML mention pill. Useful when the
+# daemon's name for a slot does not match who actually holds it: those
+# names come from a single slot-indexed list in the client that is not
+# chain-aware, so a mainnet node can report testnet operator names. Leave
+# the field off, or empty, to keep whatever the daemon says.

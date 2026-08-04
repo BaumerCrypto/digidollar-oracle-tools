@@ -1,13 +1,34 @@
 # oracle-roster.template — Oracle ID to Gitter Matrix ID mapping
 #
-# Copy this to ~/.oracle-monitor/oracle-roster.conf and fill in real handles.
-# Used by oracle-network-status.sh v1.3+ for @ mention notifications.
+# Copy this into your instance's config directory as oracle-roster.conf and
+# fill in real handles. Used by oracle-network-status.sh v1.3+ for @ mention
+# notifications.
 #
-# Format: ID|@matrix_handle:server
+# Format: ID|@matrix_handle:server[|Display Name]
 #   - One entry per line
 #   - Lines starting with # are comments
 #   - Gitter users: @username:gitter.im
 #   - Matrix users: @username:matrix.org
+#   - Third field is optional (v1.8.2+), see below
+#
+# Display-name override (v1.8.2+):
+# The optional third field replaces the operator name the daemon reports for
+# that slot, both in the operator rows and in the HTML mention pill, so the
+# name and the ping agree. Leave the field off, or empty, to keep whatever
+# getoracles returns.
+#
+# You need this when the reported name is not the operator holding the slot.
+# Those names come from a single slot-indexed list in the client that is not
+# chain-aware, so a mainnet node can report testnet operator names wherever
+# the two rosters assign a slot to different people.
+#
+# One roster per instance:
+# Do NOT share one roster file between a mainnet and a testnet instance, and
+# do not symlink them together. Slot assignments are per chain, so the same
+# slot number can belong to different operators on each, and a shared file
+# will ping the wrong one. Give each instance its own copy and set
+# ROSTER_FILE in that instance's config, since the script's built-in default
+# points at ~/.oracle-monitor/ regardless of which config was loaded.
 #
 # Dual-slot operators: if one person runs multiple oracles (e.g. slots 0+28),
 # list the SAME handle for both. The script deduplicates — they'll only get
@@ -21,4 +42,5 @@
 # Example:
 # 0|@jared:gitter.im
 # 4|@shenger:gitter.im
+# 11|@someoperator:gitter.im|Some Operator
 # 17|@digibyte-maxi:gitter.im

@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.8.1
+# Version: 1.8.2
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel once per day. Community-facing — reports network-wide status,
@@ -27,7 +27,8 @@
 #      MATRIX_ACCESS_TOKEN="your_token_here"
 #      MATRIX_ROOM_ID="!your_room_id:gitter.im"
 #   6. For @ mentions: populate ~/.oracle-monitor/oracle-roster.conf
-#      (see oracle-roster.template in the repo for format)
+#      (see oracle-roster.template in the repo for format). The optional
+#      third field overrides the operator name the daemon reports.
 #   7. Test:  ./oracle-network-status.sh --dry-run
 #   8. Test:  ./oracle-network-status.sh --test
 #   9. Test:  ./oracle-network-status.sh --test-mention
@@ -69,7 +70,8 @@
 #
 # FILES:
 #   ~/.oracle-monitor/config             — shared config (CLI, webhook, Matrix token)
-#   ~/.oracle-monitor/oracle-roster.conf — oracle ID to Gitter handle mapping (VPS only)
+#   ~/.oracle-monitor/oracle-roster.conf — oracle ID to Gitter handle mapping, with
+#                                          optional display-name override (VPS only)
 #   ~/.oracle-monitor/mention_state      — ping count tracking per oracle
 #   ~/.oracle-monitor/activation_state   — v1.6, one-shot dedup for DD mainnet birth
 #   ~/.oracle-monitor/endgame_last_post  — v1.6.3, in-band dedup marker (written
@@ -77,6 +79,24 @@
 #                                          read by the daily standby pass)
 #
 # CHANGELOG:
+#   v1.8.2 — Two additions, both prompted by a Gitter thread on 2026-08-04
+#          where an operator asked who runs this bot and flagged that the
+#          name printed for a slot was not the operator holding it.
+#          (1) Optional display-name override as a third roster field
+#          (ID|@handle:server|Display Name). getoracles takes its names
+#          from OracleDisplayNames() in src/rpc/digidollar.cpp, a single
+#          slot-indexed list with no chain parameter, so a mainnet node
+#          reports testnet operator names. Where mainnet and testnet
+#          rosters differ, the post named one operator and pinged
+#          another. The override fixes the printed name without waiting
+#          on an upstream release. Absent or empty third field keeps the
+#          daemon's name, so existing rosters are unaffected.
+#          (2) Attribution footer on every post (POST_FOOTER), applied
+#          inside post_to_gitter so status, standby, birth announcement
+#          and both RPC-failure notices all carry it. Auto-generated from
+#          ORACLE_NAME + ORACLE_ID when set, suppressed at the template
+#          default so an unconfigured install stays anonymous. Set
+#          POST_FOOTER="" in the config to disable.
 #   v1.8.1 — BUGFIX: the v1.7.x ACCEPTED_VERSIONS compatibility path was
 #          unreachable. The built-in MIN_ACCEPTED_VERSION default was
 #          assigned BEFORE the config is sourced, so after sourcing a
@@ -434,9 +454,11 @@ MATRIX_HOMESERVER="https://matrix.org"
 MATRIX_ACCESS_TOKEN=""
 MATRIX_ROOM_ID=""
 
-# Oracle identity — used by --test-mention to ping your own slot (v1.5).
-# Normally set in the shared config file (same key oracle-monitor.sh uses).
+# Oracle identity — used by --test-mention to ping your own slot (v1.5)
+# and by the v1.8.2 attribution footer. Normally set in the shared config
+# file (same keys oracle-monitor.sh uses).
 ORACLE_ID=0
+ORACLE_NAME=""
 
 # Quorum alert bands (same defaults as oracle-monitor.sh v2.5.1+):
 # 12/10 for mainnet (35-slot roster, 7-of-35 quorum). Override for
@@ -577,6 +599,21 @@ if [ -z "$MIN_ACCEPTED_VERSION" ]; then
     MIN_ACCEPTED_VERSION="v9.26.2"
 fi
 
+# --- v1.8.2: resolve the attribution footer ---------------------------------
+# Precedence:
+#   1. POST_FOOTER from the config, if set at all. Setting it to the empty
+#      string is a deliberate opt-out and is honoured.
+#   2. auto-generated from ORACLE_NAME and ORACLE_ID.
+#   3. nothing, when ORACLE_NAME is unset or still at the template default.
+# The template-default check keeps "my-oracle" out of a public channel.
+if [ -z "${POST_FOOTER+x}" ]; then
+    if [ -n "$ORACLE_NAME" ] && [ "$ORACLE_NAME" != "my-oracle" ]; then
+        POST_FOOTER="Oracle Network Monitor, run by ${ORACLE_NAME} (oracle ${ORACLE_ID})."
+    else
+        POST_FOOTER=""
+    fi
+fi
+
 # Runtime flag
 DRY_RUN=false
 
@@ -590,13 +627,38 @@ declare -a ALL_MENTION_NAMES=()
 declare -a MENTIONED_HANDLES=()
 
 # Look up Gitter Matrix ID for an oracle slot
-# Roster file format: ID|@handle:server (one per line, # comments)
+# Roster file format: ID|@handle:server[|Display Name] (one per line, # comments)
 get_gitter_handle() {
     local oracle_id="$1"
     if [ ! -f "$ROSTER_FILE" ]; then
         return
     fi
     grep -v '^#' "$ROSTER_FILE" | grep -v '^$' | grep "^${oracle_id}|" | head -1 | cut -d'|' -f2
+}
+
+# v1.8.2: optional display-name override, third roster field. Absent or
+# empty means "print whatever the daemon reported for that slot".
+get_roster_name() {
+    local oracle_id="$1"
+    if [ ! -f "$ROSTER_FILE" ]; then
+        return
+    fi
+    grep -v '^#' "$ROSTER_FILE" | grep -v '^$' | grep "^${oracle_id}|" | head -1 | cut -d'|' -f3
+}
+
+# v1.8.2: name to print for a slot. Roster override wins, otherwise the
+# name getoracles returned. Used for the operator rows and for the HTML
+# mention pill label, so both agree.
+resolve_display_name() {
+    local oracle_id="$1"
+    local node_name="$2"
+    local override
+    override=$(get_roster_name "$oracle_id")
+    if [ -n "$override" ]; then
+        printf '%s' "$override"
+    else
+        printf '%s' "$node_name"
+    fi
 }
 
 # Get current mention count for an oracle from state file
@@ -756,6 +818,20 @@ post_to_gitter() {
     local message="$1"
     local html_message="${2:-}"
     local mention_ids_csv="${3:-}"
+
+    # v1.8.2: attribution footer. Applied here rather than at each call
+    # site so every path carries it: full status, standby countdown, the
+    # one-shot birth announcement and both RPC-failure notices.
+    if [ -n "$POST_FOOTER" ]; then
+        message="${message}
+
+${POST_FOOTER}"
+        if [ -n "$html_message" ]; then
+            local footer_html
+            footer_html=$(printf '%s' "$POST_FOOTER" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+            html_message="${html_message}<br>${footer_html}"
+        fi
+    fi
 
     if [ "$DRY_RUN" = true ]; then
         echo ""
@@ -1831,6 +1907,7 @@ if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
             [ -z "$oid" ] && continue
             UPGRADE_COUNT=$((UPGRADE_COUNT + 1))
 
+            oname=$(resolve_display_name "$oid" "$oname")
             line="  — ID ${oid} ${oname}"
 
             # Roster handle + ping cap (mirrors stale-section pattern).
@@ -1876,6 +1953,7 @@ if [ "$STALE_COUNT" -gt 0 ]; then
     STALE_SECTION=""
 
     while IFS='|' read -r oid oname; do
+        oname=$(resolve_display_name "$oid" "$oname")
         line="  — ID ${oid} ${oname}"
 
         # Look up Gitter handle and apply mention logic
@@ -1917,6 +1995,7 @@ if [ "$INACTIVE_COUNT" -gt 0 ]; then
     INACTIVE_SECTION=""
 
     while IFS='|' read -r oid oname; do
+        oname=$(resolve_display_name "$oid" "$oname")
         line="  — ID ${oid} ${oname}"
 
         # Look up Gitter handle and apply mention logic
@@ -1998,6 +2077,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "Roster file: $ROSTER_FILE ($([ -f "$ROSTER_FILE" ] && echo "found" || echo "NOT FOUND — mentions disabled"))"
     echo "Mention state: $MENTION_STATE_FILE"
     echo "Mention max: $MENTION_MAX pings per outage"
+    echo "Footer: ${POST_FOOTER:-"(none)"}"
     if [ ${#ALL_MENTION_IDS[@]} -gt 0 ]; then
         echo "Would mention (${#ALL_MENTION_IDS[@]}): ${ALL_MENTION_IDS[*]}"
     else
