@@ -367,15 +367,24 @@ MENTION_MAX=6
 # Space-separated list of version strings considered compliant in the
 # Software section. Matching is against the canonical form (release git-hash
 # suffixes stripped), so "v9.26.4" also covers "v9.26.4-gABC123".
-# Compliant versions render with a green check, everything else with a
+# Compliant versions render with a green check, outdated ones with a
 # yellow triangle. Default rule (Bastian, Gitter 2026-07-11): any v9.26
 # release will do. Narrow per-network if guidance tightens post-activation.
 #
 # MIN_ACCEPTED_VERSION (v1.8.0) sets a FLOOR, not a list. Any oracle at or
 # above it is compliant, so a new DigiByte release needs no edit here.
-# Release candidates and pre-releases never pass, even when their numbers
-# sit above the floor. An oracle reporting no version is treated as
-# unknown: shown in the Software section, never @-mentioned.
+# Release candidates and pre-releases (v1.8.3): an rc/pre build at or
+# above the floor is a TESTING build. It gets its own test-tube line in
+# the Software section, is not counted as compliant, and is never nudged
+# or @-mentioned, because the operators running release candidates are
+# the developers and testers producing them. An rc/pre build below the
+# floor is obsolete and is flagged and nudged like any outdated version.
+# An oracle reporting no version is treated as unknown: shown in the
+# Software section, never @-mentioned.
+#
+# The upgrade nudge (v1.8.3) names the newest release version seen on the
+# network, never lower than this floor. The floor still decides who is
+# nudged; the version named is display only.
 #
 # This replaced a fixed whitelist, where a version NEWER than every entry
 # fell through as non-compliant exactly like an outdated one, so an early

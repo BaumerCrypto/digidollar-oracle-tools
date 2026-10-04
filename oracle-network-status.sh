@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.8.2
+# Version: 1.8.3
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel once per day. Community-facing — reports network-wide status,
@@ -79,6 +79,25 @@
 #                                          read by the daily standby pass)
 #
 # CHANGELOG:
+#   v1.8.3 — Release candidates at or above the floor are a TESTING tier,
+#          not a defect. v1.8.0 flagged every rc/pre build as non-compliant
+#          and listed its operator under the upgrade nudge. Right for
+#          v9.26.0rc46 and v9.26.1-pre2 (both below the floor), wrong for
+#          v9.26.6rc1/rc2: the operators running release candidates on
+#          the roster are the developers and testers who build them, and
+#          the v9.26.6 release notes state the final changes do not alter
+#          RC2's consensus rules, oracle requirements or Thaw Day heights.
+#          Listing them under "Please upgrade to v9.26.2 or newer" read as
+#          "you are older than v9.26.2" (Bastian 2026-09-28, mbah_jambon
+#          2026-10-03). Now: an rc/pre build whose numbers are at or above
+#          the floor is "testing", rendered on its own 🧪 line between the
+#          ✅ and ⚠️ tiers, never nudged, never @-mentioned, not counted as
+#          compliant. An rc/pre build BELOW the floor is unchanged: ⚠️ and
+#          nudged, because it is obsolete whatever its label says.
+#          Also: the nudge names the NEWEST release version seen on the
+#          network ("Please upgrade to v9.26.6 or newer") instead of the
+#          floor, falling back to the floor when no release is visible.
+#          The floor is unchanged and still decides who is nudged.
 #   v1.8.2 — Two additions, both prompted by a Gitter thread on 2026-08-04
 #          where an operator asked who runs this bot and flagged that the
 #          name printed for a slot was not the operator holding it.
@@ -485,9 +504,13 @@ NETWORK_LABEL=""
 # release builds carrying a git-hash suffix ("v9.26.4-gABC123") pass. A
 # leading "v" is optional on both sides.
 #
-# Release candidates and pre-releases are NEVER compliant regardless of
-# their numbers: "v9.26.6rc1" sits above "v9.26.2" numerically but is
-# still flagged, because rc/pre builds are not release software.
+# Release candidates and pre-releases (v1.8.3): an rc/pre build at or
+# above the floor is a TESTING build. It gets its own 🧪 line in the
+# Software section, is not counted as compliant, and is never nudged or
+# @-mentioned, because the operators running release candidates are the
+# developers and testers producing them. An rc/pre build BELOW the floor
+# ("v9.26.0rc46" against a "v9.26.2" floor) is obsolete and is flagged
+# and nudged like any other outdated version.
 #
 # An absent or unreadable version is UNKNOWN, not non-compliant. It is
 # shown in the Software section but never @-mentioned, because the bot
@@ -1705,7 +1728,8 @@ if [ -f "$MENTION_STATE_FILE" ] && [ "$DRY_RUN" != true ]; then
         if $sv == null or $sv == "" then "unknown"
         else
           ($sv | canonical) as $c |
-          if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+          if ($c | test("rc")) or ($c | test("pre")) then
+            (if ($c | vnum) >= ($m | vnum) then "testing" else "prerelease" end)
           elif ($c | vnum) >= ($m | vnum) then "compliant"
           else "outdated"
           end
@@ -1781,9 +1805,11 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION
   # cause a mismatch. Array compare is numeric, so v9.26.10 > v9.26.9.
   def vnum: [scan("[0-9]+") | tonumber];
 
-  # v1.8.0 compliance, three-valued. Replaces the exact-match whitelist:
+  # v1.8.0 compliance, five-valued since v1.8.3 (added "testing"):
   #   "unknown"    absent/unreadable version. Displayed, NEVER nudged.
-  #   "prerelease" rc/pre build. Flagged regardless of its numbers.
+  #   "testing"    rc/pre build AT OR ABOVE the floor. 🧪 line, NEVER
+  #                nudged, not counted as compliant (v1.8.3).
+  #   "prerelease" rc/pre build BELOW the floor. Flagged and nudged.
   #   "compliant"  at or above the floor.
   #   "outdated"   below the floor.
   def compliance($m):
@@ -1791,7 +1817,8 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION
     if $sv == null or $sv == "" then "unknown"
     else
       ($sv | canonical) as $c |
-      if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+      if ($c | test("rc")) or ($c | test("pre")) then
+        (if ($c | vnum) >= ($m | vnum) then "testing" else "prerelease" end)
       elif ($c | vnum) >= ($m | vnum) then "compliant"
       else "outdated"
       end
@@ -1827,25 +1854,31 @@ SOFTWARE_SECTION=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION
   # middle, unreported at the bottom. The unreported bucket inflates
   # on unhealthy networks (any inactive node lands there) so pinning
   # it at the end keeps real version distribution visually clean.
+  # v1.8.3: four tiers. 0 = compliant ✅, 1 = testing 🧪 (rc/pre at or
+  # above the floor), 2 = everything flagged ⚠️, 3 = "No version
+  # reported" pinned last. The icon follows the same state.
   [.[] | {
     label: (.software_version | display_label),
-    compliant: ((.software_version | compliance($min)) == "compliant")
+    state: (.software_version | compliance($min))
   }] |
   group_by(.label) |
   map({
     label: .[0].label,
     count: length,
-    compliant: .[0].compliant
+    state: .[0].state
   }) |
   sort_by(
-    (if .compliant then 0
-     elif .label == "No version reported" then 2
-     else 1
+    (if .state == "compliant" then 0
+     elif .state == "testing" then 1
+     elif .label == "No version reported" then 3
+     else 2
      end),
     (.label | [scan("[0-9]+") | tonumber])
   ) |
   .[] |
-  (if .compliant then "  ✅ " else "  ⚠️ " end) +
+  (if .state == "compliant" then "  ✅ "
+   elif .state == "testing" then "  🧪 "
+   else "  ⚠️ " end) +
   .label +
   ": " + (.count | tostring) +
   " operator" + (if .count == 1 then "" else "s" end)
@@ -1870,6 +1903,24 @@ fi
 # on top would double-ping the same problem).
 
 if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
+    # v1.8.3: the nudge names the newest RELEASE version any oracle on the
+    # network reports (rc/pre excluded), so laggards are pointed at what is
+    # actually current rather than at the floor. The floor itself is in
+    # the candidate list, so the target can never drop below it (a network
+    # whose newest visible release is older than the floor still gets the
+    # floor). Display only: the floor still decides who is nudged.
+    UPGRADE_TARGET=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION" '
+      def canonical:
+        if . == null or . == "" then ""
+        else sub("-g[0-9a-f]+.*$"; "") | sub("-[0-9a-f]{8,}$"; "")
+        end;
+      ([.[] | .software_version | canonical |
+        select(. != "" and (test("rc") | not) and (test("pre") | not))]
+       + [$min]) |
+      sort_by([scan("[0-9]+") | tonumber]) | last
+    ')
+    [ -z "$UPGRADE_TARGET" ] && UPGRADE_TARGET="$MIN_ACCEPTED_VERSION"
+
     # Extract fresh + non-compliant IDs, names, and canonical labels.
     UPGRADE_ROWS=$(echo "$ORACLES_JSON" | jq -r --arg min "$MIN_ACCEPTED_VERSION" '
       def canonical:
@@ -1882,14 +1933,17 @@ if [ "$VERSION_NUDGE_ENABLED" = "true" ]; then
         if $sv == null or $sv == "" then "unknown"
         else
           ($sv | canonical) as $c |
-          if ($c | test("rc")) or ($c | test("pre")) then "prerelease"
+          if ($c | test("rc")) or ($c | test("pre")) then
+            (if ($c | vnum) >= ($m | vnum) then "testing" else "prerelease" end)
           elif ($c | vnum) >= ($m | vnum) then "compliant"
           else "outdated"
           end
         end;
       # v1.8.0: nudge fires on "outdated" and "prerelease" only. "unknown"
       # is deliberately excluded, so an operator whose version the bot
-      # cannot read is never publicly told to upgrade.
+      # cannot read is never publicly told to upgrade. v1.8.3: "testing"
+      # (rc/pre at or above the floor) is excluded too; it is a testing
+      # build, not a defect, and gets the 🧪 line instead.
       [.[] |
         select(.heartbeat_status == "fresh") |
         select((.software_version | compliance($min)) as $s
@@ -1939,7 +1993,7 @@ ${line}"
         if [ "$UPGRADE_COUNT" -gt 0 ]; then
             MESSAGE="${MESSAGE}
 
-📢 Please upgrade to ${MIN_ACCEPTED_VERSION} or newer:
+📢 Please upgrade to ${UPGRADE_TARGET} or newer:
 ${UPGRADE_SECTION}"
         fi
     fi
