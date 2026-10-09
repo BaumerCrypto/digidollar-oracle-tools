@@ -275,7 +275,7 @@ _The transition image is older than the rest, a fresh capture needs an organic q
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS), for Windows and macOS, see [Platform support](#platform-support) above
-- DigiByte Core **v9.26.5** (also compatible with v9.26.2/v9.26.3/v9.26.4 and RC44–RC46, uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles`, and `logging` RPCs)
+- DigiByte Core **v9.26.7** (also compatible with v9.26.2 through v9.26.6 and RC44–RC46, uses `listoracle`, `getoracleprice`, `getdigidollardeploymentinfo`, `getoracles`, and `logging` RPCs)
 - `jq` (for JSON parsing, install with `sudo apt install jq`)
 - `curl` with SMTP support (stock Ubuntu ships this, verify with `curl --version | grep smtp`)
 - A Discord webhook URL, create one at: *Server Settings → Integrations → Webhooks → New Webhook*
@@ -471,7 +471,7 @@ With `QUORUM_HYSTERESIS=0`, recovery fires at the exact threshold (v2.0 behavior
 
 ### RPC field reference
 
-Both scripts parse specific fields from DigiByte Core RPCs. If a future release renames a field, these scripts may need updates. Known field names as of v9.26.5:
+Both scripts parse specific fields from DigiByte Core RPCs. If a future release renames a field, these scripts may need updates. Known field names as of v9.26.7:
 
 | RPC | Field used |
 |-----|-----------|
@@ -619,7 +619,7 @@ v1.6.2 splits these into two phases: Phase 1 (`getblockchaininfo`, `getdeploymen
 ### Requirements
 
 - Linux (tested on Ubuntu 24.04 LTS)
-- DigiByte Core **v9.26.5** (also compatible with v9.26.2/v9.26.3/v9.26.4 and RC44–RC46)
+- DigiByte Core **v9.26.7** (also compatible with v9.26.2 through v9.26.6 and RC44–RC46)
 - `jq`, `curl`
 - A [Matrix](https://matrix.org) bot account joined to `#digidollar:gitter.im`
 
@@ -727,7 +727,7 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | Component | Version |
 |-----------|---------|
 | OS | Linux (Ubuntu 24.04 LTS), Windows 10/11 (PowerShell 5.1+), macOS (bash 3.2+) |
-| DigiByte Core | v9.26.5 (also compatible with v9.26.2, v9.26.3, v9.26.4, and RC44/RC45/RC46) |
+| DigiByte Core | v9.26.7 (also compatible with v9.26.2 through v9.26.6, and RC44/RC45/RC46) |
 | Chain | mainnet (DigiDollar active since block 23,869,440) + testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
 | oracle-monitor.sh | v2.10.1 |
