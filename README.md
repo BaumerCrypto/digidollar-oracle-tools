@@ -735,6 +735,8 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | oracle-monitor-macos.sh | v2.10.1-macos.1 |
 | oracle-network-status.sh | v1.8.3 |
 
+Compatibility here means the scripts parse these releases' RPC output. It is not a statement about which daemon can follow the chain: from Thaw Day (mainnet block 24,490,000, around 2026-11-01) mainnet nodes need v9.26.6 or newer.
+
 If you're running a different release and something breaks, please open an issue.
 
 ---
