@@ -13,8 +13,10 @@ I'll acknowledge your report within 48 hours and work with you on a fix before a
 
 This policy covers:
 
-- `oracle-monitor.sh` — health monitoring script
-- `ORACLE_HARDENING_GUIDE.md` — security hardening guide
+- The health monitor on every platform: `oracle-monitor.sh`, `oracle-monitor.ps1`, `oracle-monitor-macos.sh`
+- The Gitter network status bot: `oracle-network-status.sh`
+- The config and roster templates
+- Both hardening guides: `ORACLE_HARDENING_GUIDE.md` (VPS) and `HOME_ORACLE_HARDENING_GUIDE.md` (home)
 - Any other scripts or configuration examples in this repo
 
 This policy does **not** cover:
@@ -48,8 +50,8 @@ Before pushing, I run leak sweeps on anything destined for this repo:
 # Webhook leak sweep — must return ZERO:
 grep -nE 'discord\.com/api/webhooks/[0-9]' <file>
 
-# Personal-info sweep — must return ZERO:
-grep -inE 'sask|saskatchewan|baumg|kevin|<my_real_ip>' <file>
+# Personal-info sweep, with your own city, region, name and IP in the pattern. Must return ZERO:
+grep -inE '<your_city>|<your_region>|<your_name>|<your_real_ip>' <file>
 ```
 
 ## Supported Versions

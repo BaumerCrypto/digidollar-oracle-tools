@@ -265,7 +265,7 @@ To check what key type and size you're using:
 ssh-keygen -l -f ~/.ssh/authorized_keys
 ```
 
-Output looks like: `4096 SHA256:abc123... rsa-key-20260503 (RSA)` — the first number is your key size.
+Output looks like: `4096 SHA256:abc123... rsa-key-YYYYMMDD (RSA)` — the first number is your key size.
 
 ---
 
@@ -631,6 +631,8 @@ echo "" && \
 echo "=== UPTIME ===" && \
 uptime
 ```
+
+> **Running mainnet and testnet on the same box?** Bare `digibyte-cli` talks to whichever daemon its default config points at, and that can be testnet. In this block and in the Maintenance commands below, use the command that targets your mainnet node, for example `digibyte-cli -conf=$HOME/.digibyte/mainnet.conf listoracle`.
 
 **Expected results:**
 
@@ -1177,7 +1179,9 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.5.1
+Version: v1.5.2
+
+*v1.5.2 (2026-10-24): a note on using your mainnet CLI on boxes that run both chains, and a generic key comment in the Step 3 example.*
 
 *v1.5.1 (2026-10-24): the SSH key goes in before the password lock-down, login settings live in a `00-hardening.conf` drop-in that cloud-init can't override, every SSH check reads `sshd -T` instead of the config file, a new section on keeping the oracle box single-purpose, and the RPC exposure check now looks for the right mainnet port (14022, not 14024).*
 

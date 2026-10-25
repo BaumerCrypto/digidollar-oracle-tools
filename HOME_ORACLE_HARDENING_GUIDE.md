@@ -44,7 +44,7 @@ I run my oracle on a VPS. I chose a VPS because oracle nodes need to be online 2
 
 Home setups have real disadvantages for oracle operation: ISP outages, dynamic IPs, power cuts, router reboots, and the fact that your consumer router is the only thing between your oracle and the open internet.
 
-**I'm not saying "don't run from home."** I'm saying: understand the trade-offs, harden what you can, and if your home oracle goes down and stays down, consider migrating to a VPS. A $5-15/month VPS is cheaper than the cost to the network of a missing oracle in a 7-of-21 quorum.
+**I'm not saying "don't run from home."** I'm saying: understand the trade-offs, harden what you can, and if your home oracle goes down and stays down, consider migrating to a VPS. A $5-15/month VPS is cheaper than the cost to the network of a missing oracle in a 7-of-35 quorum.
 
 With that said — let's harden your setup. A little hardening to fully locked down tight... it all makes a difference. 🔒
 
@@ -1174,7 +1174,7 @@ This requires a managed switch and a router that supports VLAN tagging. Configur
 
 ### Step 15: DDNS for a Stable Hostname (Optional — Nice to Have)
 
-> **Do you actually need this?** Probably not for oracle operation. The official oracle endpoint hostnames (`oracleN.digidollar.org`) are hardcoded into the binary via DD-FINAL-029 in chainparams. Jared controls the `digidollar.org` DNS and sets the A records that map each hostname to each operator's IP. Your oracle's discoverability is handled through that — not through your own DDNS.
+> **Do you actually need this?** Probably not for oracle operation. Most oracle slots have an `oracleN.digidollar.org` endpoint name in chainparams. As of October 2026 those names don't resolve in DNS, and oracles sign without them (mine included). The few slots run from an operator's own server use that server's hostname instead, such as `oracle1.digibyte.io` for slot 0. Your oracle's signatures travel over the normal DigiByte P2P network, so DDNS isn't part of that.
 >
 > DDNS is only useful if you want a personal hostname for `addnode` sharing with other community members, monitoring dashboards, or personal convenience. It's a nice-to-have, not a requirement for oracle operation.
 
@@ -1315,7 +1315,7 @@ I want to be honest about the limitations of home oracle operation:
 
 **ISP outages.** When your ISP goes down, your oracle goes dark. No amount of hardening fixes this. If your ISP is unreliable (frequent outages, maintenance windows during peak hours), consider a VPS for your oracle.
 
-**Dynamic IP + frozen roster.** Your official oracle endpoint (`oracleN.digidollar.org`) points to your IP via DNS that Jared controls. If your IP changes, you need to contact Jared to update the A record. This is manual and slow. Until Stage 2 ships, there's no automated solution. DDNS helps for `addnode` but doesn't solve the oracle endpoint problem.
+**Dynamic IP.** When your IP changes, your node reconnects outbound on its own and keeps signing, so the oracle itself survives it. What breaks is anything that points at your old address: other operators who added you with `addnode`, and inbound peers until the network learns the new one. The `oracleN.digidollar.org` endpoint names in chainparams don't resolve as of October 2026, so there's no DNS record to get updated. DDNS fixes the `addnode` side.
 
 **CGNAT (Carrier-Grade NAT).** Some ISPs (especially mobile/4G/5G providers and some fiber providers) use CGNAT, which means you're behind TWO layers of NAT — your router AND the ISP's. Port forwarding doesn't work with CGNAT because you don't have a real public IP. If `traceroute` to an external IP shows a hop through a `100.64.x.x` address, you're behind CGNAT. Contact your ISP to request a public IP, or use a VPS.
 
@@ -1351,7 +1351,7 @@ I want to be honest about the limitations of home oracle operation:
 
 **After ISP outage or IP change:**
 - Check if your public IP changed (search "what is my IP" in your browser)
-- If it changed: update DDNS (should be automatic if configured), and contact Jared to update the oracle endpoint A record
+- If it changed: update DDNS (should be automatic if configured), and tell anyone who added your node by IP with `addnode`
 - Test port forwarding is still working (port checker site)
 
 ---
@@ -1388,6 +1388,7 @@ I want to be honest about the limitations of home oracle operation:
 |---------|------|---------|
 | 1.0 | 2026-06-03 | Initial release — Linux, Windows, macOS. Three tiers. |
 | 1.1 | 2026-10-24 | SSH steps reordered (key first, lock-down last), login settings in a `00-hardening.conf` drop-in verified with `sshd -T`, new section on other apps and VMs on the same hardware. Also records the unversioned 2026-07-03 edits: cross-platform monitor ports, wallet encryption trade-offs, BIP157/158 optional extra. |
+| 1.2 | 2026-10-24 | Dynamic-IP and DDNS sections corrected: the `oracleN.digidollar.org` endpoint names don't resolve and oracles sign without them, so there's no A record to update. Quorum typo fixed (7-of-35). |
 
 ---
 

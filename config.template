@@ -423,13 +423,15 @@ MENTION_MAX=6
 # How it works:
 #   - Each instance reads its own config file (CLI path, webhook, thresholds)
 #   - State files (quorum_state, mention_state) auto-separate by config directory
-#   - The oracle roster is shared (same 35 operators on both networks) via symlink
+#   - Each instance needs its OWN roster file. Slot numbers belong to different
+#     operators on mainnet and testnet, so never share or symlink one roster
 #
 # Setup example — adding a mainnet instance alongside testnet:
 #
 #   mkdir -p ~/.oracle-monitor-mainnet
 #   cp ~/.oracle-monitor/config ~/.oracle-monitor-mainnet/config
-#   ln -s ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
+#   cp ~/.oracle-monitor/oracle-roster.conf ~/.oracle-monitor-mainnet/oracle-roster.conf
+#   # (then edit the copy so every slot maps to that chain's operator)
 #
 #   # Edit the mainnet config:
 #   #   CLI="digibyte-cli -conf=$HOME/.digibyte/mainnet.conf"
@@ -438,6 +440,9 @@ MENTION_MAX=6
 #   #   SWAP_THRESHOLD_MB=1500                   (dual-daemon baseline)
 #   #   QUORUM_GREEN=12, QUORUM_YELLOW=10        (tighter for production)
 #   #   NETWORK_LABEL="Mainnet"                  (shows in card titles)
+#   #   ROSTER_FILE="$HOME/.oracle-monitor-mainnet/oracle-roster.conf"
+#   #                                            (the bot's default path is the
+#   #                                             testnet folder, so set this)
 #   #   DATADIR="$HOME/.digibyte"                (named in Low Disk alerts —
 #   #                                             and set the TESTNET config to
 #   #                                             DATADIR="$HOME/.digibyte/testnet26")
