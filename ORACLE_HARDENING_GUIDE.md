@@ -93,6 +93,9 @@ From here on, everything runs as this user — never root directly.
 
 SSH is the front door to your VPS. I changed every default that matters.
 
+> [!IMPORTANT]
+> **Get a working SSH key login first.** This step turns password login off. If your oracle user can't log in with a key yet, do [Step 3](#step-3--generate-ssh-keys) first, confirm the key login works, then come back here. Otherwise the second-window test at the end of this step will fail, and your open session (or your provider's console) is the only way back in.
+
 ### Move SSH Off Port 22
 
 Every automated scanner on the internet hammers port 22. Moving to a custom port eliminates the vast majority of brute-force noise. Pick any unused port between 1024–65535.
@@ -122,6 +125,26 @@ AllowUsers dgboperator             # ONLY this user can SSH in — whitelist
 
 **`AllowUsers` is the most important line.** Even if someone guesses your port and has a valid key, they can't log in unless they're hitting the exact username on this whitelist.
 
+### Make Sure Your Settings Actually Win
+
+On many VPS images, the settings you just typed are not the ones SSH enforces. Near the top of Ubuntu's `sshd_config` is `Include /etc/ssh/sshd_config.d/*.conf`, so files in that folder are read **before** the rest of the main file, and for settings like these sshd keeps the **first** value it reads. Images set up by cloud-init often ship `/etc/ssh/sshd_config.d/50-cloud-init.conf` containing `PasswordAuthentication yes`, which silently beats your `PasswordAuthentication no`. I found exactly this on my own oracle VPS in October 2026: the main config said `no`, and SSH was still accepting passwords.
+
+See what's in that folder on your box:
+
+```bash
+ls /etc/ssh/sshd_config.d/
+sudo grep -riE 'authentication|permitrootlogin' /etc/ssh/sshd_config.d/
+```
+
+Then put the login settings in a drop-in whose name sorts first, so it wins no matter what else lands in that folder:
+
+```bash
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n' | sudo tee /etc/ssh/sshd_config.d/00-hardening.conf
+sudo sshd -t
+```
+
+`sshd -t` checks the syntax and prints nothing when everything is fine. Leave `Port`, `AllowUsers` and the rest in the main file where you put them; the drop-in only needs these three lines. Leave `50-cloud-init.conf` alone too: `00-hardening.conf` is read first, so it wins even if cloud-init writes its file again later.
+
 ### Test Before You Commit
 
 **Do NOT close your current SSH session.** First, restart the SSH service:
@@ -135,19 +158,46 @@ sudo systemctl daemon-reload
 sudo systemctl restart ssh.socket
 ```
 
-Open a **second** terminal/PuTTY window and connect using your new port:
+Now check what SSH will **actually** enforce. `sshd -T` prints the settings sshd is running with after every file has been read, which is the only view that counts:
+
+```bash
+sudo sshd -T | grep -E '^(port|passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers)'
+```
+
+Expected (the order on your screen may differ):
+
+```
+port 2222
+permitrootlogin no
+passwordauthentication no
+kbdinteractiveauthentication no
+allowusers dgboperator
+```
+
+If any line disagrees with what you set, something in `/etc/ssh/sshd_config.d/` is still overriding you. Fix that before going further.
+
+Open a **second** terminal/PuTTY window and connect using your new port and your key:
 
 ```bash
 ssh -p 2222 dgboperator@your-vps-ip
 ```
 
-If the new session works, you're good. If it doesn't, your original session is still open to fix things.
+Then prove a password is refused. From Linux or macOS:
+
+```bash
+ssh -p 2222 -o PubkeyAuthentication=no dgboperator@your-vps-ip
+# Expected: dgboperator@your-vps-ip: Permission denied (publickey).
+```
+
+In PuTTY, open a new session with no private key loaded and Pageant closed. Expected: `No supported authentication methods available (server sent: publickey)`. If you get a password prompt instead, password login is still on.
+
+If both tests pass, you're good. If something fails, your original session is still open to fix things.
 
 ---
 
 ## Step 3 — Generate SSH Keys
 
-Password authentication is disabled in Step 2, so you need SSH keys. Here's how I set mine up.
+Step 2 turns password authentication off, so you need a working SSH key before you restart SSH with those settings. Here's how I set mine up.
 
 ### Option A — RSA 4096 (Proven, Universal Compatibility)
 
@@ -276,10 +326,10 @@ To                         Action      From
 If your `digibyte.conf` doesn't have `rpcbind` or `rpcallowip` lines, you're already safe — the default is localhost-only. You can verify:
 
 ```bash
-ss -tlnp | grep 14024
+ss -tlnp | grep -E ':1402[26]\b'
 ```
 
-If the local address shows `127.0.0.1:14024` or `[::1]:14024`, RPC is not exposed. (Port number varies by network — 14024 for mainnet RPC, 14026 for testnet.)
+If every address on those lines starts with `127.0.0.1` or `[::1]`, RPC is not exposed. If you see `0.0.0.0` or `[::]` in front of an RPC port, it is. The default RPC ports are 14022 for mainnet and 14026 for testnet; if you set `rpcport=` in your config, grep for that number instead.
 
 ---
 
@@ -432,6 +482,22 @@ systemctl is-enabled apport
 # Should output: disabled
 ```
 
+### Keep the Oracle Box Single-Purpose
+
+Don't run websites, WordPress, phpMyAdmin, hosting control panels or other web apps on your oracle VPS. DigiByte Core needs none of them, and every extra service is one more way in. The PHP2Shell bugs of October 2026 (CVE-2026-109618 and CVE-2026-109619) are the example: anyone who could reach a PHP web page could run code on that server, with no login. The oracle doesn't use PHP and was never affected, but a PHP app on the same box would have given an attacker code execution on the machine your signing key lives on.
+
+Check what else is on your box:
+
+```bash
+dpkg -l | grep -E '^ii\s+(php|libapache2-mod-php)' || echo "PHP: no packages installed"
+if command -v docker >/dev/null; then sudo docker ps --format '{{.Names}}  {{.Image}}  {{.Ports}}'; else echo "Docker: not installed"; fi
+sudo ss -tlnp
+```
+
+On an oracle-only box, `ss` should list only your SSH port (under `sshd`, and also `systemd` when SSH is socket-activated), the DigiByte P2P ports on all addresses, every other `digibyted` port (RPC and any other local ports) on `127.0.0.1` or `[::1]` only, and `systemd-resolved` on `127.0.0.53` and `127.0.0.54`. Find out what anything else is.
+
+If something has to stay, keep it patched, and know that automatic updates (Step 9) only cover security updates from the Ubuntu archive. Software from a PPA, Docker images and anything installed by hand update on their own schedule, or not at all. Ubuntu also backports security fixes without changing the upstream version number, so compare the installed version from `apt policy <package>` with Ubuntu's security notice instead of trusting what `php -v` or similar prints.
+
 ---
 
 ## Step 9 — Automatic Security Updates
@@ -541,6 +607,7 @@ echo "=== HARDENING VERIFY — $(date) ===" && \
 echo "" && \
 echo "=== SSH ===" && \
 sudo systemctl status ssh --no-pager | head -3 && \
+sudo sshd -T | grep -E '^(port|passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers)' && \
 echo "" && \
 echo "=== FAIL2BAN ===" && \
 sudo systemctl status fail2ban --no-pager | head -3 && \
@@ -570,6 +637,7 @@ uptime
 | Check | Expected Value |
 |-------|---------------|
 | SSH | active (running) |
+| SSH effective config | your port, `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `allowusers` your user |
 | Fail2Ban | active (running), bantime = 86400 |
 | send_redirects | 0 |
 | kernel.sysrq | 0 |
@@ -1054,6 +1122,7 @@ Security isn't a one-time setup. Here's what I do regularly:
 - Check Fail2Ban status: `sudo fail2ban-client status sshd`
 - Review failed SSH attempts: `sudo grep 'Failed' /var/log/auth.log | tail -20`
   - If `/var/log/auth.log` doesn't exist (Ubuntu 26.04+ journal-only), use: `journalctl -u ssh --no-pager --since "7 days ago" | grep 'Failed' | tail -20`
+- Confirm nobody logged in with a password: `sudo journalctl -u ssh --no-pager --since "7 days ago" | grep 'Accepted password'` should print nothing. Any line it prints is a password login that shouldn't have been possible.
 - Verify oracle is running: `digibyte-cli listoracle`
 
 ### Monthly
@@ -1061,6 +1130,7 @@ Security isn't a one-time setup. Here's what I do regularly:
 - Run full system updates: `sudo apt update && sudo apt upgrade`
 - Reboot if kernel was updated, then verify oracle auto-starts
 - Review UFW rules: `sudo ufw status verbose`
+- After a `cloud-init` or `openssh-server` update, re-run the SSH lines of the Step 11 block. Password, keyboard-interactive and root login should all still read `no`.
 
 ### After Every Reboot
 
@@ -1087,13 +1157,13 @@ Here's everything this guide covers, in one table:
 | Layer | What | Why |
 |-------|------|-----|
 | User | Dedicated non-root user with sudo | Least privilege |
-| SSH | Custom port, key-only auth, AllowUsers whitelist | Eliminates brute-force surface |
+| SSH | Custom port, key-only auth in a `00-hardening.conf` drop-in verified with `sshd -T`, AllowUsers whitelist | Eliminates brute-force surface |
 | SSH Keys | RSA 4096 or Ed25519 | Replaces password authentication |
 | Firewall | UFW default deny, only required ports open | Blocks all unexpected traffic |
 | Fail2Ban | 3 attempts → 24-hour ban | Stops brute-force attackers |
 | Kernel | sysctl hardening (redirects, SysRq, core dumps) | Closes kernel-level attack vectors |
 | Shared Memory | noexec on /dev/shm | Prevents code execution in shared memory |
-| Services | Apport disabled | Stops crash reporter from weakening core dump protection |
+| Services | Apport disabled, nothing else on the box (no web apps, no PHP) | Stops crash reporter from weakening core dump protection; every extra service is attack surface |
 | Updates | Unattended security upgrades | Patches vulnerabilities automatically |
 | DigiByte | RPC localhost-only, wallet file permissions, systemd hardening | Protects oracle-specific assets |
 | Resource Isolation | Swap safety net, low swappiness, systemd-oomd, user-slice limits | Prevents admin workloads from killing the oracle (Optional Extra) |
@@ -1107,5 +1177,7 @@ If you follow this guide and verify with Step 11, your oracle node will be prope
 *Built by digibyte-maxi — Oracle Slot 17*
 *[digidollar-oracle-tools](https://github.com/BaumerCrypto/digidollar-oracle-tools)*
 
-Version: v1.5.0
+Version: v1.5.1
+
+*v1.5.1 (2026-10-24): the SSH key goes in before the password lock-down, login settings live in a `00-hardening.conf` drop-in that cloud-init can't override, every SSH check reads `sshd -T` instead of the config file, a new section on keeping the oracle box single-purpose, and the RPC exposure check now looks for the right mainnet port (14022, not 14024).*
 

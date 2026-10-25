@@ -518,6 +518,20 @@ Windows will auto-install security updates. Just make sure it's not disabled.
    - Install macOS updates
    - Install Security Responses and system files
 
+#### Other Apps and VMs on the Same Hardware
+
+Your oracle doesn't use PHP or any web server, but a home machine often runs other things: Nextcloud, WordPress, Home Assistant, an Umbrel, Start9 or CasaOS app store, Docker containers, or a local web stack like XAMPP, WAMP or MAMP. Each of those is its own attack surface, and the automatic updates above don't cover most of them. Docker images, app-store apps and software from a PPA update on their own schedule, or not at all. The PHP2Shell bugs of October 2026 (CVE-2026-109618 and CVE-2026-109619) let anyone who could reach a PHP web page run code on that machine with no login, so a forgotten web app on your oracle machine would have been a way in.
+
+The safest setup is an oracle machine that runs nothing else. If that's not practical, keep the other apps patched through their own update tools, and don't port-forward them through your router. On Linux, this shows what's there:
+
+```bash
+dpkg -l | grep -E '^ii\s+(php|libapache2-mod-php)' || echo "PHP: no packages installed"
+if command -v docker >/dev/null; then sudo docker ps --format '{{.Names}}  {{.Image}}  {{.Ports}}'; else echo "Docker: not installed"; fi
+sudo ss -tlnp
+```
+
+**Running your oracle in a virtual machine?** Then the host is part of your oracle's security. A guest VM that gets compromised (a web-app VM hit by a bug like PHP2Shell, for example) can sometimes break out to the host, and from there reach every other VM, including your oracle. PwnEscape (CVE-2026-99999, October 2026) was exactly that kind of guest-to-host bug, in the Linux kernel's virtual networking on KVM-based hosts such as Proxmox. Keep the host on a supported release, install its kernel updates, and reboot the host to load them. On Proxmox the fix shipped in `proxmox-kernel-7.0.14-24-pve` (advisory PSA-2026-00068-1). Proxmox VE 8 reached end of life on 2026-08-31, so a PVE 8 host should move to PVE 9 rather than wait for a fix.
+
 ---
 
 ### Step 6: Auto-Restart digibyted on Boot and Crash
@@ -755,6 +769,7 @@ After completing Tier 1:
 - [ ] Static local IP on the oracle machine
 - [ ] NTP time sync verified and running
 - [ ] Automatic OS security updates enabled
+- [ ] Nothing else running on the oracle machine, or other apps kept patched and not port-forwarded
 - [ ] digibyted auto-starts on boot and restarts on crash
 - [ ] Wallet file permissions locked down
 
@@ -792,11 +807,32 @@ This only applies to **Linux** and **macOS**. Windows users can install OpenSSH 
 
 **Linux:**
 
-```bash
-# Install SSH server if not present
-sudo apt install openssh-server -y
+Do these in order. The key goes in while password login still works, and the lock-down comes last.
 
-# Edit SSH config
+**1. Install the SSH server** and allow it from your local network only, on port 22 for now:
+
+```bash
+sudo apt install openssh-server -y
+sudo ufw allow from 192.168.0.0/16 to any port 22 proto tcp comment "SSH local only (temporary)"
+```
+
+**2. Create a key and copy it over.** On your laptop/desktop (the machine you'll SSH *from*):
+
+```bash
+# On your laptop (Linux/macOS)
+ssh-keygen -t ed25519 -C "oracle-access"
+# On Windows, use PuTTYgen or:
+ssh-keygen -t ed25519 -C "oracle-access"
+
+# Copy the public key to your oracle machine (asks for your password one last time)
+ssh-copy-id dgboperator@192.168.1.100
+```
+
+Log in once with the key (`ssh dgboperator@192.168.1.100`) and make sure it doesn't ask for a password. Don't go further until this works.
+
+**3. Lock it down.** Edit the main config:
+
+```bash
 sudo nano /etc/ssh/sshd_config
 ```
 
@@ -816,31 +852,52 @@ ClientAliveInterval 300             # 5-minute keepalive
 ClientAliveCountMax 2               # Drop after 2 missed keepalives
 ```
 
+Then put the login settings in a drop-in. On Ubuntu, files in `/etc/ssh/sshd_config.d/` are read before the rest of `sshd_config`, and for settings like these sshd keeps the first value it reads. If your install used cloud-init, as Ubuntu Server and many Raspberry Pi images do, a `50-cloud-init.conf` in that folder may say `PasswordAuthentication yes` and silently beat your edit. A file whose name sorts first wins:
+
 ```bash
-# Restart SSH
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n' | sudo tee /etc/ssh/sshd_config.d/00-hardening.conf
+sudo sshd -t   # syntax check, no output means OK
+```
+
+**4. Open the new port, then restart SSH:**
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 2222 proto tcp comment "SSH local only"
 sudo systemctl restart ssh
-# On Ubuntu 26.04, you may need:
-sudo systemctl restart ssh.socket
 
-# Add SSH port to UFW (local network only)
-sudo ufw allow from 192.168.0.0/16 to any port 2222 comment "SSH local only"
+# If you can't connect on the new port after restarting, your system uses
+# socket-activated SSH (Ubuntu 22.10 and newer, 24.04 included). Run these too:
+sudo systemctl daemon-reload
+sudo systemctl restart ssh.socket
 ```
 
-> **Do NOT port-forward SSH through your router** unless you're using a VPN (Tier 3). The UFW rule above limits SSH to your local network only.
-
-Generate an SSH key pair on your laptop/desktop (the machine you'll SSH *from*):
+**5. Check what SSH actually enforces, then test.** Keep your current session open:
 
 ```bash
-# On your laptop (Linux/macOS)
-ssh-keygen -t ed25519 -C "oracle-access"
-# On Windows, use PuTTYgen or:
-ssh-keygen -t ed25519 -C "oracle-access"
-
-# Copy the public key to your oracle machine
-ssh-copy-id -p 2222 dgboperator@192.168.1.100
+sudo sshd -T | grep -E '^(port|passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers)'
+# Expect: port 2222, passwordauthentication no, kbdinteractiveauthentication no,
+#         permitrootlogin no, allowusers dgboperator (the order may differ)
 ```
 
-Test the connection before disabling password auth — if you lock yourself out, you'll need physical access to fix it.
+From your laptop, in a new window:
+
+```bash
+# The key login must work...
+ssh -p 2222 dgboperator@192.168.1.100
+# ...and a login without the key must be refused: "Permission denied (publickey)"
+ssh -p 2222 -o PubkeyAuthentication=no dgboperator@192.168.1.100
+```
+
+**6. Remove the temporary port 22 rule** once both tests pass:
+
+```bash
+sudo ufw status numbered
+sudo ufw delete <number of the "SSH local only (temporary)" rule>
+```
+
+> **Do NOT port-forward SSH through your router** unless you're using a VPN (Tier 3). The UFW rules above limit SSH to your local network only.
+
+If you do lock yourself out, you'll need a keyboard and screen on the machine (or the VM console) to fix it.
 
 **Windows (OpenSSH Server):**
 
@@ -863,7 +920,9 @@ SSH (Remote Login) is built in but disabled by default:
 2. Toggle **Remote Login** to **On**
 3. Restrict to specific users (your `dgboperator` account)
 
-SSH config is at `/etc/ssh/sshd_config`. Same settings apply.
+SSH config is at `/etc/ssh/sshd_config`. Same settings apply. If your Mac also has an `/etc/ssh/sshd_config.d/` folder, files there are read first, so confirm what's enforced with `sudo sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'`.
+
+On every platform, the real proof is the keyless-login test above: a login without your key must be refused.
 
 ---
 
@@ -1072,7 +1131,7 @@ macOS handles UPS natively via USB:
 
 After completing Tier 2 (in addition to Tier 1):
 
-- [ ] SSH enabled with key-only auth (recommended over xRDP)
+- [ ] SSH enabled with key-only auth, confirmed with `sshd -T` and a refused keyless login (recommended over xRDP)
 - [ ] Fail2Ban protecting SSH (if SSH is enabled)
 - [ ] Kernel hardening applied (Linux)
 - [ ] Shared memory hardened (Linux)
@@ -1274,9 +1333,12 @@ I want to be honest about the limitations of home oracle operation:
 - Check that digibyted is running and oracle is active (`digibyte-cli listoracle`)
 - Verify time sync is active (Linux: `timedatectl status`, Windows: `w32tm /query /status`)
 - Glance at disk space (`df -h` on Linux, check via File Explorer on Windows)
+- If SSH is enabled (Linux): `sudo journalctl -u ssh --no-pager --since "7 days ago" | grep 'Accepted password'` should print nothing
 
 **Monthly:**
 - Check for and install OS updates that weren't auto-applied
+- Update the other apps on the machine (Docker images, app-store apps), which automatic OS updates don't cover
+- After a `cloud-init` or `openssh-server` update, re-run `sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin)'` (both should read `no`)
 - Check router firmware for updates
 - Review port forwarding rules — make sure nothing new was added (malware or UPnP)
 - Test that your oracle is reachable from outside (use a port checker site)
@@ -1325,6 +1387,7 @@ I want to be honest about the limitations of home oracle operation:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-06-03 | Initial release — Linux, Windows, macOS. Three tiers. |
+| 1.1 | 2026-10-24 | SSH steps reordered (key first, lock-down last), login settings in a `00-hardening.conf` drop-in verified with `sshd -T`, new section on other apps and VMs on the same hardware. Also records the unversioned 2026-07-03 edits: cross-platform monitor ports, wallet encryption trade-offs, BIP157/158 optional extra. |
 
 ---
 
