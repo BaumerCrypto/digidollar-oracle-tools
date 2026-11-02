@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # oracle-network-status.sh — DGB Oracle Network Status Bot (Gitter via Matrix)
-# Version: 1.8.3
+# Version: 1.8.4
 #
 # Posts automated oracle network health summaries to the DigiDollar Gitter
 # channel once per day. Community-facing — reports network-wide status,
@@ -79,6 +79,39 @@
 #                                          read by the daily standby pass)
 #
 # CHANGELOG:
+#   v1.8.4 — Post-Thaw-Day cleanup.
+#          (1) The FULL card's deployment line no longer says "BIP9". The
+#          DigiDollar deployment has been buried (BIP90) since DigiByte
+#          Core v9.26.5, so "BIP9: active (bit buried)" named a mechanism
+#          that no longer applies. It now reads
+#          "DigiDollar: active (buried, block 23,869,440)", the block taken
+#          from the same activation-height resolution the birth
+#          announcement uses, never hardcoded. A deployment still in BIP9
+#          shape reads "DigiDollar: active (BIP9 bit 23, since block N)".
+#          When no source states the height, the block is left off
+#          ("DigiDollar: active (buried)") rather than estimated, and a
+#          failed deployment RPC reads "DigiDollar: status unavailable".
+#          The v1.7.2 rule survives: known-absent and unknown are
+#          different facts and print differently. One fix rides along: a
+#          burial read from getdeploymentinfo while
+#          getdigidollardeploymentinfo had failed used to print "bit N/A"
+#          (unknown) although the burial was known. STANDBY, ENDGAME and
+#          BIRTH wording is unchanged, since those modes describe real
+#          BIP9 signaling before an activation. The dry-run Parsed Data
+#          block prints the same line plus the raw status, bit, shape and
+#          height source.
+#          (2) Built-in default floor raised from v9.26.2 to v9.26.6. Thaw
+#          Day activated at mainnet block 24,490,000 (2026-11-02 UTC), and
+#          the v9.26.6 release notes require every full node to run
+#          v9.26.6 or newer from that height. Precedence is unchanged: a
+#          MIN_ACCEPTED_VERSION in the config wins, then the lowest entry
+#          of a legacy ACCEPTED_VERSIONS list, then this default.
+#          (3) Comments only. The display-name bug the v1.8.2 roster
+#          override worked around is fixed upstream from DigiByte Core
+#          v9.26.6 (DigiByte-Core/digibyte#437): each chain reports its
+#          own operator names, so the override is optional now and
+#          harmless where it is left in place. The DD economy field map,
+#          marked "verify at deploy" since v1.6.4, is recorded as verified.
 #   v1.8.3 — Release candidates at or above the floor are a TESTING tier,
 #          not a defect. v1.8.0 flagged every rc/pre build as non-compliant
 #          and listed its operator under the upgrade nudge. Right for
@@ -110,6 +143,9 @@
 #          another. The override fixes the printed name without waiting
 #          on an upstream release. Absent or empty third field keeps the
 #          daemon's name, so existing rosters are unaffected.
+#          [Fixed upstream from DigiByte Core v9.26.6,
+#          DigiByte-Core/digibyte#437: each chain now reports its own
+#          names, so the override is optional. See v1.8.4.]
 #          (2) Attribution footer on every post (POST_FOOTER), applied
 #          inside post_to_gitter so status, standby, birth announcement
 #          and both RPC-failure notices all carry it. Auto-generated from
@@ -516,16 +552,20 @@ NETWORK_LABEL=""
 # shown in the Software section but never @-mentioned, because the bot
 # cannot know what that operator is running.
 #
-# Default rule (Bastian, Gitter 2026-07-11): "any v9.26 will do to run
-# the oracle service." Update per Jared's guidance if the rule tightens.
+# Default floor (v1.8.4): v9.26.6. Thaw Day activated at mainnet block
+# 24,490,000 (2026-11-02 UTC), and the v9.26.6 release notes require every
+# full node to run v9.26.6 or newer from that height. Testnet26 passed its
+# own Thaw Day height (432,100) earlier, so the same floor fits both
+# chains. Before Thaw Day the rule was Bastian's (Gitter 2026-07-11):
+# "any v9.26 will do to run the oracle service", which the old v9.26.2
+# default encoded.
 #
-# Dual-instance operators override per-config: testnet may set a lower
-# floor, mainnet may raise it once Jared confirms.
+# Override per config if a chain needs a different floor.
 #
-# Left EMPTY here on purpose (v1.8.1): the effective default (v9.26.2) is
-# applied in the resolution block below, AFTER a legacy ACCEPTED_VERSIONS
-# list has had the chance to set the floor. A non-empty default here made
-# the v1.7.x compatibility path unreachable.
+# Left EMPTY here on purpose (v1.8.1): the effective default (v9.26.6
+# since v1.8.4) is applied in the resolution block below, AFTER a legacy
+# ACCEPTED_VERSIONS list has had the chance to set the floor. A non-empty
+# default here made the v1.7.x compatibility path unreachable.
 MIN_ACCEPTED_VERSION=""
 
 # BACKWARD COMPATIBILITY (v1.8.0). Configs written for v1.7.x and earlier
@@ -609,7 +649,8 @@ fi
 # Precedence:
 #   1. MIN_ACCEPTED_VERSION from the config, if set
 #   2. lowest entry of a legacy ACCEPTED_VERSIONS list, if the config set one
-#   3. the built-in default (v9.26.2), applied HERE and not at the
+#   3. the built-in default (v9.26.6 since v1.8.4, was v9.26.2),
+#      applied HERE and not at the
 #      declaration above. Putting it at the declaration is what made
 #      step 2 unreachable before v1.8.1.
 # Step 2 is the v1.7.x compatibility path. sort -V is used ONLY here, to pick
@@ -619,7 +660,7 @@ if [ -z "$MIN_ACCEPTED_VERSION" ] && [ -n "$ACCEPTED_VERSIONS" ]; then
         | grep -v '^$' | sort -V | head -1)
 fi
 if [ -z "$MIN_ACCEPTED_VERSION" ]; then
-    MIN_ACCEPTED_VERSION="v9.26.2"
+    MIN_ACCEPTED_VERSION="v9.26.6"
 fi
 
 # --- v1.8.2: resolve the attribution footer ---------------------------------
@@ -948,6 +989,68 @@ pretty_number() {
     echo "${n}${out}"
 }
 
+# build_dd_status_line (v1.8.4)
+# The FULL card's deployment line. Replaces "BIP9: <status> (bit <n>)",
+# a misnomer once the deployment was buried (BIP90) in DigiByte Core
+# v9.26.5. Uses globals: BIP9_STATUS, BIP9_BIT, DD_DEPLOY_SHAPE,
+# ACTIVATION_HEIGHT, ACTIVATION_HEIGHT_SOURCE.
+#
+# The block number is printed only when the height came from a source
+# that states it: the buried height, BIP9 since in ACTIVE, the DGB RPC's
+# own activation height, or an operator override. A window-math estimate
+# (computed_from_window) or a floor-capped value is never printed as fact;
+# the line drops the block instead. Same rule as the v1.6.3 birth fix.
+#
+# v1.7.2 principle kept: "known absent" and "unknown" print differently.
+# A buried deployment says "buried"; a failed deployment RPC says
+# "status unavailable" and never claims a shape it does not know.
+build_dd_status_line() {
+    local height_known=false h=""
+    case "$ACTIVATION_HEIGHT_SOURCE" in
+        getdeploymentinfo_buried|getdeploymentinfo_since_active|digidollardeploymentinfo_since_active|config_override)
+            if [[ "$ACTIVATION_HEIGHT" =~ ^[0-9]+$ ]] && [ "$ACTIVATION_HEIGHT" -gt 0 ]; then
+                height_known=true
+                h=$(pretty_number "$ACTIVATION_HEIGHT")
+            fi
+            ;;
+    esac
+
+    case "$BIP9_STATUS" in
+        ""|unavailable|unknown|null)
+            echo "DigiDollar: status unavailable"
+            return
+            ;;
+    esac
+
+    if [ "$BIP9_STATUS" = "active" ]; then
+        if [ "$DD_DEPLOY_SHAPE" = "buried" ]; then
+            if [ "$height_known" = true ]; then
+                echo "DigiDollar: active (buried, block ${h})"
+            else
+                echo "DigiDollar: active (buried)"
+            fi
+        elif [ "$DD_DEPLOY_SHAPE" = "bip9" ]; then
+            if [ "$height_known" = true ]; then
+                echo "DigiDollar: active (BIP9 bit ${BIP9_BIT}, since block ${h})"
+            else
+                echo "DigiDollar: active (BIP9 bit ${BIP9_BIT})"
+            fi
+        else
+            echo "DigiDollar: active"
+        fi
+        return
+    fi
+
+    # Not active yet. FULL mode only reaches here on a non-mainnet chain
+    # (a pre-activation mainnet takes the STANDBY path), e.g. a fresh
+    # testnet reset that is still signaling.
+    if [ "$DD_DEPLOY_SHAPE" = "bip9" ]; then
+        echo "DigiDollar: ${BIP9_STATUS} (BIP9 bit ${BIP9_BIT})"
+    else
+        echo "DigiDollar: ${BIP9_STATUS}"
+    fi
+}
+
 # format_countdown_line
 # Emits a single line describing time to activation, band-appropriate.
 # Args:  $1 blocks_remaining   $2 secs_remaining   $3 minutes   $4 hours   $5 days
@@ -1168,11 +1271,13 @@ CURRENT_HEIGHT=$(echo "$CHAIN_JSON" | jq -r '.blocks // 0' 2>/dev/null)
 if [ $DEPLOY_OK -eq 0 ] && echo "$DEPLOY_JSON" | jq -e . >/dev/null 2>&1; then
     BIP9_STATUS=$(echo "$DEPLOY_JSON" | jq -r '.status // "unknown"')
     # v1.7.2: default to EMPTY, not "N/A". Under the v9.26.5 burial this
-    # RPC omits .bit entirely; an empty value lets the display default
-    # ${BIP9_BIT:-buried} fire and render "bit buried". The literal "N/A"
-    # is reserved for the RPC-unavailable branch below, where the bit is
-    # genuinely unknown rather than known-absent.
+    # RPC omits .bit entirely, and an empty value is the known-absent
+    # signal (v1.8.4: the DigiDollar status line reads it as buried). The
+    # literal "N/A" is reserved for the RPC-unavailable branch below,
+    # where the bit is genuinely unknown rather than known-absent.
     BIP9_BIT=$(echo "$DEPLOY_JSON" | jq -r '.bit // empty')
+    # v1.8.4: the buried shape also carries an explicit type.
+    DEPLOY_DGB_TYPE=$(echo "$DEPLOY_JSON" | jq -r '.type // empty')
     QUORUM_REQUIRED=$(echo "$DEPLOY_JSON" | jq -r '.oracle_consensus_required // 7')
     TOTAL_SLOTS=$(echo "$DEPLOY_JSON" | jq -r '.oracle_total_slots // 35')
     MUSIG2_EPOCH=$(echo "$DEPLOY_JSON" | jq -r '.musig2_session.epoch // "N/A"')
@@ -1182,6 +1287,7 @@ if [ $DEPLOY_OK -eq 0 ] && echo "$DEPLOY_JSON" | jq -e . >/dev/null 2>&1; then
 else
     BIP9_STATUS="unavailable"
     BIP9_BIT="N/A"
+    DEPLOY_DGB_TYPE=""
     QUORUM_REQUIRED=7
     TOTAL_SLOTS=35
     MUSIG2_EPOCH="N/A"
@@ -1200,6 +1306,7 @@ fi
 #      "at least this" indicator and mark unreliable.
 ACTIVATION_HEIGHT=""
 ACTIVATION_HEIGHT_SOURCE="unresolved"
+DEPLOY_STD_BURIED=false
 
 # Source 1a (v1.7.0): v9.26.5 BIP90 burial. PR #429 replaces
 # .deployments.digidollar.bip9 with {"type":"buried","active":…,
@@ -1212,6 +1319,7 @@ ACTIVATION_HEIGHT_SOURCE="unresolved"
 # branch does nothing at all.
 if [ $DEPLOY_STD_OK -eq 0 ] \
    && [ "$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.type // empty' 2>/dev/null)" = "buried" ]; then
+    DEPLOY_STD_BURIED=true
     BURIED_HEIGHT=$(echo "$DEPLOY_STD_JSON" | jq -r '.deployments.digidollar.height // empty' 2>/dev/null)
     if [ -n "$BURIED_HEIGHT" ] && [ "$BURIED_HEIGHT" != "null" ] && [[ "$BURIED_HEIGHT" =~ ^[0-9]+$ ]]; then
         ACTIVATION_HEIGHT="$BURIED_HEIGHT"
@@ -1316,6 +1424,22 @@ if [ -n "$ACTIVATION_HEIGHT" ] && [ "$ACTIVATION_HEIGHT" -gt 0 ]; then
         ACTIVATION_HEIGHT="$FLOOR"
         ACTIVATION_HEIGHT_SOURCE="${ACTIVATION_HEIGHT_SOURCE}_floor_capped"
     fi
+fi
+
+# --- v1.8.4: deployment shape, for the FULL card's DigiDollar line ---
+#   buried   BIP90-buried (DigiByte Core v9.26.5+): either RPC reports
+#            .type "buried", or getdigidollardeploymentinfo answered
+#            without a .bit (the v1.7.2 known-absent rule; BIP9_BIT is
+#            empty only when that RPC parsed and omitted the field)
+#   bip9     a real signaling bit is known
+#   unknown  neither deployment RPC said ("N/A" = that RPC failed)
+DD_DEPLOY_SHAPE="unknown"
+if [ "$DEPLOY_STD_BURIED" = true ] || [ "$DEPLOY_DGB_TYPE" = "buried" ]; then
+    DD_DEPLOY_SHAPE="buried"
+elif [[ "$BIP9_BIT" =~ ^[0-9]+$ ]]; then
+    DD_DEPLOY_SHAPE="bip9"
+elif [ -z "$BIP9_BIT" ]; then
+    DD_DEPLOY_SHAPE="buried"
 fi
 
 # --- Blocks + time remaining + calendar ETA ---
@@ -1605,13 +1729,16 @@ else
 fi
 
 # --- DD economy totals (v1.6.4) ---
-# FIELD MAP, VERIFY AT DEPLOY: run `getdigidollarstats` on the live
-# daemon once and confirm these three jq paths against real output,
-# then delete the candidates that don't apply. The alternatives below
-# cover the likely namings from src/index/digidollarstatsindex
-# (total_dd_supply, total_collateral) and cents-vs-usd variants seen
-# in test output. Any miss leaves DD_ECON_OK=false and the line is
-# omitted, so an unverified deploy degrades to the current card.
+# FIELD MAP, VERIFIED (v1.8.4; marked "verify at deploy" since v1.6.4).
+# Confirmed against live mainnet getdigidollarstats output on DigiByte
+# Core v9.26.4, v9.26.5 and, after Thaw Day, v9.26.7. The daemon returns:
+#   total_dd_supply       DD supply in CENTS, read by the cents chain
+#                         (30960681 on 2026-11-02 = $309,606.81)
+#   total_collateral_dgb  collateral in whole DGB (237221299.46139178)
+#   health_percentage     collateralization percent (241)
+# The other candidate names in each jq chain are kept on purpose as cheap
+# insurance against a future rename. A miss on every candidate still
+# leaves DD_ECON_OK=false and omits the line rather than guessing.
 DD_ECON_OK=false
 DD_SUPPLY_DISPLAY=""
 DD_LOCKED_DISPLAY=""
@@ -1665,8 +1792,8 @@ if [ $DDSTATS_OK -eq 0 ] && echo "$DDSTATS_JSON" | jq -e . >/dev/null 2>&1; then
         fi
     fi
 fi
-# Dry-run discovery aid: surface the raw JSON head so the field map can
-# be finalized from a single dry-run paste. Never printed on live runs.
+# Dry-run diagnostic: surface the raw JSON head so a future field rename
+# shows up in a single dry-run paste. Never printed on live runs.
 if [ "$DRY_RUN" = true ]; then
     echo "[DRY RUN] getdigidollarstats raw (first 400 chars): $(printf '%s' "$DDSTATS_JSON" | head -c 400)"
     echo "[DRY RUN] DD economy parsed: ok=${DD_ECON_OK} supply_usd=${DD_SUPPLY_USD:-none} locked_dgb=${DD_LOCKED_DGB:-none} collat_pct=${DD_COLLAT_PCT:-none}"
@@ -1746,6 +1873,9 @@ fi
 
 # v1.6: TIMESTAMP is now set earlier in the mode-branching block.
 
+# v1.8.4: deployment line (was "BIP9: ..."), see build_dd_status_line.
+DD_STATUS_LINE=$(build_dd_status_line)
+
 # Build network label segment for header (v1.6: comma, not em-dash)
 if [ -n "$NETWORK_DISPLAY" ]; then
     NET_SEGMENT="${NETWORK_DISPLAY}, "
@@ -1759,7 +1889,7 @@ MESSAGE="${STATUS_EMOJI} Oracle Network Status, ${NET_SEGMENT}${TIMESTAMP}
 Fresh Heartbeats: ${FRESH_COUNT}/${TOTAL_SLOTS} (quorum ${QUORUM_LABEL}, threshold: ${QUORUM_REQUIRED})
 Consensus price: \$${PRICE_USD} (status: ${PRICE_STATUS})
 MuSig2: epoch ${MUSIG2_EPOCH}, ${MUSIG2_STATE}, ${MUSIG2_NONCES}/${QUORUM_REQUIRED} nonces, ${MUSIG2_SIGS}/${QUORUM_REQUIRED} sigs
-BIP9: ${BIP9_STATUS} (bit ${BIP9_BIT:-buried})
+${DD_STATUS_LINE}
 Last bundle: block ${LAST_BUNDLE_HEIGHT}, signed by ${LAST_BUNDLE_SIGNERS} oracles"
 
 # v1.6.4: DD economy line — only when getdigidollarstats parsed cleanly.
@@ -1780,10 +1910,11 @@ fi
 #
 # Compliance (v1.8.0) is a numeric comparison against MIN_ACCEPTED_VERSION,
 # not a list membership test: anything at or above the floor passes, so
-# "v9.26.4-g5bcd3a8" canonicalises to "v9.26.4" and clears a "v9.26.2"
-# floor. rc/pre builds never pass. An absent version is UNKNOWN and is
-# displayed without ever triggering a nudge.
-# Compliant: ✅  Outdated / pre-release / unknown: ⚠️
+# "v9.26.7-g5bcd3a8" canonicalises to "v9.26.7" and clears a "v9.26.6"
+# floor. rc/pre builds are never compliant: at or above the floor they are
+# the testing tier (v1.8.3), below it they are flagged. An absent version
+# is UNKNOWN and is displayed without ever triggering a nudge.
+# Compliant: ✅  Testing: 🧪  Outdated / old pre-release / unknown: ⚠️
 #
 # Display canonicalization:
 #   v9.26.4                        -> v9.26.4
@@ -2123,7 +2254,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "Fresh: $FRESH_COUNT  Stale: $STALE_COUNT  Inactive: $INACTIVE_COUNT  Total: $TOTAL_ORACLES"
     echo "Quorum required: $QUORUM_REQUIRED  Status: $QUORUM_LABEL"
     echo "Price: \$$PRICE_USD ($PRICE_STATUS)  Stale: $PRICE_STALE"
-    echo "BIP9: $BIP9_STATUS (bit ${BIP9_BIT:-buried})"
+    echo "${DD_STATUS_LINE}  [raw: status=${BIP9_STATUS:-none}, bit=${BIP9_BIT:-absent}, shape=${DD_DEPLOY_SHAPE}, height source=${ACTIVATION_HEIGHT_SOURCE}]"
     echo "MuSig2: epoch $MUSIG2_EPOCH, state=$MUSIG2_STATE, nonces=$MUSIG2_NONCES, sigs=$MUSIG2_SIGS"
     echo "Bundles in window: $BUNDLE_COUNT  Last: block $LAST_BUNDLE_HEIGHT ($LAST_BUNDLE_SIGNERS signers)"
     echo ""

@@ -364,12 +364,14 @@ MATRIX_ROOM_ID=""
 MENTION_MAX=6
 
 # ---- Software Version Compliance (oracle-network-status.sh v1.6+) ----
-# Space-separated list of version strings considered compliant in the
-# Software section. Matching is against the canonical form (release git-hash
-# suffixes stripped), so "v9.26.4" also covers "v9.26.4-gABC123".
-# Compliant versions render with a green check, outdated ones with a
-# yellow triangle. Default rule (Bastian, Gitter 2026-07-11): any v9.26
-# release will do. Narrow per-network if guidance tightens post-activation.
+# Compliance is judged on the canonical version (release git-hash suffixes
+# stripped), so "v9.26.7" also covers "v9.26.7-gABC123". Compliant
+# versions render with a green check, outdated ones with a yellow triangle.
+# Default floor: v9.26.6 (v1.8.4). Before Thaw Day the guidance was
+# Bastian's "any v9.26 release will do" (Gitter 2026-07-11), which the old
+# v9.26.2 default encoded. It tightened at Thaw Day: the v9.26.6 release
+# notes require every full node to run v9.26.6 or newer from mainnet block
+# 24,490,000, which activated on 2026-11-02 UTC.
 #
 # MIN_ACCEPTED_VERSION (v1.8.0) sets a FLOOR, not a list. Any oracle at or
 # above it is compliant, so a new DigiByte release needs no edit here.
@@ -394,8 +396,15 @@ MENTION_MAX=6
 # author of that very release.)
 #
 # Configs written for v1.7.x that still set ACCEPTED_VERSIONS keep working
-# unchanged: the lowest entry in that list becomes the floor.
-# MIN_ACCEPTED_VERSION="v9.26.2"
+# unchanged: the lowest entry in that list becomes the floor. That also
+# means such a list keeps its OWN floor: a list starting at v9.26.2 still
+# means v9.26.2 after Thaw Day. Comment it out to pick up the default, or
+# set MIN_ACCEPTED_VERSION, which always wins.
+#
+# Leave this commented out to use the default. Set it to pin your own
+# floor. Thaw Day (mainnet block 24,490,000, 2026-11-02 UTC) made v9.26.6
+# the minimum every full node must run:
+# MIN_ACCEPTED_VERSION="v9.26.6"
 
 # Upgrade nudge toggle. If false, non-compliant operators are still flagged
 # in the Software section but no @ pings fire. Some operators may want this
@@ -474,8 +483,11 @@ MENTION_MAX=6
 #   ID|@handle:server|Display Name     ping plus a display-name override
 #
 # The optional third field replaces the name getoracles reports for that
-# slot, in the operator rows and in the HTML mention pill. Useful when the
-# daemon's name for a slot does not match who actually holds it: those
-# names come from a single slot-indexed list in the client that is not
-# chain-aware, so a mainnet node can report testnet operator names. Leave
-# the field off, or empty, to keep whatever the daemon says.
+# slot, in the operator rows and in the HTML mention pill. Since DigiByte
+# Core v9.26.6 (DigiByte-Core/digibyte#437) each chain reports its own
+# operator names, so the override is optional: use it only to show a slot
+# under a different name than the daemon's. Before v9.26.6 the names came
+# from one list shared by both chains and a mainnet node could report
+# testnet operator names; an override added for that reason is harmless to
+# leave in place. Leave the field off, or empty, to keep whatever the
+# daemon says.

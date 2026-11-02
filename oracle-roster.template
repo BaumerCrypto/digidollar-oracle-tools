@@ -17,10 +17,12 @@
 # name and the ping agree. Leave the field off, or empty, to keep whatever
 # getoracles returns.
 #
-# You need this when the reported name is not the operator holding the slot.
-# Those names come from a single slot-indexed list in the client that is not
-# chain-aware, so a mainnet node can report testnet operator names wherever
-# the two rosters assign a slot to different people.
+# Optional since DigiByte Core v9.26.6 (DigiByte-Core/digibyte#437): each
+# chain now reports its own operator names, so most rosters need no third
+# field at all. Before v9.26.6 the names came from a single slot-indexed
+# list that was not chain-aware, and a mainnet node could report testnet
+# operator names wherever the two rosters assign a slot to different
+# people. An override added for that reason is harmless to leave in place.
 #
 # One roster per instance:
 # Do NOT share one roster file between a mainnet and a testnet instance, and
