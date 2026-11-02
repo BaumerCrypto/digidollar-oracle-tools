@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.10.1-win.2
+# Version: 2.11.0-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -51,6 +51,21 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.11.0-win.1 — Parity with Linux v2.11.0: peer version census
+#          (Check 14), report only, idea from shenger in #digidollar.
+#          getpeerinfo once per pass, floor-relative tiers (current, below
+#          minimum, legacy, other, handshaking), summary info lines under
+#          the Peers line, and one debounced yellow alert when outbound
+#          peers at or above the minimum drop below $PEER_MIN_COMPAT_OUT.
+#          Never disconnects, never bans. Windows notes: the version match
+#          uses [regex]::Match because -match is case-insensitive and would
+#          count "/digibyte:" as a DigiByte node; the top-versions tie-break
+#          uses CompareOrdinal, the same codepoint order jq uses, because a
+#          culture-aware sort ignores hyphens; the getpeerinfo array is
+#          assigned first and then wrapped with @() (the issue #38 trap on
+#          PS 5.1). Ride-along: the uptime span is computed in UTC on both
+#          sides, so a DST change no longer shifts the summary's uptime by
+#          an hour.
 #   v2.10.1-win.2 — Check-Chain now guards .blocks and .headers before the
 #          [long] casts: a degenerate getblockchaininfo response becomes a
 #          "Chain: could not parse height data" warning line instead of a
@@ -427,7 +442,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.10.1-win.2"
+$SCRIPT_VERSION = "2.11.0-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -548,6 +563,22 @@ $NETWORK_EMOJI = ""
 # shows a standby line when DigiDollar isn't active on this chain.
 # Set to "no" to skip the RPC call entirely.
 $DD_ECONOMY_ENABLED = "yes"
+
+# Peer version census (v2.11.0-win.1, Check 14). Report only: never
+# disconnects, never bans. Reads getpeerinfo and adds peer version lines to
+# the health summary. Set $PEER_VERSION_CHECK = "no" to skip the call.
+$PEER_VERSION_CHECK = "yes"
+# Minimum version. Empty = use $MIN_ACCEPTED_VERSION (the Gitter bot's key)
+# if your config sets it, else the built-in v9.26.6. Resolved AFTER the
+# config is dot-sourced, so these defaults must stay empty.
+$PEER_MIN_VERSION = ""
+$MIN_ACCEPTED_VERSION = ""
+# Alert when fewer than this many OUTBOUND peers report the minimum or
+# newer. 0 = never alert (the summary lines still show).
+$PEER_MIN_COMPAT_OUT = 4
+# Consecutive scheduled passes on the other side before the alert fires
+# or recovers. 1 = no debounce.
+$PEER_DEBOUNCE_PASSES = 2
 
 # Drive letter to watch for free disk space (where your DigiByte datadir
 # lives — datadir default is %APPDATA%\DigiByte on drive C).
@@ -693,8 +724,31 @@ if (-not [string]::IsNullOrEmpty($NETWORK_LABEL)) {
     }
 }
 
+# v2.11.0-win.1: resolve the peer census minimum once, after the config is
+# dot-sourced. Precedence: $PEER_MIN_VERSION, then the bot's
+# $MIN_ACCEPTED_VERSION, then the built-in v9.26.6 (Thaw Day minimum).
+# A value that does not parse as X.Y.Z falls through to the next source.
+# rc/pre suffixes are dropped: the floor is a release number.
+$script:PeerMinFloor  = ""
+$script:PeerMinSource = ""
+foreach ($__pmv in @(@("PEER_MIN_VERSION", "$PEER_MIN_VERSION"),
+                     @("MIN_ACCEPTED_VERSION", "$MIN_ACCEPTED_VERSION"),
+                     @("built-in", "v9.26.6"))) {
+    $__m = [regex]::Match($__pmv[1], '^v?([0-9]+\.[0-9]+\.[0-9]+)')
+    if ($__m.Success) {
+        $script:PeerMinFloor  = "v" + $__m.Groups[1].Value
+        $script:PeerMinSource = $__pmv[0]
+        break
+    }
+}
+
 # Runtime flag — set by -DryRun
 $script:DRY_RUN = [bool]$DryRun
+
+# Runtime flag — set by Send-Summary (v2.11.0-win.1). The peer census
+# debounce advances only on the scheduled pass; summaries, -DryRun and
+# -Watch read it.
+$script:SUMMARY_MODE = $false
 
 # ============================================================================
 # UPDATE CHECK (v2.6.0-win.1)
@@ -1376,6 +1430,211 @@ function Check-Peers {
             Alert-Green "✅ Peers Recovered" "Peer count back to $total."
         }
         $script:Details.Add("✅ Peers: $total connected$peerDetail")
+    }
+}
+
+# --- Check 14: Peer version census (v2.11.0-win.1, report only) ---
+# Port of check_peer_versions in oracle-monitor.sh v2.11.0; same tiers,
+# same outbound filter, same debounce, same state files. NEVER calls
+# disconnectnode or setban. See the Linux comment block for the reasoning.
+#   current        /DigiByte:X.Y.Z at or above the floor (rc/pre by base)
+#   below minimum  v9.26.0 or newer, under the floor
+#   legacy         below v9.26.0
+#   other          not starting "/DigiByte:X.Y.Z" (case-sensitive)
+#   handshaking    version 0 or empty subver, counted apart
+# Outbound = connection_type outbound-full-relay, block-relay-only or
+# manual; feeler and addr-fetch skipped; no connection_type field falls
+# back to inbound -eq $false.
+function Get-PeerCensusVer3 {
+    param([string]$Text)
+    $m = [regex]::Matches($Text, '[0-9]+')
+    if ($m.Count -lt 3) { return $null }
+    return @([long]$m[0].Value, [long]$m[1].Value, [long]$m[2].Value)
+}
+
+function Compare-PeerCensusVer3 {
+    param($A, $B)
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($A[$i] -ne $B[$i]) { return $A[$i].CompareTo($B[$i]) }
+    }
+    return 0
+}
+
+function Format-PeerCensusTiers {
+    param([int]$Cur, [int]$Below, [int]$Legacy, [int]$Other, [int]$Hs)
+    $out = "$Cur current"
+    if ($Below  -gt 0) { $out += ", $Below below minimum" }
+    if ($Legacy -gt 0) { $out += ", $Legacy legacy" }
+    if ($Other  -gt 0) { $out += ", $Other other" }
+    if ($Hs     -gt 0) { $out += ", $Hs handshaking" }
+    return $out
+}
+
+function Check-PeerVersions {
+    $latch      = Join-Path $STATE_DIR "peer_versions_low"
+    $streakFile = Join-Path $STATE_DIR "peer_versions_streak"
+
+    if ("$PEER_VERSION_CHECK" -cin @("no", "NO", "No", "false", "False", "off", "0")) {
+        # Disabled: no RPC call. Drop any stale latch so re-enabling starts clean.
+        if (-not $script:DRY_RUN) {
+            Remove-Item -Path $latch, $streakFile -Force -ErrorAction SilentlyContinue
+        }
+        return
+    }
+
+    $thr = 0
+    if (-not [int]::TryParse("$PEER_MIN_COMPAT_OUT", [ref]$thr) -or $thr -lt 0) { $thr = 4 }
+    $deb = 0
+    if (-not [int]::TryParse("$PEER_DEBOUNCE_PASSES", [ref]$deb) -or $deb -lt 1) { $deb = 2 }
+    $floor = if ([string]::IsNullOrEmpty($script:PeerMinFloor)) { "v9.26.6" } else { $script:PeerMinFloor }
+    $f = Get-PeerCensusVer3 $floor
+    $base926 = @([long]9, [long]26, [long]0)
+
+    $raw = Invoke-DGBCli -RpcArgs @("getpeerinfo")
+    $peers = $null
+    if (-not [string]::IsNullOrEmpty($raw)) {
+        # Issue #38: on PS 5.1 a piped ConvertFrom-Json emits a top-level
+        # array as ONE object. Assign first, then wrap.
+        $parsed = $null
+        try { $parsed = $raw | ConvertFrom-Json } catch { $parsed = $null }
+        if ($null -ne $parsed -or $raw -match '^\s*\[\s*\]\s*$') {
+            if ($null -eq $parsed) { $peers = @() } else { $peers = @($parsed) }
+        }
+    }
+
+    if ($null -eq $peers) {
+        if ($script:SUMMARY_MODE) {
+            $script:Details.Add("ℹ️  Peer versions: could not query getpeerinfo")
+        }
+        return
+    }
+
+    $n = @{}
+    foreach ($k in @("out_current","out_below","out_legacy","out_other","out_hs",
+                     "in_current","in_below","in_legacy","in_other","in_hs")) { $n[$k] = 0 }
+    $tokens = @{}
+    $outTypes = @("outbound-full-relay", "block-relay-only", "manual")
+
+    foreach ($p in $peers) {
+        if ($null -eq $p) { continue }
+        $names = @($p.PSObject.Properties | ForEach-Object { $_.Name })
+        $role = $null
+        if ($names -contains "connection_type") {
+            $ct = [string]$p.connection_type
+            if ($ct -ceq "inbound") { $role = "in" }
+            elseif ($outTypes -ccontains $ct) { $role = "out" }
+            else { continue }
+        } else {
+            if ($p.inbound -eq $true) { $role = "in" } else { $role = "out" }
+        }
+
+        $sv = [string]$p.subver
+        $hs = ([string]::IsNullOrEmpty($sv)) -or (($names -contains "version") -and ("$($p.version)" -eq "0"))
+        if ($hs) { $n["${role}_hs"]++; continue }
+
+        $tier = "other"
+        $token = $null
+        if ([regex]::Match($sv, '^/DigiByte:[0-9]+\.[0-9]+\.[0-9]+').Success) {
+            $token = [regex]::Match($sv, '^/DigiByte:([^/(]+)').Groups[1].Value
+            $v = Get-PeerCensusVer3 $token
+            if ((Compare-PeerCensusVer3 $v $f) -ge 0)           { $tier = "current" }
+            elseif ((Compare-PeerCensusVer3 $v $base926) -ge 0) { $tier = "below" }
+            else                                                { $tier = "legacy" }
+            if ($tokens.ContainsKey($token)) { $tokens[$token]++ } else { $tokens[$token] = 1 }
+        }
+        $n["${role}_${tier}"]++
+    }
+
+    # Top 4 tokens: count desc, version desc, then codepoint order (as jq).
+    $list = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($t in $tokens.Keys) {
+        $list.Add([pscustomobject]@{ t = [string]$t; n = [int]$tokens[$t]; v = (Get-PeerCensusVer3 $t) })
+    }
+    $cmp = [System.Comparison[object]]{
+        param($x, $y)
+        if ($x.n -ne $y.n) { return $y.n.CompareTo($x.n) }
+        for ($i = 0; $i -lt 3; $i++) {
+            if ($x.v[$i] -ne $y.v[$i]) { return $y.v[$i].CompareTo($x.v[$i]) }
+        }
+        return [string]::CompareOrdinal($x.t, $y.t)
+    }
+    $list.Sort($cmp)
+    $topParts = New-Object 'System.Collections.Generic.List[string]'
+    for ($i = 0; $i -lt [Math]::Min(4, $list.Count); $i++) {
+        $topParts.Add("$($list[$i].t) ×$($list[$i].n)")
+    }
+    $top = $topParts -join " · "
+
+    $oc = $n["out_current"]; $ob = $n["out_below"]; $ol = $n["out_legacy"]; $oo = $n["out_other"]
+    $outTotal = $oc + $ob + $ol + $oo
+    $latched = Test-Path $latch
+
+    $cond = "hold"
+    if ($thr -eq 0) { $cond = "off" }
+    elseif ($outTotal -gt 0) { if ($oc -lt $thr) { $cond = "low" } else { $cond = "ok" } }
+
+    if ((-not $script:SUMMARY_MODE) -and (-not $script:DRY_RUN)) {
+        if ($cond -eq "off") {
+            Remove-Item -Path $latch, $streakFile -Force -ErrorAction SilentlyContinue
+            $latched = $false
+        } elseif ($cond -ne "hold") {
+            $want = ($cond -eq "low")
+            if ($want -eq $latched) {
+                Remove-Item -Path $streakFile -Force -ErrorAction SilentlyContinue
+            } else {
+                $k = 0
+                if (Test-Path $streakFile) {
+                    $kt = (Get-Content -Path $streakFile -Raw -ErrorAction SilentlyContinue)
+                    if (-not [int]::TryParse("$kt".Trim(), [ref]$k) -or $k -lt 0) { $k = 0 }
+                }
+                $k++
+                if ($k -ge $deb) {
+                    Remove-Item -Path $streakFile -Force -ErrorAction SilentlyContinue
+                    if ($want) {
+                        New-Item -ItemType File -Path $latch -Force | Out-Null
+                        $latched = $true
+                        $rest = New-Object 'System.Collections.Generic.List[string]'
+                        if ($ob -gt 0) { $rest.Add("$ob below minimum") }
+                        if ($ol -gt 0) { $rest.Add("$ol legacy") }
+                        if ($oo -gt 0) { $rest.Add("$oo other") }
+                        $restText = ""
+                        if ($rest.Count -gt 0) { $restText = " " + ($rest -join ", ") + "." }
+                        Alert-Yellow "⚠️  Outbound peers below $floor" ("Only $oc of $outTotal outbound peers report $floor or newer (minimum: $thr).$restText" + "`n" + "Your node still validates on its own rules. This is a partition early warning, not a node fault.")
+                    } else {
+                        Remove-Item -Path $latch -Force -ErrorAction SilentlyContinue
+                        $latched = $false
+                        Alert-Green "✅ Outbound peers on $floor+ recovered" "$oc of $outTotal outbound peers on $floor or newer."
+                    }
+                } else {
+                    [System.IO.File]::WriteAllText($streakFile, "$k")
+                }
+            }
+        }
+    }
+
+    if ($DryRun) {
+        $k = 0
+        if (Test-Path $streakFile) {
+            $kt = (Get-Content -Path $streakFile -Raw -ErrorAction SilentlyContinue)
+            if (-not [int]::TryParse("$kt".Trim(), [ref]$k)) { $k = 0 }
+        }
+        $src = if ([string]::IsNullOrEmpty($script:PeerMinSource)) { "built-in" } else { $script:PeerMinSource }
+        Write-Host "[DRY RUN] Peer census: minimum $floor (source: $src), outbound $oc/$outTotal current, threshold $thr, debounce $deb, latched=$($latched.ToString().ToLower()), streak=$k, condition=$cond"
+    }
+
+    if (-not $script:SUMMARY_MODE) { return }
+
+    $outLine = Format-PeerCensusTiers $oc $ob $ol $oo $n["out_hs"]
+    if ($latched) {
+        $script:Details.Add("⚠️  Peer versions out (minimum $floor): $outLine (below $thr!)")
+        $script:Warnings++
+    } else {
+        $script:Details.Add("ℹ️  Peer versions out (minimum $floor): $outLine")
+    }
+    $inLine = Format-PeerCensusTiers $n["in_current"] $n["in_below"] $n["in_legacy"] $n["in_other"] $n["in_hs"]
+    $script:Details.Add("ℹ️  Peer versions in: $inLine")
+    if (-not [string]::IsNullOrEmpty($top)) {
+        $script:Details.Add("ℹ️  Top: $top")
     }
 }
 
@@ -2445,11 +2704,13 @@ function Check-Quorum {
 # ============================================================================
 
 function Send-Summary {
+    $script:SUMMARY_MODE = $true   # v2.11.0-win.1: census debounce is read-only here
     Check-DigidollarActive   # v2.5: must run before oracle-dependent checks
     if (-not (Check-Daemon)) { return }
     Check-Oracle
     Check-Chain
     Check-Peers
+    Check-PeerVersions       # v2.11.0-win.1: Check 14 — peer version census
     Check-Price
     Check-DDEconomy          # v2.9.0-win.1: #40 — summary only, never Invoke-Checks
     Check-Disk
@@ -2480,7 +2741,9 @@ function Send-Summary {
     $uptimeStr = "unknown"
     try {
         $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-        $span = (Get-Date) - $boot
+        # v2.11.0-win.1: UTC on both sides, so a DST change between boot
+        # and now cannot shift the uptime by an hour.
+        $span = (Get-Date).ToUniversalTime() - $boot.ToUniversalTime()
         $uptimeStr = "up $($span.Days) days, $($span.Hours) hours, $($span.Minutes) minutes"
     } catch { }
 
@@ -2585,6 +2848,7 @@ function Invoke-Checks {
     Check-Oracle
     Check-Chain
     Check-Peers
+    Check-PeerVersions       # v2.11.0-win.1: Check 14 — alert + debounce owner
     Invoke-MaybeCheckPrice   # v2.7.0: PRICE_CHECK_EVERY gate around Check 5
     Check-Disk
     Check-Debuglog           # v2.7.0: Check 13 — debug.log watchdog

@@ -1,14 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.10.1
+# Version: 2.11.0
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
 # SPDX-License-Identifier: MIT
-readonly SCRIPT_VERSION="2.10.1"
+readonly SCRIPT_VERSION="2.11.0"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -36,6 +36,27 @@ readonly SCRIPT_VERSION="2.10.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.11.0 — Peer version census (Check 14), report only. Idea from
+#          shenger in #digidollar. Reads getpeerinfo once per pass and
+#          sorts peers into floor-relative tiers: current (at or above
+#          the minimum, rc/pre included), below minimum (v9.26.x under
+#          the floor), legacy (pre-v9.26 Core) and other (anything that
+#          is not a /DigiByte: full-node string, e.g. wallets, seeders,
+#          Satoshi clients). Outbound counts only full-relay,
+#          block-relay-only and manual connections; feeler and
+#          addr-fetch probes are skipped, and peers still in the
+#          handshake (version 0 or empty subver) are counted apart.
+#          The health summary gains two or three info lines under the
+#          Peers line. The 5-minute pass raises one yellow alert when
+#          outbound peers at or above the minimum drop below
+#          PEER_MIN_COMPAT_OUT, with a symmetric debounce: the alert and
+#          the recovery each need PEER_DEBOUNCE_PASSES consecutive
+#          passes, because a restart rebuilds outbound over minutes.
+#          Inbound is reported, never alerted on. The minimum comes from
+#          PEER_MIN_VERSION, else the bot's MIN_ACCEPTED_VERSION, else
+#          v9.26.6 (the Thaw Day minimum, mainnet block 24,490,000,
+#          2026-11-02 UTC). Never disconnects and never bans: subver is
+#          self-reported free text, and IP bans outlive upgrades.
 #   v2.10.1 — Hardening polish, no new features. (1) rotate_debuglog now
 #          verifies the truncate step: if the safety copy landed but the
 #          live file could not be truncated, a red "Rotation Incomplete"
@@ -533,6 +554,22 @@ DIGIBYTE_UPDATE_TTL=21600
 # RPC call entirely.
 DD_ECONOMY_ENABLED="yes"
 
+# Peer version census (v2.11.0, Check 14). Report only: never disconnects,
+# never bans. Reads getpeerinfo and adds peer version lines to the health
+# summary. Set PEER_VERSION_CHECK="no" to skip the getpeerinfo call.
+PEER_VERSION_CHECK="yes"
+# Minimum version. Empty = use MIN_ACCEPTED_VERSION (the Gitter bot's key,
+# often in the same config file), else the built-in v9.26.6. Resolved
+# AFTER the config is sourced, so these defaults must stay empty.
+PEER_MIN_VERSION=""
+MIN_ACCEPTED_VERSION=""
+# Alert when fewer than this many OUTBOUND peers report the minimum or
+# newer. 0 = never alert (the summary lines still show).
+PEER_MIN_COMPAT_OUT=4
+# Consecutive 5-minute passes on the other side before the alert fires or
+# recovers. 1 = no debounce.
+PEER_DEBOUNCE_PASSES=2
+
 # Optional glyph placed in front of NETWORK_LABEL on every alert title,
 # email subject, and health summary header (v2.9.0, #41). Empty by default,
 # so nothing changes for anyone who doesn't set it. Dual-instance operators
@@ -692,8 +729,31 @@ if [ -n "${NETWORK_LABEL:-}" ]; then
     fi
 fi
 
+# v2.11.0: resolve the peer census minimum once, after the config is
+# sourced. Precedence: PEER_MIN_VERSION, then the bot's
+# MIN_ACCEPTED_VERSION, then the built-in v9.26.6 (Thaw Day minimum).
+# A value that does not parse as X.Y.Z falls through to the next source.
+# rc/pre suffixes are dropped: the floor is a release number.
+PEER_MIN_FLOOR=""
+PEER_MIN_SOURCE=""
+for _pmv_pair in "PEER_MIN_VERSION:${PEER_MIN_VERSION:-}" \
+                 "MIN_ACCEPTED_VERSION:${MIN_ACCEPTED_VERSION:-}" \
+                 "built-in:v9.26.6"; do
+    _pmv_val="${_pmv_pair#*:}"
+    if [[ "$_pmv_val" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        PEER_MIN_FLOOR="v${BASH_REMATCH[1]}"
+        PEER_MIN_SOURCE="${_pmv_pair%%:*}"
+        break
+    fi
+done
+unset _pmv_pair _pmv_val
+
 # Runtime flag — set by --dry-run
 DRY_RUN=false
+
+# Runtime flag — set by send_summary (v2.11.0). The peer census debounce
+# advances only on the 5-minute pass; summaries and dry-runs read it.
+SUMMARY_MODE=false
 
 # ============================================================================
 # UPDATE CHECK (v2.6.0)
@@ -1248,6 +1308,188 @@ peer_maxconnections() {
     [ -f "$conf" ] || { echo "125"; return; }
     mc=$(grep -E '^[[:space:]]*maxconnections[[:space:]]*=' "$conf" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//;s/[[:space:]]*$//')
     if [ -n "$mc" ] && [ "$mc" -eq "$mc" ] 2>/dev/null; then echo "$mc"; else echo "125"; fi
+}
+
+# --- Check 14: Peer version census (v2.11.0, report only) ---
+# shenger asked in #digidollar (2026-11-01) for a peer minimum-version
+# check. This is the report-only version: it NEVER calls disconnectnode
+# or setban. subver is free text any peer can set, and an IP ban outlives
+# the upgrade it was meant to force. The node's own consensus rules
+# already decide which blocks it accepts.
+#
+# Tiers are relative to the minimum (PEER_MIN_FLOOR), so the labels stay
+# true when the next consensus change only moves the floor:
+#   current        /DigiByte:X.Y.Z at or above the floor (rc/pre counted
+#                  by base number; consensus-equivalent at the same base)
+#   below minimum  v9.26.0 or newer, under the floor (DigiDollar-aware)
+#   legacy         below v9.26.0 (pre-DigiDollar Core)
+#   other          anything not starting "/DigiByte:X.Y.Z" — wallets
+#                  ("/digj:0.16.2/DigiByte Wallet:9.26/"), seeders,
+#                  Satoshi clients, short or garbled strings
+#   handshaking    version 0 or empty subver: counted apart, not tiered
+# Version compare is a numeric array compare in jq, never sort -V.
+#
+# Outbound = connection_type outbound-full-relay, block-relay-only or
+# manual. feeler and addr-fetch are short probes and are skipped. Older
+# daemons without connection_type fall back to inbound==false.
+#
+# Alert: 5-minute pass only, outbound only (outbound peers are the node's
+# own choice, which is where a partition would show). Fires when outbound
+# current < PEER_MIN_COMPAT_OUT with at least one counted outbound peer.
+# Symmetric debounce: the latch flips only after PEER_DEBOUNCE_PASSES
+# consecutive passes on the other side, for the alert AND the recovery.
+# No data (RPC failure, zero counted outbound) holds the state as is, so
+# losing all outbound peers can't post a false recovery; Low Peers owns
+# that case. While latched, the summary's outbound line is a warning.
+peer_census_tiers() {
+    # $1 current $2 below $3 legacy $4 other $5 handshaking
+    local out="$1 current"
+    [ "$2" -gt 0 ] && out+=", $2 below minimum"
+    [ "$3" -gt 0 ] && out+=", $3 legacy"
+    [ "$4" -gt 0 ] && out+=", $4 other"
+    [ "$5" -gt 0 ] && out+=", $5 handshaking"
+    printf '%s' "$out"
+}
+
+check_peer_versions() {
+    local latch="$STATE_DIR/peer_versions_low"
+    local streak_file="$STATE_DIR/peer_versions_streak"
+
+    case "${PEER_VERSION_CHECK:-yes}" in
+        no|NO|No|false|off|0)
+            # Disabled: no RPC call. Drop any stale latch so re-enabling
+            # starts clean instead of carrying an old warning.
+            if [ "$DRY_RUN" != true ]; then rm -f "$latch" "$streak_file"; fi
+            return ;;
+    esac
+
+    local thr="${PEER_MIN_COMPAT_OUT:-4}"
+    [[ "$thr" =~ ^[0-9]+$ ]] || thr=4
+    local deb="${PEER_DEBOUNCE_PASSES:-2}"
+    [[ "$deb" =~ ^[0-9]+$ ]] && [ "$deb" -ge 1 ] || deb=2
+    local floor="${PEER_MIN_FLOOR:-v9.26.6}"
+
+    local pi row
+    pi=$($CLI getpeerinfo 2>/dev/null)
+    if [ -n "$pi" ]; then
+        row=$(echo "$pi" | jq -r --arg floor "$floor" '
+            def ver3: [scan("[0-9]+") | tonumber] | .[0:3];
+            ($floor | ver3) as $f
+            | def role:
+                if has("connection_type") then
+                  if .connection_type == "inbound" then "in"
+                  elif (.connection_type == "outbound-full-relay" or .connection_type == "block-relay-only"
+                        or .connection_type == "manual") then "out"
+                  else "skip" end
+                elif .inbound == true then "in" else "out" end;
+              def token:
+                (.subver // "") as $s
+                | if ($s | test("^/DigiByte:[0-9]+\\.[0-9]+\\.[0-9]+"))
+                  then ($s | capture("^/DigiByte:(?<t>[^/(]+)").t) else null end;
+              def tier($t):
+                if $t == null then "other"
+                else ($t | ver3) as $v
+                  | if $v >= $f then "current"
+                    elif $v >= [9,26,0] then "below"
+                    else "legacy" end
+                end;
+            [ .[]
+              | role as $r
+              | select($r != "skip")
+              | (if ((.subver // "") == "") or (has("version") and .version == 0)
+                 then {r: $r, c: "hs", t: null}
+                 else token as $t | {r: $r, c: tier($t), t: $t} end) ] as $p
+            | def n($r; $c): [$p[] | select(.r == $r and .c == $c)] | length;
+            [ n("out";"current"), n("out";"below"), n("out";"legacy"), n("out";"other"), n("out";"hs"),
+              n("in";"current"),  n("in";"below"),  n("in";"legacy"),  n("in";"other"),  n("in";"hs"),
+              ( [$p[] | select(.t != null) | .t]
+                | group_by(.) | map({t: .[0], n: length})
+                | sort_by(-.n, (.t | ver3 | map(-.)), .t)
+                | .[0:4] | map("\(.t) ×\(.n)") | join(" · ") ) ]
+            | @tsv' 2>/dev/null)
+    fi
+
+    if [ -z "$row" ]; then
+        if [ "$SUMMARY_MODE" = true ]; then
+            DETAILS+="ℹ️  Peer versions: could not query getpeerinfo\n"
+        fi
+        return
+    fi
+
+    local oc ob ol oo oh ic ib il io ih top
+    IFS=$'\t' read -r oc ob ol oo oh ic ib il io ih top <<< "$row"
+    local out_total=$((oc + ob + ol + oo))
+
+    local latched=false
+    [ -f "$latch" ] && latched=true
+
+    # Evaluate the alert condition only when it is meaningful.
+    local cond="hold"
+    if [ "$thr" -eq 0 ]; then
+        cond="off"
+    elif [ "$out_total" -gt 0 ]; then
+        if [ "$oc" -lt "$thr" ]; then cond="low"; else cond="ok"; fi
+    fi
+
+    if [ "$SUMMARY_MODE" != true ] && [ "$DRY_RUN" != true ]; then
+        if [ "$cond" = "off" ]; then
+            rm -f "$latch" "$streak_file"
+            latched=false
+        elif [ "$cond" != "hold" ]; then
+            local want=false
+            [ "$cond" = "low" ] && want=true
+            if [ "$want" = "$latched" ]; then
+                rm -f "$streak_file"
+            else
+                local k
+                k=$(cat "$streak_file" 2>/dev/null)
+                [[ "$k" =~ ^[0-9]+$ ]] || k=0
+                k=$((k + 1))
+                if [ "$k" -ge "$deb" ]; then
+                    rm -f "$streak_file"
+                    if [ "$want" = true ]; then
+                        touch "$latch"
+                        latched=true
+                        local rest=""
+                        [ "$ob" -gt 0 ] && rest+=" $ob below minimum,"
+                        [ "$ol" -gt 0 ] && rest+=" $ol legacy,"
+                        [ "$oo" -gt 0 ] && rest+=" $oo other,"
+                        rest="${rest%,}"
+                        [ -n "$rest" ] && rest="${rest}."
+                        alert_yellow "⚠️  Outbound peers below ${floor}" \
+                            "Only ${oc} of ${out_total} outbound peers report ${floor} or newer (minimum: ${thr}).${rest}"$'\n'"Your node still validates on its own rules. This is a partition early warning, not a node fault."
+                    else
+                        rm -f "$latch"
+                        latched=false
+                        alert_green "✅ Outbound peers on ${floor}+ recovered" \
+                            "${oc} of ${out_total} outbound peers on ${floor} or newer."
+                    fi
+                else
+                    echo "$k" > "$streak_file"
+                fi
+            fi
+        fi
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        local k
+        k=$(cat "$streak_file" 2>/dev/null)
+        [[ "$k" =~ ^[0-9]+$ ]] || k=0
+        echo "[DRY RUN] Peer census: minimum ${floor} (source: ${PEER_MIN_SOURCE:-built-in}), outbound ${oc}/${out_total} current, threshold ${thr}, debounce ${deb}, latched=${latched}, streak=${k}, condition=${cond}"
+    fi
+
+    [ "$SUMMARY_MODE" = true ] || return
+
+    if [ "$latched" = true ]; then
+        DETAILS+="⚠️  Peer versions out (minimum ${floor}): $(peer_census_tiers "$oc" "$ob" "$ol" "$oo" "$oh") (below ${thr}!)\n"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        DETAILS+="ℹ️  Peer versions out (minimum ${floor}): $(peer_census_tiers "$oc" "$ob" "$ol" "$oo" "$oh")\n"
+    fi
+    DETAILS+="ℹ️  Peer versions in: $(peer_census_tiers "$ic" "$ib" "$il" "$io" "$ih")\n"
+    if [ -n "$top" ]; then
+        DETAILS+="ℹ️  Top: ${top}\n"
+    fi
 }
 
 # --- Check 5: Oracle consensus price ---
@@ -2177,11 +2419,13 @@ check_quorum() {
 # ============================================================================
 
 send_summary() {
+    SUMMARY_MODE=true         # v2.11.0: census debounce is read-only here
     check_digidollar_active   # v2.5: must run before oracle-dependent checks
     check_daemon || return
     check_oracle
     check_chain
     check_peers
+    check_peer_versions       # v2.11.0: Check 14 — peer version census
     check_price
     check_dd_economy          # v2.9.0: #40 — summary only, never run_checks()
     check_disk
@@ -2306,6 +2550,7 @@ run_checks() {
     check_oracle
     check_chain
     check_peers
+    check_peer_versions       # v2.11.0: Check 14 — alert + debounce owner
     maybe_check_price         # v2.7.0: PRICE_CHECK_EVERY gate around Check 5
     check_disk
     check_debuglog            # v2.7.0: Check 13 — debug.log watchdog

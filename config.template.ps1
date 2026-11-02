@@ -341,6 +341,32 @@ $NETWORK_EMOJI = ""
 # Set to "no" to skip the getdigidollarstats call entirely.
 $DD_ECONOMY_ENABLED = "yes"
 
+# ---- Peer Version Census (v2.11.0-win.1+, report only) ----
+# Never disconnects, never bans. Reads getpeerinfo only.
+# Summary card: two or three info lines under Peers, for example
+#   ℹ️  Peer versions out (minimum v9.26.6): 16 current, 4 below minimum
+#   ℹ️  Peer versions in: 13 current, 6 below minimum, 2 other
+#   ℹ️  Top: 9.26.7 ×26 · 9.26.5 ×8 · 9.26.6 ×3 · 9.26.4 ×2
+# Tiers are relative to the minimum: current (at or above it, release
+# candidates counted by their base number), below minimum (v9.26.x under
+# it), legacy (older than v9.26.0) and other (wallets, seeders, anything
+# that is not a /DigiByte: full-node string). Outbound counts full-relay,
+# block-relay-only and manual connections; short feeler and addr-fetch
+# probes are skipped, and peers still mid-handshake are counted apart.
+# One yellow alert, outbound only, when fewer than $PEER_MIN_COMPAT_OUT
+# outbound peers report the minimum or newer. It fires, and recovers, only
+# after $PEER_DEBOUNCE_PASSES consecutive scheduled passes, so the outbound
+# rebuild after a daemon restart does not flap. Inbound is reported,
+# never alerted on.
+# Set $PEER_VERSION_CHECK = "no" to skip the getpeerinfo call entirely.
+$PEER_VERSION_CHECK = "yes"
+# Minimum version. Unset = use $MIN_ACCEPTED_VERSION (the Gitter bot's
+# key) if this file sets it, else the built-in v9.26.6 (the Thaw Day
+# minimum, mainnet block 24,490,000, 2026-11-02 UTC).
+# $PEER_MIN_VERSION = "v9.26.6"
+$PEER_MIN_COMPAT_OUT = 4      # alert below this many outbound peers at or above the minimum; 0 = never
+$PEER_DEBOUNCE_PASSES = 2     # consecutive passes before the alert fires or recovers; 1 = immediate
+
 # ---- Dual-Instance Monitoring (v2.3-win.1+) ----
 # oracle-monitor.ps1 supports -Config /path to run against a separate
 # config file. This lets you monitor testnet and mainnet from one PC
