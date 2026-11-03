@@ -87,9 +87,12 @@ DIGIBYTE_UPDATE_CHECK="yes"
 # DigiDollar economy line on the health summary (#40). One info line under
 # Price: "DD economy: $40,932.07 DD minted, 40,461,618 DGB locked
 # (332% collateralized)", the same wording the Gitter status bot uses.
-# Summary card only, never the 5-minute checks. Information only: it never
-# alerts and never changes the card color. Silently omitted if the RPC is
-# unavailable, and it shows a standby line before DigiDollar activates.
+# Summary card only, never the 5-minute checks, and it never sends an
+# alert card. Since v2.11.1 it carries the node's own verdict when the
+# daemon reports one (health_status, minting_restricted_reason): ✅ healthy,
+# ⚠️ and one card warning otherwise. An older daemon without those fields
+# gets the plain ℹ️ line. Silently omitted if the RPC is unavailable, and
+# it shows a standby line before DigiDollar activates.
 # Set to "no" to skip the getdigidollarstats call entirely.
 DD_ECONOMY_ENABLED="yes"
 
@@ -104,14 +107,23 @@ NETWORK_EMOJI=""
 
 # ---- v2.11.0: Peer version census (report only) ----
 # Never disconnects, never bans. Reads getpeerinfo only.
-# Summary card: two or three info lines under Peers, for example
-#   ℹ️  Peer versions out (minimum v9.26.6): 16 current, 4 below minimum
-#   ℹ️  Peer versions in: 13 current, 6 below minimum, 2 other
-#   ℹ️  Top: 9.26.7 ×26 · 9.26.5 ×8 · 9.26.6 ×3 · 9.26.4 ×2
+# Summary card (v2.11.1): two lines under Peers, for example
+#   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
+#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+# The first line is a check: ✅ when enough outbound peers are on the
+# minimum, ⚠️ while the alert below is latched, and ℹ️ when nothing was
+# judged ("alert off in config", no outbound peers yet, or below the
+# threshold but not yet confirmed). Outbound counts every outbound
+# connection the alert watches; inbound counts DigiByte nodes only, with
+# wallets and other clients listed after them. The second line is a list,
+# not a check, so it is always ℹ️: nodes in both directions, oldest to
+# newest, capped by PEER_VERSION_MAX (below).
 # Tiers are relative to the minimum: current (at or above it, release
 # candidates counted by their base number), below minimum (v9.26.x under
-# it), legacy (older than v9.26.0) and other (wallets, seeders, anything
-# that is not a /DigiByte: full-node string). Outbound counts full-relay,
+# it), legacy (older than v9.26.0), wallets (light clients that name
+# themselves a wallet) and other (seeders, crawlers, anything else that is
+# not a /DigiByte: full-node string). Every label is what the peer reports
+# about itself; nothing here can prove it. Outbound counts full-relay,
 # block-relay-only and manual connections; short feeler and addr-fetch
 # probes are skipped, and peers still mid-handshake are counted apart.
 # One yellow alert, outbound only, when fewer than PEER_MIN_COMPAT_OUT
@@ -127,6 +139,12 @@ PEER_VERSION_CHECK="yes"
 # PEER_MIN_VERSION="v9.26.6"
 PEER_MIN_COMPAT_OUT=4      # alert below this many outbound peers at or above the minimum; 0 = never
 PEER_DEBOUNCE_PASSES=2     # consecutive passes before the alert fires or recovers; 1 = immediate
+# The blue "Peer versions" list (v2.11.1). "no" hides it. It shows the
+# PEER_VERSION_MAX versions with the most peers (ties go to the newer
+# version), oldest to newest, then "+N more (M peers)" for the rest.
+# 0 = show every version, no cap. --dry-run always prints the full list.
+PEER_VERSION_DETAIL="yes"
+PEER_VERSION_MAX=6
 
 # ---- Oracle Identity ----
 ORACLE_ID=0

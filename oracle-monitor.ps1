@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.11.0-win.1
+# Version: 2.11.1-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -51,6 +51,21 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.11.1-win.1 — Parity with Linux v2.11.1: the health summary reads
+#          green when the network is healthy. Peer census as one check line
+#          ("Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2
+#          wallets", ✅ / ⚠️ latched / ℹ️ not judged), the per-version list
+#          as one info line ("Peer versions: v9.26.4 (1) · …", capped by
+#          $PEER_VERSION_MAX with "+N more (M peers)", $PEER_VERSION_DETAIL
+#          to hide it), wallets told apart from other clients, MuSig2
+#          nonces_complete and signing shown ✅ with a raw nonce count while
+#          the signer set is not chosen, the DD economy line carrying the
+#          node's own health verdict when the daemon reports one, and
+#          prices with six decimals (InvariantCulture, so a de-DE box still
+#          prints a decimal point). Windows notes: the wallet match is
+#          case-insensitive on purpose, the node match stays case-sensitive,
+#          and the versions-line ordering uses CompareOrdinal for ties, the
+#          same codepoint order jq uses.
 #   v2.11.0-win.1 — Parity with Linux v2.11.0: peer version census
 #          (Check 14), report only, idea from shenger in #digidollar.
 #          getpeerinfo once per pass, floor-relative tiers (current, below
@@ -442,7 +457,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.11.0-win.1"
+$SCRIPT_VERSION = "2.11.1-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -579,6 +594,13 @@ $PEER_MIN_COMPAT_OUT = 4
 # Consecutive scheduled passes on the other side before the alert fires
 # or recovers. 1 = no debounce.
 $PEER_DEBOUNCE_PASSES = 2
+# Blue "Peer versions" list on the health summary (v2.11.1-win.1). "no"
+# hides it.
+$PEER_VERSION_DETAIL = "yes"
+# How many versions that list shows before "+N more (M peers)". The kept
+# versions are the ones with the most peers, ties go to the newer version,
+# shown oldest to newest. 0 = show every version.
+$PEER_VERSION_MAX = 6
 
 # Drive letter to watch for free disk space (where your DigiByte datadir
 # lives — datadir default is %APPDATA%\DigiByte on drive C).
@@ -1207,6 +1229,24 @@ function Check-Daemon {
 }
 
 # --- Check 2: Is the oracle running and signing? ---
+# v2.11.1-win.1: prices print with six decimals. A JSON number such as
+# 0.00314 otherwise renders "$0.00314" one line above "$0.003157".
+# InvariantCulture keeps the decimal point on comma-decimal locales.
+function Format-Price {
+    param($Value)
+    if ($null -eq $Value) { return "unknown" }
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [double] -or $Value -is [decimal] -or $Value -is [single] -or
+        $Value -is [int] -or $Value -is [long]) {
+        return ([double]$Value).ToString("F6", $inv)
+    }
+    $d = 0.0
+    if ([double]::TryParse([string]$Value, [System.Globalization.NumberStyles]::Float, $inv, [ref]$d)) {
+        return $d.ToString("F6", $inv)
+    }
+    return [string]$Value
+}
+
 function Check-Oracle {
     $raw = Invoke-DGBCli -RpcArgs @("listoracle") -UseWallet
 
@@ -1248,7 +1288,7 @@ function Check-Oracle {
         # Get the price being reported
         $price = "unknown"
         if ($null -ne $info.PSObject.Properties['price_usd'] -and $null -ne $info.price_usd) {
-            $price = $info.price_usd
+            $price = Format-Price $info.price_usd
         }
         $script:Details.Add("✅ Oracle: running — reporting `$$price")
     }
@@ -1433,18 +1473,27 @@ function Check-Peers {
     }
 }
 
-# --- Check 14: Peer version census (v2.11.0-win.1, report only) ---
-# Port of check_peer_versions in oracle-monitor.sh v2.11.0; same tiers,
-# same outbound filter, same debounce, same state files. NEVER calls
-# disconnectnode or setban. See the Linux comment block for the reasoning.
+# --- Check 14: Peer version census (v2.11.0-win.1, report only; card v2.11.1-win.1) ---
+# Port of check_peer_versions in oracle-monitor.sh v2.11.1; same tiers,
+# same outbound filter, same debounce, same state files, same card lines.
+# NEVER calls disconnectnode or setban. See the Linux comment block for the
+# reasoning. Every label is what a peer reports about itself.
 #   current        /DigiByte:X.Y.Z at or above the floor (rc/pre by base)
 #   below minimum  v9.26.0 or newer, under the floor
 #   legacy         below v9.26.0
-#   other          not starting "/DigiByte:X.Y.Z" (case-sensitive)
+#   wallet         not a node string but names a wallet (case-insensitive)
+#   other          any other non-node string (node match is case-sensitive)
 #   handshaking    version 0 or empty subver, counted apart
 # Outbound = connection_type outbound-full-relay, block-relay-only or
 # manual; feeler and addr-fetch skipped; no connection_type field falls
 # back to inbound -eq $false.
+# Health summary (v2.11.1-win.1), two lines under Peers:
+#   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
+#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+# The census line is a check (✅, ⚠️ while latched, ℹ️ when nothing was
+# judged); the versions line is a list and always ℹ️, capped at
+# $PEER_VERSION_MAX versions (most peers first, ties to the newer version,
+# shown oldest to newest) plus "+N more (M peers)".
 function Get-PeerCensusVer3 {
     param([string]$Text)
     $m = [regex]::Matches($Text, '[0-9]+')
@@ -1460,14 +1509,45 @@ function Compare-PeerCensusVer3 {
     return 0
 }
 
+# Sort key for the versions line: X.Y.Z, then a final release after its own
+# release candidates (rc/pre N), the same key the Linux jq vkey builds.
+function Get-PeerCensusVKey {
+    param([string]$Text)
+    $v = Get-PeerCensusVer3 $Text
+    if ($null -eq $v) { $v = @([long]0, [long]0, [long]0) }
+    if ([regex]::Match($Text, 'rc|pre').Success) {
+        $num = [long]0
+        $rc = [regex]::Match($Text, '(?:rc|pre)([0-9]+)')
+        if ($rc.Success) { $num = [long]$rc.Groups[1].Value }
+        return @($v[0], $v[1], $v[2], [long]0, $num)
+    }
+    return @($v[0], $v[1], $v[2], [long]1, [long]0)
+}
+
+function Compare-PeerCensusVKey {
+    param($A, $B)
+    for ($i = 0; $i -lt 5; $i++) {
+        if ($A[$i] -ne $B[$i]) { return $A[$i].CompareTo($B[$i]) }
+    }
+    return 0
+}
+
 function Format-PeerCensusTiers {
-    param([int]$Cur, [int]$Below, [int]$Legacy, [int]$Other, [int]$Hs)
+    param([int]$Cur, [int]$Below, [int]$Legacy, [int]$Other, [int]$Hs, [int]$Wallets = 0)
     $out = "$Cur current"
-    if ($Below  -gt 0) { $out += ", $Below below minimum" }
-    if ($Legacy -gt 0) { $out += ", $Legacy legacy" }
-    if ($Other  -gt 0) { $out += ", $Other other" }
-    if ($Hs     -gt 0) { $out += ", $Hs handshaking" }
+    if ($Below   -gt 0) { $out += ", $Below below minimum" }
+    if ($Legacy  -gt 0) { $out += ", $Legacy legacy" }
+    if ($Wallets -gt 0) { $out += ", $Wallets wallets" }
+    if ($Other   -gt 0) { $out += ", $Other other" }
+    if ($Hs      -gt 0) { $out += ", $Hs handshaking" }
     return $out
+}
+
+function Format-PeerVersionList {
+    param($Items)
+    $parts = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($it in $Items) { $parts.Add("v$($it.t) ($($it.n))") }
+    return ($parts -join " · ")
 }
 
 function Check-PeerVersions {
@@ -1486,6 +1566,8 @@ function Check-PeerVersions {
     if (-not [int]::TryParse("$PEER_MIN_COMPAT_OUT", [ref]$thr) -or $thr -lt 0) { $thr = 4 }
     $deb = 0
     if (-not [int]::TryParse("$PEER_DEBOUNCE_PASSES", [ref]$deb) -or $deb -lt 1) { $deb = 2 }
+    $vmax = 0
+    if (-not [int]::TryParse("$PEER_VERSION_MAX", [ref]$vmax) -or $vmax -lt 0) { $vmax = 6 }
     $floor = if ([string]::IsNullOrEmpty($script:PeerMinFloor)) { "v9.26.6" } else { $script:PeerMinFloor }
     $f = Get-PeerCensusVer3 $floor
     $base926 = @([long]9, [long]26, [long]0)
@@ -1504,14 +1586,14 @@ function Check-PeerVersions {
 
     if ($null -eq $peers) {
         if ($script:SUMMARY_MODE) {
-            $script:Details.Add("ℹ️  Peer versions: could not query getpeerinfo")
+            $script:Details.Add("ℹ️  Peers on ${floor}+: could not query getpeerinfo")
         }
         return
     }
 
     $n = @{}
-    foreach ($k in @("out_current","out_below","out_legacy","out_other","out_hs",
-                     "in_current","in_below","in_legacy","in_other","in_hs")) { $n[$k] = 0 }
+    foreach ($k in @("out_current","out_below","out_legacy","out_wallet","out_other","out_hs",
+                     "in_current","in_below","in_legacy","in_wallet","in_other","in_hs")) { $n[$k] = 0 }
     $tokens = @{}
     $outTypes = @("outbound-full-relay", "block-relay-only", "manual")
 
@@ -1533,7 +1615,6 @@ function Check-PeerVersions {
         if ($hs) { $n["${role}_hs"]++; continue }
 
         $tier = "other"
-        $token = $null
         if ([regex]::Match($sv, '^/DigiByte:[0-9]+\.[0-9]+\.[0-9]+').Success) {
             $token = [regex]::Match($sv, '^/DigiByte:([^/(]+)').Groups[1].Value
             $v = Get-PeerCensusVer3 $token
@@ -1541,32 +1622,52 @@ function Check-PeerVersions {
             elseif ((Compare-PeerCensusVer3 $v $base926) -ge 0) { $tier = "below" }
             else                                                { $tier = "legacy" }
             if ($tokens.ContainsKey($token)) { $tokens[$token]++ } else { $tokens[$token] = 1 }
+        } elseif ([regex]::Match($sv, 'wallet', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase).Success) {
+            $tier = "wallet"
         }
         $n["${role}_${tier}"]++
     }
 
-    # Top 4 tokens: count desc, version desc, then codepoint order (as jq).
-    $list = New-Object 'System.Collections.Generic.List[object]'
+    # Versions line: rank by count desc, then newer version first, then
+    # codepoint order (as jq); keep $vmax; show the kept ones oldest first.
+    $ranked = New-Object 'System.Collections.Generic.List[object]'
     foreach ($t in $tokens.Keys) {
-        $list.Add([pscustomobject]@{ t = [string]$t; n = [int]$tokens[$t]; v = (Get-PeerCensusVer3 $t) })
+        $ranked.Add([pscustomobject]@{ t = [string]$t; n = [int]$tokens[$t]; k = (Get-PeerCensusVKey ([string]$t)) })
     }
-    $cmp = [System.Comparison[object]]{
+    $byRank = [System.Comparison[object]]{
         param($x, $y)
         if ($x.n -ne $y.n) { return $y.n.CompareTo($x.n) }
-        for ($i = 0; $i -lt 3; $i++) {
-            if ($x.v[$i] -ne $y.v[$i]) { return $y.v[$i].CompareTo($x.v[$i]) }
-        }
+        $c = Compare-PeerCensusVKey $y.k $x.k
+        if ($c -ne 0) { return $c }
         return [string]::CompareOrdinal($x.t, $y.t)
     }
-    $list.Sort($cmp)
-    $topParts = New-Object 'System.Collections.Generic.List[string]'
-    for ($i = 0; $i -lt [Math]::Min(4, $list.Count); $i++) {
-        $topParts.Add("$($list[$i].t) ×$($list[$i].n)")
+    $byVersion = [System.Comparison[object]]{
+        param($x, $y)
+        $c = Compare-PeerCensusVKey $x.k $y.k
+        if ($c -ne 0) { return $c }
+        return [string]::CompareOrdinal($x.t, $y.t)
     }
-    $top = $topParts -join " · "
+    $ranked.Sort($byRank)
+    $kept = New-Object 'System.Collections.Generic.List[object]'
+    $hiddenN = 0
+    $hiddenPeers = 0
+    for ($i = 0; $i -lt $ranked.Count; $i++) {
+        if ($vmax -eq 0 -or $i -lt $vmax) { $kept.Add($ranked[$i]) }
+        else { $hiddenN++; $hiddenPeers += $ranked[$i].n }
+    }
+    $kept.Sort($byVersion)
+    $all = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($r in $ranked) { $all.Add($r) }
+    $all.Sort($byVersion)
+    $vShow = Format-PeerVersionList $kept
+    $vAll  = Format-PeerVersionList $all
 
-    $oc = $n["out_current"]; $ob = $n["out_below"]; $ol = $n["out_legacy"]; $oo = $n["out_other"]
+    $oc = $n["out_current"]; $ob = $n["out_below"]; $ol = $n["out_legacy"]
+    $oo = $n["out_other"] + $n["out_wallet"]
+    $ic = $n["in_current"]; $ib = $n["in_below"]; $il = $n["in_legacy"]
+    $iw = $n["in_wallet"]; $io = $n["in_other"]
     $outTotal = $oc + $ob + $ol + $oo
+    $inNodes  = $ic + $ib + $il
     $latched = Test-Path $latch
 
     $cond = "hold"
@@ -1620,21 +1721,56 @@ function Check-PeerVersions {
         }
         $src = if ([string]::IsNullOrEmpty($script:PeerMinSource)) { "built-in" } else { $script:PeerMinSource }
         Write-Host "[DRY RUN] Peer census: minimum $floor (source: $src), outbound $oc/$outTotal current, threshold $thr, debounce $deb, latched=$($latched.ToString().ToLower()), streak=$k, condition=$cond"
+        $outDetail = Format-PeerCensusTiers $oc $ob $ol $oo $n["out_hs"]
+        $inDetail  = Format-PeerCensusTiers $ic $ib $il $io $n["in_hs"] $iw
+        Write-Host "[DRY RUN] Peer census detail: outbound $outDetail; inbound $inDetail"
+        $vAllText = if ([string]::IsNullOrEmpty($vAll)) { "none" } else { $vAll }
+        Write-Host "[DRY RUN] Peer versions (all, uncapped): $vAllText"
     }
 
     if (-not $script:SUMMARY_MODE) { return }
 
-    $outLine = Format-PeerCensusTiers $oc $ob $ol $oo $n["out_hs"]
-    if ($latched) {
-        $script:Details.Add("⚠️  Peer versions out (minimum $floor): $outLine (below $thr!)")
-        $script:Warnings++
-    } else {
-        $script:Details.Add("ℹ️  Peer versions out (minimum $floor): $outLine")
+    # Census line: what is counted leads, so the numbers cannot be read as
+    # oracles; the wallet/other tail explains the inbound gap.
+    if ($outTotal -gt 0) { $outPart = "$oc of $outTotal outbound" } else { $outPart = "no outbound peers yet" }
+    $inPart = ""
+    if ($inNodes -gt 0) { $inPart = ", $ic of $inNodes inbound" }
+    $extras = ""
+    if ($iw -gt 0) {
+        $extras = "$iw wallet"
+        if ($iw -ne 1) { $extras += "s" }
     }
-    $inLine = Format-PeerCensusTiers $n["in_current"] $n["in_below"] $n["in_legacy"] $n["in_other"] $n["in_hs"]
-    $script:Details.Add("ℹ️  Peer versions in: $inLine")
-    if (-not [string]::IsNullOrEmpty($top)) {
-        $script:Details.Add("ℹ️  Top: $top")
+    if ($io -gt 0) {
+        if ($extras -ne "") { $extras += ", " }
+        $extras += "$io other"
+    }
+    if ($extras -ne "") { $extras = ", plus $extras" }
+    $line = "Peers on ${floor}+: $outPart$inPart$extras"
+
+    if ($latched) {
+        $script:Details.Add("⚠️  $line (below $thr!)")
+        $script:Warnings++
+    } elseif ($thr -eq 0) {
+        $script:Details.Add("ℹ️  $line (alert off in config)")
+    } elseif ($outTotal -eq 0) {
+        $script:Details.Add("ℹ️  $line (checking)")
+    } elseif ($oc -lt $thr) {
+        $script:Details.Add("ℹ️  $line (checking, below $thr)")
+    } else {
+        $script:Details.Add("✅ $line")
+    }
+
+    # Versions line: a list, not a check, so always ℹ️.
+    if (-not ("$PEER_VERSION_DETAIL" -cin @("no", "NO", "No", "false", "False", "off", "0"))) {
+        if (-not [string]::IsNullOrEmpty($vShow)) {
+            $more = ""
+            if ($hiddenN -gt 0) {
+                $pw = "peers"
+                if ($hiddenPeers -eq 1) { $pw = "peer" }
+                $more = " · +$hiddenN more ($hiddenPeers $pw)"
+            }
+            $script:Details.Add("ℹ️  Peer versions: $vShow$more")
+        }
     }
 }
 
@@ -1666,7 +1802,7 @@ function Check-Price {
 
     $priceUsd = "unknown"
     if ($null -ne $info.PSObject.Properties['price_usd'] -and $null -ne $info.price_usd) {
-        $priceUsd = $info.price_usd
+        $priceUsd = Format-Price $info.price_usd
     }
     $isStale = $false
     if ($null -ne $info.PSObject.Properties['is_stale']) { $isStale = [bool]$info.is_stale }
@@ -1704,7 +1840,7 @@ function Check-Price {
     }
 }
 
-# --- DD economy line (v2.9.0-win.1, #40): INFORMATION ONLY, summary only ---
+# --- DD economy line (v2.9.0-win.1, #40; node verdict v2.11.1-win.1), summary only ---
 #
 # Requested in the DigiDollar Gitter room: show the network-wide DigiDollar
 # economy on the monitor card the way oracle-network-status.sh has shown it
@@ -1717,8 +1853,12 @@ function Check-Price {
 # live there, and a network-wide total under a Node Down card would be
 # noise at the exact moment the operator wants signal.
 #
-# This function never alerts and never touches $script:Warnings or
-# $script:Issues. Worst case it appends nothing at all.
+# This function never sends an alert card. v2.11.1-win.1: when the daemon
+# reports its own verdict (health_status and minting_restricted_reason,
+# DigiByte Core v9.26.7) the line becomes a check: ✅ for "healthy" with no
+# restriction, ⚠️ plus one warning for anything else, in the node's words.
+# A daemon without those fields keeps the plain ℹ️ line. Worst case it
+# appends nothing at all.
 #
 # FIELD MAP (verified live on v9.26.4 testnet26 AND v9.26.5 mainnet,
 # identical on both, so the BIP90 burial did not move these the way it
@@ -1776,17 +1916,48 @@ function Check-DDEconomy {
     $lockedDisplay = ([math]::Floor($collateral)).ToString("N0", $inv)
 
     # The ratio is a nice-to-have, not load-bearing. If it is missing or
-    # non-numeric the line still renders without the parenthetical.
-    $ratioDisplay = ""
+    # non-numeric the line still renders without it.
+    $pct = ""
     if ($null -ne $stats.health_percentage) {
         try {
-            $ratioDisplay = " (" + ([long]$stats.health_percentage).ToString($inv) + "% collateralized)"
+            $pct = ([long]$stats.health_percentage).ToString($inv) + "% collateralized"
         } catch {
-            $ratioDisplay = ""
+            $pct = ""
         }
     }
+    $base = "DD economy: `$$supplyDisplay DD minted, $lockedDisplay DGB locked"
 
-    $script:Details.Add("ℹ️  DD economy: `$$supplyDisplay DD minted, $lockedDisplay DGB locked$ratioDisplay")
+    # v2.11.1-win.1: the node's own verdict, reduced to a safe character
+    # set and length before it reaches a card (same set as Linux).
+    $health = ""
+    $reason = ""
+    if ($null -ne $stats.PSObject.Properties['health_status'] -and $null -ne $stats.health_status) {
+        $health = ([string]$stats.health_status) -creplace '[^A-Za-z0-9_. -]', ''
+        if ($health.Length -gt 40) { $health = $health.Substring(0, 40) }
+    }
+    if ($null -ne $stats.PSObject.Properties['minting_restricted_reason'] -and $null -ne $stats.minting_restricted_reason) {
+        $reason = ([string]$stats.minting_restricted_reason) -creplace '[^A-Za-z0-9_. -]', ''
+        if ($reason.Length -gt 40) { $reason = $reason.Substring(0, 40) }
+    }
+
+    if ([string]::IsNullOrEmpty($health)) {
+        $ratioDisplay = ""
+        if ($pct -ne "") { $ratioDisplay = " ($pct)" }
+        $script:Details.Add("ℹ️  $base$ratioDisplay")
+        return
+    }
+
+    $restricted = (-not [string]::IsNullOrEmpty($reason)) -and ($reason -cne "none")
+    $note = ""
+    if ($pct -ne "") { $note = "$pct, " }
+    if (($health -ceq "healthy") -and (-not $restricted)) {
+        $script:Details.Add("✅ $base (${note}healthy)")
+        return
+    }
+    if ($health -ceq "healthy") { $note += "healthy" } else { $note += "health: $health" }
+    if ($restricted) { $note += ", minting restricted: $reason" }
+    $script:Details.Add("⚠️  $base ($note)")
+    $script:Warnings++
 }
 
 # --- Check 6: Disk space ---
@@ -2479,8 +2650,15 @@ function Check-Quorum {
     # v2.5.6-win.1: musigDetail now carries its own status icon so the
     # line renders consistently alongside the other ✅/ℹ️/⚠️  health
     # lines instead of floating with a bare three-space indent.
+    # v2.11.1-win.1: nonces_complete and signing are normal phases, so ✅.
+    # During nonces_complete the nonce count is roster-wide (the signer set
+    # is not chosen yet), so it prints as a raw count, not "34/7".
     if ($musigState -eq "complete") {
         $musigDetail = "✅ MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs"
+    } elseif ("$musigState" -ceq "nonces_complete") {
+        $musigDetail = "✅ MuSig2: epoch $musigEpoch, nonces_complete, $musigNonces nonces in, $musigSigs/$consensusRequired sigs"
+    } elseif ("$musigState" -ceq "signing") {
+        $musigDetail = "✅ MuSig2: epoch $musigEpoch, signing, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs"
     } elseif ("$musigEpoch" -ne "?") {
         $musigDetail = "ℹ️  MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
     } else {

@@ -1,14 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.11.0
+# Version: 2.11.1
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
 # SPDX-License-Identifier: MIT
-readonly SCRIPT_VERSION="2.11.0"
+readonly SCRIPT_VERSION="2.11.1"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -36,6 +36,38 @@ readonly SCRIPT_VERSION="2.11.0"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.11.1 — The health summary reads green when the network is healthy.
+#          v2.11.0 added three blue info lines for the peer census, and a
+#          card that is always half blue teaches the reader to ignore
+#          blue. Blue now means only "nothing was judged".
+#          (1) Peer census line rewritten as one check line:
+#          "Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus
+#          2 wallets". Outbound counts every outbound connection the alert
+#          watches; inbound counts DigiByte nodes only, with wallets and
+#          other clients listed after. ✅ when it passes, ⚠️ while the
+#          alert is latched, ℹ️ when nothing was judged ("alert off in
+#          config", no outbound yet, or below the threshold but not yet
+#          confirmed). Wallet-tagged clients are now told apart from
+#          "other" (seeders, crawlers, odd strings). All labels are what
+#          peers report about themselves.
+#          (2) The per-version list became one readable info line,
+#          "Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) ·
+#          v9.26.7 (26)": nodes only, oldest to newest, the
+#          PEER_VERSION_MAX versions with the most peers (default 6, 0 =
+#          all, ties go to the newer version) plus "+N more (M peers)".
+#          PEER_VERSION_DETAIL="no" hides it. --dry-run prints everything.
+#          (3) MuSig2: the normal phases nonces_complete and signing are ✅
+#          like complete. During nonces_complete the nonce count covers
+#          the whole roster before the signer set is chosen, so it now
+#          prints as a raw count ("34 nonces in") instead of a misleading
+#          "34/7". Unknown states stay ℹ️, a parse failure stays ⚠️.
+#          (4) DD economy line carries the node's own verdict when the
+#          daemon reports one (health_status, minting_restricted_reason,
+#          DigiByte Core v9.26.7): ✅ healthy, ⚠️ (and one warning) for
+#          anything else, printed in the node's own words. Older daemons
+#          without those fields keep the plain ℹ️ line. Still summary only,
+#          no 5-minute alert: it is a network-wide condition.
+#          (5) Prices print with six decimals, so $0.00314 reads $0.003140.
 #   v2.11.0 — Peer version census (Check 14), report only. Idea from
 #          shenger in #digidollar. Reads getpeerinfo once per pass and
 #          sorts peers into floor-relative tiers: current (at or above
@@ -569,6 +601,12 @@ PEER_MIN_COMPAT_OUT=4
 # Consecutive 5-minute passes on the other side before the alert fires or
 # recovers. 1 = no debounce.
 PEER_DEBOUNCE_PASSES=2
+# Blue "Peer versions" list on the health summary (v2.11.1). "no" hides it.
+PEER_VERSION_DETAIL="yes"
+# How many versions that list shows before "+N more (M peers)". The kept
+# versions are the ones with the most peers, ties go to the newer version,
+# shown oldest to newest. 0 = show every version.
+PEER_VERSION_MAX=6
 
 # Optional glyph placed in front of NETWORK_LABEL on every alert title,
 # email subject, and health summary header (v2.9.0, #41). Empty by default,
@@ -1057,6 +1095,19 @@ ISSUES=0
 WARNINGS=0
 DETAILS=""
 
+# v2.11.1: prices print with six decimals. jq -r prints a JSON number as
+# is, so a price of exactly 3140 micro-USD read "$0.00314" one line above
+# a "$0.003157". Non-numeric input ("unknown") passes through untouched.
+fmt_price() {
+    local p="$1" out
+    if [[ "$p" =~ ^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$ ]]; then
+        out=$(LC_ALL=C printf '%.6f' "$p" 2>/dev/null) || out="$p"
+        printf '%s' "$out"
+    else
+        printf '%s' "$p"
+    fi
+}
+
 # --- Check 1: Is digibyted (or digibyte-qt) running? ---
 # v2.5.2: Auto-detects either the headless daemon or the Qt GUI wallet.
 # DAEMON_PROCESS can be set in config to force a specific match
@@ -1137,6 +1188,7 @@ check_oracle() {
         # Get the price being reported
         local price
         price=$(echo "$oracle_info" | jq -r '.price_usd // "unknown"' 2>/dev/null)
+        price=$(fmt_price "$price")
         DETAILS+="✅ Oracle: running — reporting \$$price\n"
     fi
 }
@@ -1310,12 +1362,13 @@ peer_maxconnections() {
     if [ -n "$mc" ] && [ "$mc" -eq "$mc" ] 2>/dev/null; then echo "$mc"; else echo "125"; fi
 }
 
-# --- Check 14: Peer version census (v2.11.0, report only) ---
+# --- Check 14: Peer version census (v2.11.0, report only; card v2.11.1) ---
 # shenger asked in #digidollar (2026-11-01) for a peer minimum-version
 # check. This is the report-only version: it NEVER calls disconnectnode
 # or setban. subver is free text any peer can set, and an IP ban outlives
 # the upgrade it was meant to force. The node's own consensus rules
-# already decide which blocks it accepts.
+# already decide which blocks it accepts. Every label below is what a
+# peer reports about itself, not something the monitor can prove.
 #
 # Tiers are relative to the minimum (PEER_MIN_FLOOR), so the labels stay
 # true when the next consensus change only moves the floor:
@@ -1323,15 +1376,30 @@ peer_maxconnections() {
 #                  by base number; consensus-equivalent at the same base)
 #   below minimum  v9.26.0 or newer, under the floor (DigiDollar-aware)
 #   legacy         below v9.26.0 (pre-DigiDollar Core)
-#   other          anything not starting "/DigiByte:X.Y.Z" — wallets
-#                  ("/digj:0.16.2/DigiByte Wallet:9.26/"), seeders,
-#                  Satoshi clients, short or garbled strings
+#   wallet         not a /DigiByte:X.Y.Z node string but names a wallet,
+#                  e.g. "/digj:0.16.2/DigiByte Wallet:9.26/" (light client)
+#   other          any other non-node string: seeders, crawlers, Satoshi
+#                  clients, short or garbled strings
 #   handshaking    version 0 or empty subver: counted apart, not tiered
 # Version compare is a numeric array compare in jq, never sort -V.
 #
 # Outbound = connection_type outbound-full-relay, block-relay-only or
 # manual. feeler and addr-fetch are short probes and are skipped. Older
 # daemons without connection_type fall back to inbound==false.
+#
+# Health summary (v2.11.1), two lines under Peers:
+#   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
+#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+# Outbound counts every counted outbound connection, the same peers the
+# alert watches. Inbound counts DigiByte nodes only; wallets and other
+# clients follow as "plus N wallets, N other". The census line is a
+# check: ✅ when it passes, ⚠️ while the alert is latched, ℹ️ when nothing
+# was judged (alert off in config, no outbound yet, or below the threshold
+# but not yet confirmed by the debounce). The versions line is a list, not
+# a check, so it is always ℹ️: nodes in both directions, the
+# PEER_VERSION_MAX versions with the most peers (ties go to the newer
+# version), shown oldest to newest, then "+N more (M peers)". --dry-run
+# prints the full breakdown whatever the settings.
 #
 # Alert: 5-minute pass only, outbound only (outbound peers are the node's
 # own choice, which is where a partition would show). Fires when outbound
@@ -1340,12 +1408,13 @@ peer_maxconnections() {
 # consecutive passes on the other side, for the alert AND the recovery.
 # No data (RPC failure, zero counted outbound) holds the state as is, so
 # losing all outbound peers can't post a false recovery; Low Peers owns
-# that case. While latched, the summary's outbound line is a warning.
+# that case. Wallets cannot trip it: they are inbound-only light clients.
 peer_census_tiers() {
-    # $1 current $2 below $3 legacy $4 other $5 handshaking
+    # $1 current $2 below $3 legacy $4 other $5 handshaking [$6 wallets]
     local out="$1 current"
     [ "$2" -gt 0 ] && out+=", $2 below minimum"
     [ "$3" -gt 0 ] && out+=", $3 legacy"
+    [ "${6:-0}" -gt 0 ] && out+=", $6 wallets"
     [ "$4" -gt 0 ] && out+=", $4 other"
     [ "$5" -gt 0 ] && out+=", $5 handshaking"
     printf '%s' "$out"
@@ -1368,12 +1437,18 @@ check_peer_versions() {
     local deb="${PEER_DEBOUNCE_PASSES:-2}"
     [[ "$deb" =~ ^[0-9]+$ ]] && [ "$deb" -ge 1 ] || deb=2
     local floor="${PEER_MIN_FLOOR:-v9.26.6}"
+    local vmax="${PEER_VERSION_MAX:-6}"
+    [[ "$vmax" =~ ^[0-9]+$ ]] || vmax=6
 
     local pi row
     pi=$($CLI getpeerinfo 2>/dev/null)
     if [ -n "$pi" ]; then
-        row=$(echo "$pi" | jq -r --arg floor "$floor" '
+        row=$(echo "$pi" | jq -r --arg floor "$floor" --argjson vmax "$vmax" '
             def ver3: [scan("[0-9]+") | tonumber] | .[0:3];
+            def vkey: ver3 + (if test("rc|pre")
+                              then [0, ([scan("(?:rc|pre)([0-9]+)")] | if length > 0 then (.[0][0] | tonumber) else 0 end)]
+                              else [1, 0] end);
+            def vlist: map("v\(.t) (\(.n))") | join(" · ");
             ($floor | ver3) as $f
             | def role:
                 if has("connection_type") then
@@ -1386,8 +1461,8 @@ check_peer_versions() {
                 (.subver // "") as $s
                 | if ($s | test("^/DigiByte:[0-9]+\\.[0-9]+\\.[0-9]+"))
                   then ($s | capture("^/DigiByte:(?<t>[^/(]+)").t) else null end;
-              def tier($t):
-                if $t == null then "other"
+              def tier($t; $s):
+                if $t == null then (if ($s | test("wallet"; "i")) then "wallet" else "other" end)
                 else ($t | ver3) as $v
                   | if $v >= $f then "current"
                     elif $v >= [9,26,0] then "below"
@@ -1396,29 +1471,36 @@ check_peer_versions() {
             [ .[]
               | role as $r
               | select($r != "skip")
-              | (if ((.subver // "") == "") or (has("version") and .version == 0)
+              | (.subver // "") as $s
+              | (if ($s == "") or (has("version") and .version == 0)
                  then {r: $r, c: "hs", t: null}
-                 else token as $t | {r: $r, c: tier($t), t: $t} end) ] as $p
+                 else token as $t | {r: $r, c: tier($t; $s), t: $t} end) ] as $p
             | def n($r; $c): [$p[] | select(.r == $r and .c == $c)] | length;
-            [ n("out";"current"), n("out";"below"), n("out";"legacy"), n("out";"other"), n("out";"hs"),
-              n("in";"current"),  n("in";"below"),  n("in";"legacy"),  n("in";"other"),  n("in";"hs"),
-              ( [$p[] | select(.t != null) | .t]
-                | group_by(.) | map({t: .[0], n: length})
-                | sort_by(-.n, (.t | ver3 | map(-.)), .t)
-                | .[0:4] | map("\(.t) ×\(.n)") | join(" · ") ) ]
+            ( [$p[] | select(.t != null) | .t] | group_by(.) | map({t: .[0], n: length}) ) as $g
+            | ( $g | sort_by(-.n, (.t | vkey | map(-.))) ) as $ranked
+            | ( if $vmax > 0 then $ranked[0:$vmax] else $ranked end ) as $kept
+            | ( if $vmax > 0 then $ranked[$vmax:] else [] end ) as $hidden
+            | [ n("out";"current"), n("out";"below"), n("out";"legacy"),
+                (n("out";"other") + n("out";"wallet")), n("out";"hs"),
+                n("in";"current"), n("in";"below"), n("in";"legacy"),
+                n("in";"wallet"), n("in";"other"), n("in";"hs"),
+                ($hidden | length), ($hidden | map(.n) | add // 0),
+                ($kept | sort_by(.t | vkey) | vlist),
+                ($g | sort_by(.t | vkey) | vlist) ]
             | @tsv' 2>/dev/null)
     fi
 
     if [ -z "$row" ]; then
         if [ "$SUMMARY_MODE" = true ]; then
-            DETAILS+="ℹ️  Peer versions: could not query getpeerinfo\n"
+            DETAILS+="ℹ️  Peers on ${floor}+: could not query getpeerinfo\n"
         fi
         return
     fi
 
-    local oc ob ol oo oh ic ib il io ih top
-    IFS=$'\t' read -r oc ob ol oo oh ic ib il io ih top <<< "$row"
+    local oc ob ol oo oh ic ib il iw io ih hn hp vshow vall
+    IFS=$'\t' read -r oc ob ol oo oh ic ib il iw io ih hn hp vshow vall <<< "$row"
     local out_total=$((oc + ob + ol + oo))
+    local in_nodes=$((ic + ib + il))
 
     local latched=false
     [ -f "$latch" ] && latched=true
@@ -1476,20 +1558,61 @@ check_peer_versions() {
         k=$(cat "$streak_file" 2>/dev/null)
         [[ "$k" =~ ^[0-9]+$ ]] || k=0
         echo "[DRY RUN] Peer census: minimum ${floor} (source: ${PEER_MIN_SOURCE:-built-in}), outbound ${oc}/${out_total} current, threshold ${thr}, debounce ${deb}, latched=${latched}, streak=${k}, condition=${cond}"
+        echo "[DRY RUN] Peer census detail: outbound $(peer_census_tiers "$oc" "$ob" "$ol" "$oo" "$oh"); inbound $(peer_census_tiers "$ic" "$ib" "$il" "$io" "$ih" "$iw")"
+        echo "[DRY RUN] Peer versions (all, uncapped): ${vall:-none}"
     fi
 
     [ "$SUMMARY_MODE" = true ] || return
 
-    if [ "$latched" = true ]; then
-        DETAILS+="⚠️  Peer versions out (minimum ${floor}): $(peer_census_tiers "$oc" "$ob" "$ol" "$oo" "$oh") (below ${thr}!)\n"
-        WARNINGS=$((WARNINGS + 1))
+    # Census line: what is counted leads, so the numbers cannot be read as
+    # oracles. "of" instead of a slash, and the wallet/other tail explains
+    # why inbound nodes can be fewer than the Peers line's inbound total.
+    local out_part in_part="" extras="" line
+    if [ "$out_total" -gt 0 ]; then
+        out_part="${oc} of ${out_total} outbound"
     else
-        DETAILS+="ℹ️  Peer versions out (minimum ${floor}): $(peer_census_tiers "$oc" "$ob" "$ol" "$oo" "$oh")\n"
+        out_part="no outbound peers yet"
     fi
-    DETAILS+="ℹ️  Peer versions in: $(peer_census_tiers "$ic" "$ib" "$il" "$io" "$ih")\n"
-    if [ -n "$top" ]; then
-        DETAILS+="ℹ️  Top: ${top}\n"
+    [ "$in_nodes" -gt 0 ] && in_part=", ${ic} of ${in_nodes} inbound"
+    if [ "$iw" -gt 0 ]; then
+        extras="${iw} wallet"
+        [ "$iw" -ne 1 ] && extras+="s"
     fi
+    if [ "$io" -gt 0 ]; then
+        [ -n "$extras" ] && extras+=", "
+        extras+="${io} other"
+    fi
+    [ -n "$extras" ] && extras=", plus ${extras}"
+    line="Peers on ${floor}+: ${out_part}${in_part}${extras}"
+
+    if [ "$latched" = true ]; then
+        DETAILS+="⚠️  ${line} (below ${thr}!)\n"
+        WARNINGS=$((WARNINGS + 1))
+    elif [ "$thr" -eq 0 ]; then
+        DETAILS+="ℹ️  ${line} (alert off in config)\n"
+    elif [ "$out_total" -eq 0 ]; then
+        DETAILS+="ℹ️  ${line} (checking)\n"
+    elif [ "$oc" -lt "$thr" ]; then
+        DETAILS+="ℹ️  ${line} (checking, below ${thr})\n"
+    else
+        DETAILS+="✅ ${line}\n"
+    fi
+
+    # Versions line: a list, not a check, so always ℹ️.
+    case "${PEER_VERSION_DETAIL:-yes}" in
+        no|NO|No|false|off|0) ;;
+        *)
+            if [ -n "$vshow" ]; then
+                local more=""
+                if [[ "$hn" =~ ^[0-9]+$ ]] && [ "$hn" -gt 0 ]; then
+                    local pw="peers"
+                    [ "$hp" = "1" ] && pw="peer"
+                    more=" · +${hn} more (${hp} ${pw})"
+                fi
+                DETAILS+="ℹ️  Peer versions: ${vshow}${more}\n"
+            fi
+            ;;
+    esac
 }
 
 # --- Check 5: Oracle consensus price ---
@@ -1517,6 +1640,7 @@ check_price() {
     is_stale=$(echo "$price_info" | jq -r '.is_stale // false' 2>/dev/null)
     status=$(echo "$price_info" | jq -r '.status // "unknown"' 2>/dev/null)
     oracle_count=$(echo "$price_info" | jq -r '.oracle_count // 0' 2>/dev/null)
+    price_usd=$(fmt_price "$price_usd")
 
     # Check 5a: Stale price (v1.0)
     if [ "$is_stale" = "true" ]; then
@@ -1547,7 +1671,7 @@ check_price() {
     fi
 }
 
-# --- DD economy line (v2.9.0, #40): INFORMATION ONLY, summary card only ---
+# --- DD economy line (v2.9.0, #40; node verdict v2.11.1), summary only ---
 #
 # Requested in the DigiDollar Gitter room: show the network-wide DigiDollar
 # economy on the monitor card the way oracle-network-status.sh has shown it
@@ -1561,8 +1685,14 @@ check_price() {
 # the exact moment the operator wants signal. Summary-only also keeps the
 # RPC at two calls a day per instance instead of 288.
 #
-# This function never alerts and never touches WARNINGS or ISSUES. An
-# all-green card stays all-green. Worst case it appends nothing at all.
+# This function never sends an alert card. v2.11.1: when the daemon
+# reports its own verdict (health_status and minting_restricted_reason,
+# seen on DigiByte Core v9.26.7 after Thaw Day) the line becomes a check:
+# ✅ for "healthy" with no restriction, ⚠️ plus one warning for anything
+# else, printed in the node's words so an unfamiliar value is shown rather
+# than guessed at. The monitor sets no collateral threshold of its own. A
+# daemon without those fields keeps the plain ℹ️ information line.
+# Worst case it appends nothing at all.
 #
 # COST (measured 2026-07-25, mainnet block 23,917,448, 129 open positions):
 # 11 ms per call, and roughly 1-2 lines written to debug.log per call with
@@ -1630,13 +1760,43 @@ check_dd_economy() {
     locked_display=$(group_thousands "${collateral_dgb%%.*}")
 
     # The ratio is a nice-to-have, not load-bearing. If it is missing or
-    # non-numeric the line still renders without the parenthetical.
-    ratio_display=""
+    # non-numeric the line still renders without it.
+    local pct=""
     if [[ "$ratio" =~ ^[0-9]+$ ]]; then
-        ratio_display=" (${ratio}% collateralized)"
+        pct="${ratio}% collateralized"
+    fi
+    local base="DD economy: \$${supply_display} DD minted, ${locked_display} DGB locked"
+
+    # v2.11.1: the node's own verdict. Values are reduced to a safe
+    # character set and length before they reach a card.
+    local health_status restrict_reason
+    health_status=$(echo "$stats" | jq -r '.health_status // empty' 2>/dev/null | tr -cd 'A-Za-z0-9_. -' | cut -c1-40)
+    restrict_reason=$(echo "$stats" | jq -r '.minting_restricted_reason // empty' 2>/dev/null | tr -cd 'A-Za-z0-9_. -' | cut -c1-40)
+
+    if [ -z "$health_status" ]; then
+        ratio_display=""
+        [ -n "$pct" ] && ratio_display=" (${pct})"
+        DETAILS+="ℹ️  ${base}${ratio_display}\n"
+        return 0
     fi
 
-    DETAILS+="ℹ️  DD economy: \$${supply_display} DD minted, ${locked_display} DGB locked${ratio_display}\n"
+    local restricted=false note=""
+    if [ -n "$restrict_reason" ] && [ "$restrict_reason" != "none" ]; then
+        restricted=true
+    fi
+    [ -n "$pct" ] && note="${pct}, "
+    if [ "$health_status" = "healthy" ] && [ "$restricted" = false ]; then
+        DETAILS+="✅ ${base} (${note}healthy)\n"
+        return 0
+    fi
+    if [ "$health_status" = "healthy" ]; then
+        note+="healthy"
+    else
+        note+="health: ${health_status}"
+    fi
+    [ "$restricted" = true ] && note+=", minting restricted: ${restrict_reason}"
+    DETAILS+="⚠️  ${base} (${note})\n"
+    WARNINGS=$((WARNINGS + 1))
 }
 
 # --- Check 6: Disk space ---
@@ -2237,8 +2397,17 @@ check_quorum() {
     # renders consistently alongside the other ✅/ℹ️/⚠️  health lines
     # instead of floating with a bare three-space indent. Icon captures
     # session state — no need for the trailing ✓ or "($state)" suffix.
+    # v2.11.1: nonces_complete and signing are normal phases of every
+    # epoch, so they are ✅ too. During nonces_complete the nonce count is
+    # roster-wide (the signer set is not chosen yet), so dividing it by the
+    # 7-signer threshold printed "34/7". It prints as a raw count instead.
+    # Any other state is not judged and stays ℹ️.
     if [ "$musig_state" = "complete" ]; then
         musig_detail="✅ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
+    elif [ "$musig_state" = "nonces_complete" ]; then
+        musig_detail="✅ MuSig2: epoch $musig_epoch, nonces_complete, ${musig_nonces} nonces in, ${musig_sigs}/${consensus_required} sigs"
+    elif [ "$musig_state" = "signing" ]; then
+        musig_detail="✅ MuSig2: epoch $musig_epoch, signing, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_epoch" != "?" ]; then
         musig_detail="ℹ️  MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
     else
@@ -2425,7 +2594,7 @@ send_summary() {
     check_oracle
     check_chain
     check_peers
-    check_peer_versions       # v2.11.0: Check 14 — peer version census
+    check_peer_versions       # v2.11.0: Check 14 — peer version census (card v2.11.1)
     check_price
     check_dd_economy          # v2.9.0: #40 — summary only, never run_checks()
     check_disk
