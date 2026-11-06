@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 ###############################################################################
 # oracle-monitor.ps1 — DGB Oracle Health Monitor with Discord + Email Alerts (Windows)
-# Version: 2.11.1-win.1
+# Version: 2.11.2-win.1
 #
 # Windows PowerShell port of my oracle-monitor.sh (Linux). Same checks,
 # same quorum state machine, same anti-flap logic, same DigiDollar BIP9
@@ -51,6 +51,20 @@
 #   -Config /path  Use alternate config file (enables dual-instance monitoring)
 #
 # CHANGELOG:
+#   v2.11.2-win.1 — Parity with Linux v2.11.2. Lines where nothing was
+#          judged start with 🔵 instead of ℹ️ (easier to tell from ✅ in
+#          an email summary; Bob, @vicos59, #digidollar, 2026-11-03),
+#          with one space after it. -TestEmail points to the README
+#          section on mail that lands in spam or never arrives. The
+#          Linux/macOS process-list fix needs no change here: Send-Email
+#          hands the login to SmtpClient as a NetworkCredential and
+#          Send-Discord posts with Invoke-RestMethod, both inside the
+#          PowerShell process, so neither the SMTP key nor the webhook
+#          URL ever reaches a command line on Windows. The DD economy line
+#          reads 🔵 during the routine start-of-epoch wait for the signed
+#          oracle price instead of ⚠️, with the same two conditions as
+#          Linux (node detail is the wait, MuSig2 round for that epoch not
+#          finished). The detail match is ordinal and case-sensitive.
 #   v2.11.1-win.1 — Parity with Linux v2.11.1: the health summary reads
 #          green when the network is healthy. Peer census as one check line
 #          ("Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2
@@ -457,7 +471,7 @@ param(
     [string]$Config = ""
 )
 
-$SCRIPT_VERSION = "2.11.1-win.1"
+$SCRIPT_VERSION = "2.11.2-win.1"
 
 # v2.5.4-win.1: reject combined action flags (parity with the bash ports,
 # which error on e.g. --dry-run --summary; previously one silently won).
@@ -1252,7 +1266,7 @@ function Check-Oracle {
 
     if ([string]::IsNullOrEmpty($raw)) {
         if ($script:DdActive -eq $false) {
-            $script:Details.Add("ℹ️  Oracle: standby (DigiDollar deployment: $($script:DdStatus))")
+            $script:Details.Add("🔵 Oracle: standby (DigiDollar deployment: $($script:DdStatus))")
             return
         }
         if (Test-ShouldAlert "oracle_down") {
@@ -1489,9 +1503,9 @@ function Check-Peers {
 # back to inbound -eq $false.
 # Health summary (v2.11.1-win.1), two lines under Peers:
 #   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
-#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
-# The census line is a check (✅, ⚠️ while latched, ℹ️ when nothing was
-# judged); the versions line is a list and always ℹ️, capped at
+#   🔵 Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+# The census line is a check (✅, ⚠️ while latched, 🔵 when nothing was
+# judged); the versions line is a list and always 🔵, capped at
 # $PEER_VERSION_MAX versions (most peers first, ties to the newer version,
 # shown oldest to newest) plus "+N more (M peers)".
 function Get-PeerCensusVer3 {
@@ -1586,7 +1600,7 @@ function Check-PeerVersions {
 
     if ($null -eq $peers) {
         if ($script:SUMMARY_MODE) {
-            $script:Details.Add("ℹ️  Peers on ${floor}+: could not query getpeerinfo")
+            $script:Details.Add("🔵 Peers on ${floor}+: could not query getpeerinfo")
         }
         return
     }
@@ -1751,16 +1765,16 @@ function Check-PeerVersions {
         $script:Details.Add("⚠️  $line (below $thr!)")
         $script:Warnings++
     } elseif ($thr -eq 0) {
-        $script:Details.Add("ℹ️  $line (alert off in config)")
+        $script:Details.Add("🔵 $line (alert off in config)")
     } elseif ($outTotal -eq 0) {
-        $script:Details.Add("ℹ️  $line (checking)")
+        $script:Details.Add("🔵 $line (checking)")
     } elseif ($oc -lt $thr) {
-        $script:Details.Add("ℹ️  $line (checking, below $thr)")
+        $script:Details.Add("🔵 $line (checking, below $thr)")
     } else {
         $script:Details.Add("✅ $line")
     }
 
-    # Versions line: a list, not a check, so always ℹ️.
+    # Versions line: a list, not a check, so always 🔵.
     if (-not ("$PEER_VERSION_DETAIL" -cin @("no", "NO", "No", "false", "False", "off", "0"))) {
         if (-not [string]::IsNullOrEmpty($vShow)) {
             $more = ""
@@ -1769,7 +1783,7 @@ function Check-PeerVersions {
                 if ($hiddenPeers -eq 1) { $pw = "peer" }
                 $more = " · +$hiddenN more ($hiddenPeers $pw)"
             }
-            $script:Details.Add("ℹ️  Peer versions: $vShow$more")
+            $script:Details.Add("🔵 Peer versions: $vShow$more")
         }
     }
 }
@@ -1784,7 +1798,7 @@ function Check-Price {
 
     if ([string]::IsNullOrEmpty($raw)) {
         if ($script:DdActive -eq $false) {
-            $script:Details.Add("ℹ️  Price: pending (DigiDollar deployment: $($script:DdStatus))")
+            $script:Details.Add("🔵 Price: pending (DigiDollar deployment: $($script:DdStatus))")
             return
         }
         $script:Details.Add("⚠️  Price: could not query")
@@ -1857,7 +1871,7 @@ function Check-Price {
 # reports its own verdict (health_status and minting_restricted_reason,
 # DigiByte Core v9.26.7) the line becomes a check: ✅ for "healthy" with no
 # restriction, ⚠️ plus one warning for anything else, in the node's words.
-# A daemon without those fields keeps the plain ℹ️ line. Worst case it
+# A daemon without those fields keeps the plain 🔵 line. Worst case it
 # appends nothing at all.
 #
 # FIELD MAP (verified live on v9.26.4 testnet26 AND v9.26.5 mainnet,
@@ -1873,13 +1887,55 @@ function Check-Price {
 # PS 5.1 only: no ternary, no null-coalescing. Number grouping uses
 # "{0:N0}" with InvariantCulture so a comma-decimal locale (de-DE, fr-FR)
 # cannot flip the separators and produce "40.461.618".
+# v2.11.2-win.1: is health_state_not_ready the routine start-of-epoch wait?
+# Port of dd_epoch_wait in oracle-monitor.sh v2.11.2; see that comment for
+# the reasoning. Returns a short note when the restriction is that wait and
+# "" when it is not. (a) next_block_health.data_error must be the epoch
+# mismatch or no-quote text (ordinal, case-sensitive); (b) the MuSig2 round
+# for the next block's epoch must not be complete or failed. If the round
+# state cannot be read, (a) decides alone. 40-block epochs (v9.26.7).
+$script:DdEpochBlocks = 40
+$script:DdDeployInfo = $null
+
+function Get-DDEpochWait {
+    param($Stats)
+    $note = "minting paused: waiting for this epoch's signed oracle price"
+    if ($null -eq $Stats -or $null -eq $Stats.PSObject.Properties['next_block_health']) { return "" }
+    $nbh = $Stats.next_block_health
+    if ($null -eq $nbh) { return "" }
+    $err = ""
+    if ($null -ne $nbh.PSObject.Properties['data_error'] -and $null -ne $nbh.data_error) { $err = [string]$nbh.data_error }
+    $isWait = $err.StartsWith("v0x03 bundle epoch mismatch", [System.StringComparison]::Ordinal) -or
+              ($err -ceq "no valid oracle quote for the next block")
+    if (-not $isWait) { return "" }
+    $cand = [long]0
+    if ($null -eq $nbh.PSObject.Properties['candidate_height'] -or
+        -not [long]::TryParse("$($nbh.candidate_height)", [ref]$cand) -or $cand -lt 0) {
+        return $note
+    }
+    $pos = $cand % $script:DdEpochBlocks
+    $ce = [long][math]::Floor($cand / $script:DdEpochBlocks)
+    $d = $script:DdDeployInfo
+    if ($null -ne $d -and $null -ne $d.PSObject.Properties['musig2_session'] -and $null -ne $d.musig2_session) {
+        $s = $d.musig2_session
+        $se = [long]0
+        $st = ""
+        if ($null -ne $s.PSObject.Properties['state'] -and $null -ne $s.state) { $st = [string]$s.state }
+        if ($null -ne $s.PSObject.Properties['epoch'] -and [long]::TryParse("$($s.epoch)", [ref]$se) -and $st -ne "") {
+            if ($se -gt $ce) { return "" }
+            if (($se -eq $ce) -and (($st -ceq "complete") -or ($st -ceq "failed"))) { return "" }
+        }
+    }
+    return "$note, block $($pos + 1) of $($script:DdEpochBlocks)"
+}
+
 function Check-DDEconomy {
     if ($DD_ECONOMY_ENABLED -ne "yes") { return }
 
     # Pre-activation chains have no economy to report. Matches the standby
     # wording Check-Oracle, Check-Price, and Check-Quorum already use.
     if ($script:DdActive -eq $false) {
-        $script:Details.Add("ℹ️  DD economy: standby (DigiDollar deployment: $($script:DdStatus))")
+        $script:Details.Add("🔵 DD economy: standby (DigiDollar deployment: $($script:DdStatus))")
         return
     }
 
@@ -1943,7 +1999,7 @@ function Check-DDEconomy {
     if ([string]::IsNullOrEmpty($health)) {
         $ratioDisplay = ""
         if ($pct -ne "") { $ratioDisplay = " ($pct)" }
-        $script:Details.Add("ℹ️  $base$ratioDisplay")
+        $script:Details.Add("🔵 $base$ratioDisplay")
         return
     }
 
@@ -1954,8 +2010,31 @@ function Check-DDEconomy {
         $script:Details.Add("✅ $base (${note}healthy)")
         return
     }
+    # v2.11.2-win.1: the routine start-of-epoch wait is not judged.
+    if (($health -ceq "healthy") -and ($reason -ceq "health_state_not_ready")) {
+        $waitNote = Get-DDEpochWait $stats
+        if (-not [string]::IsNullOrEmpty($waitNote)) {
+            $script:Details.Add("🔵 $base (${note}healthy, $waitNote)")
+            return
+        }
+    }
     if ($health -ceq "healthy") { $note += "healthy" } else { $note += "health: $health" }
-    if ($restricted) { $note += ", minting restricted: $reason" }
+    if ($restricted) {
+        $note += ", minting restricted: $reason"
+        # v2.11.2-win.1: the node's own detail, reduced like the other values.
+        $detail = ""
+        if ($null -ne $stats.PSObject.Properties['next_block_health'] -and $null -ne $stats.next_block_health -and
+            $null -ne $stats.next_block_health.PSObject.Properties['data_error'] -and $null -ne $stats.next_block_health.data_error) {
+            $detail = [string]$stats.next_block_health.data_error
+        }
+        if ([string]::IsNullOrEmpty($detail) -and $null -ne $stats.PSObject.Properties['mint_volatility'] -and $null -ne $stats.mint_volatility -and
+            $null -ne $stats.mint_volatility.PSObject.Properties['data_error'] -and $null -ne $stats.mint_volatility.data_error) {
+            $detail = [string]$stats.mint_volatility.data_error
+        }
+        $detail = $detail -creplace '[^A-Za-z0-9_.:,=() -]', ''
+        if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 160) }
+        if ($detail -ne "") { $note += ", detail: $detail" }
+    }
     $script:Details.Add("⚠️  $base ($note)")
     $script:Warnings++
 }
@@ -2045,7 +2124,7 @@ function Check-Debuglog {
     $logPath = $DATADIR.TrimEnd('\') + '\debug.log'
 
     if (-not (Test-Path -LiteralPath $logPath)) {
-        $script:Details.Add("ℹ️  debug.log: not found at ${logPath} (custom datadir? set `$DATADIR in config)")
+        $script:Details.Add("🔵 debug.log: not found at ${logPath} (custom datadir? set `$DATADIR in config)")
         return
     }
 
@@ -2320,7 +2399,7 @@ function Check-Swap {
     if ($null -eq $pf) {
         # No page file configured, or CIM query failed. Windows without a
         # page file is rare but valid — skip with an INFO line.
-        $script:Details.Add("ℹ️  Swap: not configured (or Win32_PageFileUsage unavailable)")
+        $script:Details.Add("🔵 Swap: not configured (or Win32_PageFileUsage unavailable)")
         return
     }
 
@@ -2333,7 +2412,7 @@ function Check-Swap {
     }
 
     if ($swapTotalMb -eq 0) {
-        $script:Details.Add("ℹ️  Swap: not configured")
+        $script:Details.Add("🔵 Swap: not configured")
         return
     }
 
@@ -2385,7 +2464,7 @@ function Check-Swap {
         if (Clear-AlertState "swap_pressure") {
             Alert-Green "✅ Swap Pressure Cleared" "Page file still at ${swapUsedMb}MB of ${swapTotalMb}MB but no active pressure (${staleNote}). Likely a stale fill from a past heavy job."
         }
-        $script:Details.Add("ℹ️  Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (stale — ${staleNote})")
+        $script:Details.Add("🔵 Swap: ${swapUsedMb}MB / ${swapTotalMb}MB used (stale — ${staleNote})")
     }
 }
 
@@ -2401,10 +2480,10 @@ function Check-Services {
     # $SERVICE_NAME="none" (or "skip"/"disabled") replaces the service check
     # with an informational line instead of a red on a missing service.
     if ($SERVICE_NAME -match '^(none|skip|disabled)$') {
-        $script:Details.Add('ℹ️  Service: check disabled (SERVICE_NAME="none")')
+        $script:Details.Add('🔵 Service: check disabled (SERVICE_NAME="none")')
     # v2.5.2: Qt-skip
     } elseif ($script:DetectedDaemon -eq "digibyte-qt") {
-        $script:Details.Add("ℹ️  Service: n/a — Qt wallet is the running daemon")
+        $script:Details.Add("🔵 Service: n/a — Qt wallet is the running daemon")
     } elseif (-not [string]::IsNullOrEmpty($SERVICE_NAME)) {
         $svc = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
         if ($null -ne $svc -and $svc.Status -eq "Running") {
@@ -2426,7 +2505,7 @@ function Check-Services {
     }
 
     if ($script:DdActive -eq $false) {
-        $script:Details.Add("ℹ️  Oracle process: standby (DigiDollar deployment: $($script:DdStatus))")
+        $script:Details.Add("🔵 Oracle process: standby (DigiDollar deployment: $($script:DdStatus))")
         return
     }
 
@@ -2504,13 +2583,13 @@ function Check-Version {
             if ($upToDate) {
                 $script:Details.Add("✅ $display")
             } else {
-                $script:Details.Add("ℹ️  $display — v$latest available")
+                $script:Details.Add("🔵 $display — v$latest available")
             }
         } else {
-            $script:Details.Add("ℹ️  $display")
+            $script:Details.Add("🔵 $display")
         }
     } else {
-        $script:Details.Add("ℹ️  $display")
+        $script:Details.Add("🔵 $display")
     }
 }
 
@@ -2648,7 +2727,7 @@ function Check-Quorum {
     }
 
     # v2.5.6-win.1: musigDetail now carries its own status icon so the
-    # line renders consistently alongside the other ✅/ℹ️/⚠️  health
+    # line renders consistently alongside the other ✅/🔵/⚠️  health
     # lines instead of floating with a bare three-space indent.
     # v2.11.1-win.1: nonces_complete and signing are normal phases, so ✅.
     # During nonces_complete the nonce count is roster-wide (the signer set
@@ -2660,7 +2739,7 @@ function Check-Quorum {
     } elseif ("$musigState" -ceq "signing") {
         $musigDetail = "✅ MuSig2: epoch $musigEpoch, signing, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs"
     } elseif ("$musigEpoch" -ne "?") {
-        $musigDetail = "ℹ️  MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
+        $musigDetail = "🔵 MuSig2: epoch $musigEpoch, $musigNonces/$consensusRequired nonces, $musigSigs/$consensusRequired sigs — $musigState"
     } else {
         $musigDetail = "⚠️  MuSig2: could not parse session"
     }
@@ -2670,7 +2749,7 @@ function Check-Quorum {
 
     if ([string]::IsNullOrEmpty($rawOracles)) {
         if ($script:DdActive -eq $false) {
-            $script:Details.Add("ℹ️  Quorum: standby (DigiDollar deployment: $($script:DdStatus))")
+            $script:Details.Add("🔵 Quorum: standby (DigiDollar deployment: $($script:DdStatus))")
             return
         }
         $script:Details.Add("⚠️  Quorum: could not query oracles")
@@ -2997,6 +3076,9 @@ function Check-DigidollarActive {
         $script:DdActive = $false
         return
     }
+    # v2.11.2-win.1: kept for the DD economy line, which needs the MuSig2
+    # round state read BEFORE getdigidollarstats (see Get-DDEpochWait).
+    $script:DdDeployInfo = $info
 
     # v2.7.0: v9.26.5 (PR #429) buries the DigiDollar deployment (BIP90)
     # and reshapes this RPC to {enabled, type:"buried",
@@ -3076,6 +3158,8 @@ if ($Test) {
     Write-Output "Sending test email to $EMAIL_TO via ${SMTP_SERVER}:${SMTP_PORT}..."
     if (Send-Email -Subject "🔧 Test Email" -Body "Oracle monitor email alerts are configured and working.") {
         Write-Output "✓ Test email sent — check your inbox (and spam folder)."
+        Write-Output "  Sent means your SMTP server accepted it. If it lands in spam or never"
+        Write-Output "  arrives, see: https://github.com/BaumerCrypto/digidollar-oracle-tools#email-lands-in-spam-or-never-arrives"
     } else {
         Write-Output "✗ Send failed. Check SMTP settings in: $CONFIG_FILE"
         Write-Output "  Common issues:"

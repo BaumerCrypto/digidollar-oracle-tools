@@ -28,17 +28,17 @@ Beyond the tooling, I've taken part in the DigiDollar launch discussions with th
 
 | File | Purpose |
 |------|---------|
-| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.11.1, 14 checks (daemon, oracle, chain sync, peers, **peer versions**, consensus price, disk, **debug.log growth**, memory, swap pressure, service status, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu, no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. v2.6.2 cleans up the version line (`ℹ️  DigiByte: v9.26.4` instead of `ℹ️  /DigiByte:9.26.4/`), switches the email `Time:` line to UTC for operators on VPS in different timezones than their home, and pressure-gates the swap alert so a stale swap fill left over from a past reindex no longer fires a false red (only alerts on real current pressure via Linux PSI or a RAM-headroom threshold). v2.6.3 makes the version line update-aware, ✅ green when running the latest DigiByte Core release, ℹ️ blue `— vX.Y.Z available` when a newer release is out (GitHub `releases/latest`, cached daily), and adds a `SERVICE_NAME="none"` escape hatch for operators running headless without systemd. **v2.7.0 disk-safety net:** a debug.log watchdog (Check 13) that names enabled debug categories in the alert via the `logging` RPC, safe copy-then-truncate auto-rotation (default ON, announced on every rotation, skipped when free space can't hold the safety copy), a yellow disk-usage band ahead of the red floor (closes #33), and `PRICE_CHECK_EVERY` to thin the loudest RPC, plus dual-shape parsing so the monitor is **v9.26.5-ready**. **v2.9.0:** a DigiDollar economy line on the health summary (`DD economy: $40,932.07 DD minted, 40,461,618 DGB locked (332% collateralized)`, #40) sourced from `getdigidollarstats`, information only and summary-card only; plus the summary title now leads with `NETWORK_LABEL` like every other card does (#41), with an optional `NETWORK_EMOJI` for operators who want one instance visually flagged. **v2.10.0:** a chain-vs-label mismatch warning (#43) that catches a `CLI` pointed at the wrong daemon, an `SPDX-License-Identifier` header, and log-rotation coexistence guidance. **v2.10.1:** log rotation now verifies the truncate step and reports a failure instead of a silent success, `check_memory` and `check_chain` gained numeric guards so a degenerate response becomes a warning line rather than a shell error, and alert emails carry standard `Date` and `Message-ID` headers. **v2.11.0:** a report-only peer version census (Check 14) that sorts your node's peers by DigiByte Core version against a minimum, with summary lines per direction and one debounced yellow alert when outbound peers on the minimum or newer get thin. Never disconnects, never bans. **v2.11.1:** a healthy summary reads green: the census becomes one ✅ check line plus one blue version list (capped by `PEER_VERSION_MAX`), MuSig2's normal phases show ✅ with a raw nonce count while the signers are being chosen, the DD economy line carries the node's own health verdict, and prices print with six decimals. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
+| [oracle-monitor.sh](oracle-monitor.sh) | Bash health monitor v2.11.2, 14 checks (daemon, oracle, chain sync, peers, **peer versions**, consensus price, disk, **debug.log growth**, memory, swap pressure, service status, version, NTP, quorum margin). Dual-channel alerts: **Discord webhook + email** (v2.6.0, closes #17) fire on the same red/yellow/green triggers plus the 12-hour summary. Email via `curl` SMTP (built into stock Ubuntu, no mailx/postfix/sendmail), config-driven with `EMAIL_ENABLED`, `EMAIL_TO`, `SMTP_SERVER/PORT/USER/PASS/FROM`, subjects prefixed with `[ALERT]`/`[WARNING]`/`[RESOLVED]`/`[INFO]` plus `NETWORK_LABEL`, `--test-email` flag with inline diagnostics. **Auto update-check** (v2.6.0) fetches the published script header from GitHub main once per day, silently adds a `⬆️ vX.Y.Z available` footer line to every Discord card and email when a newer version exists. Quorum tracking via `getdigidollardeploymentinfo` + `getoracles` with MuSig2 session health. Counts online oracles by heartbeat (stable across round transitions). Anti-flap: cooldown timer + hysteresis buffer prevent alert spam during volatile periods. `--config /path` for dual-instance monitoring (testnet + mainnet). DigiDollar BIP9 pre-activation guard downgrades oracle checks to standby INFO before activation. Auto-detects either `digibyted` (headless) or `digibyte-qt` (Qt wallet) so operators running either binary get correct alerts. Card titles carry `NETWORK_LABEL`, footer stamps monitor version + oracle identity. Disk line shows free/total/used%; the Low Disk alert names your configurable `DATADIR` so you know exactly where to clean up (v2.5.5). MuSig2 line carries its own ✅/ℹ️/⚠️ status icon for visual consistency (v2.5.6); v2.6.1 double-spaces every ⚠️/ℹ️ prefix so terminal alignment stays clean across emoji-width handling. v2.6.2 cleans up the version line (`ℹ️  DigiByte: v9.26.4` instead of `ℹ️  /DigiByte:9.26.4/`), switches the email `Time:` line to UTC for operators on VPS in different timezones than their home, and pressure-gates the swap alert so a stale swap fill left over from a past reindex no longer fires a false red (only alerts on real current pressure via Linux PSI or a RAM-headroom threshold). v2.6.3 makes the version line update-aware, ✅ green when running the latest DigiByte Core release, ℹ️ blue `— vX.Y.Z available` when a newer release is out (GitHub `releases/latest`, cached daily), and adds a `SERVICE_NAME="none"` escape hatch for operators running headless without systemd. **v2.7.0 disk-safety net:** a debug.log watchdog (Check 13) that names enabled debug categories in the alert via the `logging` RPC, safe copy-then-truncate auto-rotation (default ON, announced on every rotation, skipped when free space can't hold the safety copy), a yellow disk-usage band ahead of the red floor (closes #33), and `PRICE_CHECK_EVERY` to thin the loudest RPC, plus dual-shape parsing so the monitor is **v9.26.5-ready**. **v2.9.0:** a DigiDollar economy line on the health summary (`DD economy: $40,932.07 DD minted, 40,461,618 DGB locked (332% collateralized)`, #40) sourced from `getdigidollarstats`, information only and summary-card only; plus the summary title now leads with `NETWORK_LABEL` like every other card does (#41), with an optional `NETWORK_EMOJI` for operators who want one instance visually flagged. **v2.10.0:** a chain-vs-label mismatch warning (#43) that catches a `CLI` pointed at the wrong daemon, an `SPDX-License-Identifier` header, and log-rotation coexistence guidance. **v2.10.1:** log rotation now verifies the truncate step and reports a failure instead of a silent success, `check_memory` and `check_chain` gained numeric guards so a degenerate response becomes a warning line rather than a shell error, and alert emails carry standard `Date` and `Message-ID` headers. **v2.11.0:** a report-only peer version census (Check 14) that sorts your node's peers by DigiByte Core version against a minimum, with summary lines per direction and one debounced yellow alert when outbound peers on the minimum or newer get thin. Never disconnects, never bans. **v2.11.1:** a healthy summary reads green: the census becomes one ✅ check line plus one blue version list (capped by `PEER_VERSION_MAX`), MuSig2's normal phases show ✅ with a raw nonce count while the signers are being chosen, the DD economy line carries the node's own health verdict, and prices print with six decimals. **v2.11.2:** 🔵 replaces ℹ️ on every line where nothing was judged (ℹ️ was hard to tell from ✅ in email), the SMTP login and the Discord webhook URL reach curl on stdin instead of its command line so `ps` never shows them, `--test-email` points to [Email lands in spam or never arrives](#email-lands-in-spam-or-never-arrives), and the DD economy line reads 🔵 instead of ⚠️ during the routine wait for each oracle epoch's signed price. External config file, `--dry-run` mode, jq-based JSON parsing. State files prevent repeat alerts. |
 | [oracle-network-status.sh](oracle-network-status.sh) | Gitter network status bot v1.8.4, posts automated oracle network health summaries to the DigiDollar Gitter channel once per day via Matrix API. **v1.8.4:** the card's deployment line reads `DigiDollar: active (buried, block 23,869,440)` in place of the old `BIP9:` label, which stopped fitting once the deployment was buried in DigiByte Core v9.26.5, and the built-in version floor is v9.26.6, the minimum the v9.26.6 release notes require of every full node now that Thaw Day has activated. **v1.8.3:** release candidates at or above the floor are a 🧪 testing tier, listed but never nudged or @-mentioned (an rc below the floor is still ⚠️ and nudged), and the upgrade nudge names the newest release seen on the network instead of the floor. **v1.8.2:** optional display-name override as a third roster field, for slots where the name the daemon reports is not the operator holding that slot, plus an attribution footer on every post generated from `ORACLE_NAME` and `ORACLE_ID`. **v1.8.1:** makes the v1.7.x `ACCEPTED_VERSIONS` compatibility path actually reachable, since the built-in floor default previously shadowed it. **v1.8.0:** version compliance is a numeric comparison against `MIN_ACCEPTED_VERSION` instead of a fixed whitelist, so every future DigiByte release passes with no edit; release candidates are excluded by an explicit rule, and an oracle reporting no version is treated as unknown and never @-mentioned. **v9.26.5-ready:** the BIP90 burial reshapes both deployment RPCs, and the script reads the buried forms for activation height and status. Software rows sort ascending by version within each compliance tier. See file for full description. |
 | [oracle-roster.template](oracle-roster.template) | Template for the oracle-to-Gitter-handle mapping file used by the @ mention feature. Copy to your instance's config directory as `oracle-roster.conf` and populate with real Matrix IDs. An optional third field per line overrides the operator name the daemon reports for that slot (v1.8.2+). The populated file stays on VPS only, never push to GitHub. |
-| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. v2.7.0 additions: the disk/debug.log safety knobs (`DISK_USED_PCT_WARN`, `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, `PRICE_CHECK_EVERY`). v2.9.0 additions: `DD_ECONOMY_ENABLED`, `NETWORK_EMOJI`, and rewritten dual-instance `CLI` guidance (#42). v2.10.0: the `DEBUG_LOG_ROTATE` block now documents both legitimate reasons to turn rotation off, and the cadence rule for coexisting with an external log rotator. v2.11.0 additions: the peer version census knobs (`PEER_VERSION_CHECK`, `PEER_MIN_VERSION`, `PEER_MIN_COMPAT_OUT`, `PEER_DEBOUNCE_PASSES`). v2.11.1 additions: `PEER_VERSION_DETAIL` and `PEER_VERSION_MAX` for the blue version list. |
+| [config.template](config.template) | Configuration template for oracle-monitor.sh and oracle-network-status.sh. Copy to `~/.oracle-monitor/config` and set your oracle ID, webhook URL, alert thresholds, quorum margin thresholds, anti-flap settings, network label, and Matrix API credentials for the Gitter bot. v2.6.0 additions: email SMTP settings (Gmail App Password, Outlook, Brevo relay examples), update-check toggle + TTL. v2.7.0 additions: the disk/debug.log safety knobs (`DISK_USED_PCT_WARN`, `DEBUG_LOG_WARN_MB`, `DEBUG_LOG_ROTATE`, `DEBUG_LOG_MAX_MB`, `DEBUG_LOG_KEEP`, `PRICE_CHECK_EVERY`). v2.9.0 additions: `DD_ECONOMY_ENABLED`, `NETWORK_EMOJI`, and rewritten dual-instance `CLI` guidance (#42). v2.10.0: the `DEBUG_LOG_ROTATE` block now documents both legitimate reasons to turn rotation off, and the cadence rule for coexisting with an external log rotator. v2.11.0 additions: the peer version census knobs (`PEER_VERSION_CHECK`, `PEER_MIN_VERSION`, `PEER_MIN_COMPAT_OUT`, `PEER_DEBOUNCE_PASSES`). v2.11.1 additions: `PEER_VERSION_DETAIL` and `PEER_VERSION_MAX` for the blue version list. v2.11.2: a pointer beside `SMTP_FROM` to the email-in-spam section. |
 | [ORACLE_SETUP_QUICKSTART.md](./ORACLE_SETUP_QUICKSTART.md) | Quick-start checklist for new oracle operators. Covers download, config, key generation, and posting to Gitter. |
 | [ORACLE_SETUP_TUTORIAL.md](./ORACLE_SETUP_TUTORIAL.md) | Full step-by-step tutorial for all platforms (Linux, Windows, macOS). Posted by shenger in the DigiDollar Gitter community. |
 | [ORACLE_HARDENING_GUIDE.md](ORACLE_HARDENING_GUIDE.md) | VPS security hardening guide v1.5.2, SSH, UFW, Fail2Ban, kernel hardening, systemd, resource isolation and OOM protection. **New in v1.5.1:** SSH login settings go in a `00-hardening.conf` drop-in so a cloud image's `50-cloud-init.conf` can't silently re-enable password login, every SSH check reads `sshd -T` instead of the config file, the key now goes in before the lock-down, and a new keep-the-box-single-purpose section. **v1.5.0** added a full `debug.log` growth/rotation section (why `debug=digidollar` silently disables the daemon's auto-shrink, measured growth rates, safe rotation and `logrotate copytruncate` recipes) and hardware sizing (RAM floors, pruning does not reduce daemon RAM; pruned-vs-full disk footprints). Step-by-step, based on my live oracle setup. |
 | [HOME_ORACLE_HARDENING_GUIDE.md](HOME_ORACLE_HARDENING_GUIDE.md) | Home network security hardening guide, Linux, Windows, macOS. Three tiers (Essential, Recommended, Advanced). Covers firewall, port forwarding, NTP, router hardening, UPS, VLANs, WireGuard. **Updated in v1.1:** SSH steps reordered so the key goes in before the lock-down, `sshd -T` verification, and a section on other apps and VMs sharing the oracle's hardware. Network diagrams: [Tier 1](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier1-essential.html) · [Tier 2](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier2-recommended.html) · [Tier 3](https://htmlpreview.github.io/?https://github.com/BaumerCrypto/digidollar-oracle-tools/blob/main/network-tier3-advanced.html). Community-requested by Aussie Epic. |
-| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.11.1-win.1, full logic parity with Linux v2.11.1, including the v2.11.0 peer version census and the v2.11.1 health-summary rewrite (plus a DST-safe uptime line on the summary), the v2.7.0 disk-safety net (debug.log watchdog, safe auto-rotation with a documented Windows file-lock divergence, disk warning band, `PRICE_CHECK_EVERY`), the v2.6.0 email + auto update-check features, the v2.6.1 cosmetic spacing fix, the v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert, and the v2.6.3 update-aware DigiByte version line + `SERVICE_NAME="none"` escape hatch. PS 5.1 and PS 7 compatible, zero external dependencies (native JSON parsing, .NET's built-in `System.Net.Mail.SmtpClient` for email). Includes watch mode (`-Watch`), `-Config` for dual-instance monitoring, and `-TestEmail` for SMTP diagnostics. Ships UTF-8 with BOM. |
+| [oracle-monitor.ps1](oracle-monitor.ps1) | Windows PowerShell port v2.11.2-win.1, full logic parity with Linux v2.11.2, including the v2.11.2 🔵 info icon, the v2.11.0 peer version census and the v2.11.1 health-summary rewrite (plus a DST-safe uptime line on the summary), the v2.7.0 disk-safety net (debug.log watchdog, safe auto-rotation with a documented Windows file-lock divergence, disk warning band, `PRICE_CHECK_EVERY`), the v2.6.0 email + auto update-check features, the v2.6.1 cosmetic spacing fix, the v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert, and the v2.6.3 update-aware DigiByte version line + `SERVICE_NAME="none"` escape hatch. PS 5.1 and PS 7 compatible, zero external dependencies (native JSON parsing, .NET's built-in `System.Net.Mail.SmtpClient` for email). Includes watch mode (`-Watch`), `-Config` for dual-instance monitoring, and `-TestEmail` for SMTP diagnostics. Ships UTF-8 with BOM. |
 | [config.template.ps1](config.template.ps1) | Windows configuration template for oracle-monitor.ps1. v2.6.0-win.1: email + update-check sections mirror the Linux template. |
-| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.11.1-macos.1, stock bash 3.2 compatible, jq is the only dependency (curl SMTP support ships with modern macOS). Full logic parity with Linux v2.11.1 (v2.11.1 health-summary rewrite; v2.11.0 peer version census; v2.7.0 disk-safety net with BSD-native idioms, `stat -f%z`, `df -m`, `: >` in place of `truncate(1)`; v2.6.0 email + update-check + v2.6.1 spacing fix + v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert + v2.6.3 update-aware version line + `LAUNCHD_LABEL="none"` escape hatch). Includes watch mode (`--watch`), `--config` for dual-instance monitoring, and `--test-email` for SMTP diagnostics. |
+| [oracle-monitor-macos.sh](oracle-monitor-macos.sh) | macOS port v2.11.2-macos.1, stock bash 3.2 compatible, jq is the only dependency (curl SMTP support ships with modern macOS). Full logic parity with Linux v2.11.2 (v2.11.2 🔵 info icon and secrets kept off curl's command line; v2.11.1 health-summary rewrite; v2.11.0 peer version census; v2.7.0 disk-safety net with BSD-native idioms, `stat -f%z`, `df -m`, `: >` in place of `truncate(1)`; v2.6.0 email + update-check + v2.6.1 spacing fix + v2.6.2 version-line cleanup + UTC email timestamp + pressure-gated swap alert + v2.6.3 update-aware version line + `LAUNCHD_LABEL="none"` escape hatch). Includes watch mode (`--watch`), `--config` for dual-instance monitoring, and `--test-email` for SMTP diagnostics. |
 | [config-macos.template](config-macos.template) | macOS configuration template for oracle-monitor-macos.sh. v2.6.0-macos.1: email + update-check sections mirror the Linux template. |
 | [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md) | Setup guide for Windows and macOS ports, installation, config, Task Scheduler/cron, watch mode, email SMTP setup per platform, troubleshooting. |
 
@@ -64,9 +64,9 @@ The monitor runs natively on all three major platforms. Same 14 checks, same Dig
 
 | Platform | Script | Config template | Version |
 |---|---|---|---|
-| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.11.1 |
-| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.11.1-win.1 |
-| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.11.1-macos.1 |
+| Linux | [`oracle-monitor.sh`](oracle-monitor.sh) | [`config.template`](config.template) | 2.11.2 |
+| Windows 10/11 | [`oracle-monitor.ps1`](oracle-monitor.ps1) | [`config.template.ps1`](config.template.ps1) | 2.11.2-win.1 |
+| macOS | [`oracle-monitor-macos.sh`](oracle-monitor-macos.sh) | [`config-macos.template`](config-macos.template) | 2.11.2-macos.1 |
 
 Windows needs no dependencies at all (PowerShell parses JSON natively; .NET's built-in `SmtpClient` handles email). macOS needs only jq and runs on the stock bash 3.2 every Mac ships with (curl SMTP support ships with modern macOS). Setup for both is in [`CROSS_PLATFORM_SETUP.md`](CROSS_PLATFORM_SETUP.md). The rest of this README documents the Linux version; the ports behave identically.
 
@@ -88,7 +88,7 @@ Two of the items below (service status, version drift) are gathered for the 12-h
 - Disk space, free, total, and used% (default min: 5GB free); the Low Disk alert names your `DATADIR` on its own line so you know exactly where to clean up (v2.5.5). **v2.7.0** adds a yellow warning band at `DISK_USED_PCT_WARN` (default 80% used) so you get a calm heads-up long before the red floor
 - **debug.log size + growth (v2.7.0, Check 13)**, tracks the daemon's `debug.log` size and MB/day, and names any enabled debug categories (via the `logging` RPC) right in the alert. Paired with safe auto-rotation (default ON) that bounds the file without losing history. Full detail in the [v2.7.0 section](#v270-the-disk-safety-release) below
 - Memory usage
-- **Swap pressure**, alerts when swap usage exceeds the threshold (default 100 MB) AND current memory pressure is real: Linux PSI or RAM headroom must corroborate (v2.6.2). A stale fill left over from a past reindex shows as an ℹ️ info line instead of a warning
+- **Swap pressure**, alerts when swap usage exceeds the threshold (default 100 MB) AND current memory pressure is real: Linux PSI or RAM headroom must corroborate (v2.6.2). A stale fill left over from a past reindex shows as a 🔵 info line instead of a warning
 - `digibyted.service` and oracle process status via `listoracle` RPC (reported in the 12-hour health summary; the 5-minute pass already catches a dead daemon via the process check). Systemd unit check auto-skips with an INFO line when the Qt wallet is the running daemon (Qt operators typically run outside systemd)
 - Binary version drift detection via RPC (`getnetworkinfo` → `.subversion`), reported in the 12-hour health summary; works identically for Qt and headless (v2.5)
 - NTP time synchronization
@@ -256,18 +256,20 @@ Set `PEER_VERSION_CHECK="no"` to skip the `getpeerinfo` call entirely, or `PEER_
 
 v2.11.0 added three blue ℹ️ lines to every health summary. Add the DD economy line and a MuSig2 line caught mid-round, and a perfectly healthy mainnet card showed five blue lines. A card that is always half blue teaches you to stop reading blue, so this release gives each icon one meaning:
 
+_The tables and examples in this section are shown as v2.11.2 prints them: 🔵 replaced ℹ️ on lines where nothing was judged._
+
 | Icon | Meaning |
 |------|---------|
 | ✅ | a check ran and passed |
 | ⚠️ | a check ran and failed (for the peer census: the alert is latched) |
-| ℹ️ | nothing was judged: a plain list, a check turned off in config, a field the daemon does not report, or a reading not confirmed yet |
+| 🔵 | nothing was judged: a plain list, a check turned off in config, a field the daemon does not report, or a reading not confirmed yet (ℹ️ before v2.11.2) |
 
 On a healthy node the only blue line left is the peer version list. My mainnet card on 2026-11-02, the day after Thaw Day:
 
 ```
 ✅ Peers: 41 connected (21 in / 20 out, cap 125)
 ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
-ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+🔵 Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
 ✅ Price: $0.003157 (fresh)
 ✅ DD economy: $317,056.81 DD minted, 247,351,570 DGB locked (245% collateralized, healthy)
 ✅ MuSig2: epoch 612379, 7/7 nonces, 7/7 sigs
@@ -279,10 +281,10 @@ On a healthy node the only blue line left is the peer version list. My mainnet c
 |-------|-------------|
 | Healthy | `✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets` |
 | Alert latched (card turns yellow) | `⚠️  Peers on v9.26.6+: 3 of 20 outbound, 13 of 18 inbound, plus 2 wallets (below 4!)` |
-| Below the threshold, not confirmed yet (minutes after a restart) | `ℹ️  Peers on v9.26.6+: 3 of 3 outbound, 5 of 6 inbound (checking, below 4)` |
-| No outbound peers yet | `ℹ️  Peers on v9.26.6+: no outbound peers yet, 5 of 6 inbound (checking)` |
-| `PEER_MIN_COMPAT_OUT=0` | `ℹ️  Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets (alert off in config)` |
-| `getpeerinfo` failed | `ℹ️  Peers on v9.26.6+: could not query getpeerinfo` |
+| Below the threshold, not confirmed yet (minutes after a restart) | `🔵 Peers on v9.26.6+: 3 of 3 outbound, 5 of 6 inbound (checking, below 4)` |
+| No outbound peers yet | `🔵 Peers on v9.26.6+: no outbound peers yet, 5 of 6 inbound (checking)` |
+| `PEER_MIN_COMPAT_OUT=0` | `🔵 Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets (alert off in config)` |
+| `getpeerinfo` failed | `🔵 Peers on v9.26.6+: could not query getpeerinfo` |
 
 The alert itself is unchanged from v2.11.0: outbound only, debounced both ways, one yellow card when it fires and one green card when it recovers, nothing on a normal day. Wallets are inbound-only light clients, so they can never trigger it.
 
@@ -296,34 +298,66 @@ The alert itself is unchanged from v2.11.0: outbound only, debounced both ways, 
 A busier node seeing eight versions:
 
 ```
-ℹ️  Peer versions: v8.26.2 (4) · v9.26.4 (2) · v9.26.5 (9) · v9.26.6rc2 (1) · v9.26.6 (3) · v9.26.7 (24) · +2 more (2 peers)
+🔵 Peer versions: v8.26.2 (4) · v9.26.4 (2) · v9.26.5 (9) · v9.26.6rc2 (1) · v9.26.6 (3) · v9.26.7 (24) · +2 more (2 peers)
 ```
 
 `PEER_VERSION_MAX=0` lists every version with no cap. On a node with many peers on many versions that line can wrap several times on a phone; it still works, it just gets long, which is why 6 is the default. `PEER_VERSION_DETAIL="no"` hides the line. `--dry-run` always prints the full breakdown, every tier in both directions plus the uncapped list, whatever the settings.
 
 **Every census label is self-reported.** A peer's version string is free text it sends about itself, so `v9.26.7`, "wallet" and "other" all mean "what the peer says it is". The monitor cannot prove any of it, which is why the census reports and alerts but never disconnects or bans.
 
-**MuSig2.** `nonces_complete` and `signing` are normal phases of every signing round, so they now show ✅ like `complete`. During `nonces_complete` the nonce count covers every oracle that submitted one, before the 7 signers are chosen, so v2.11.0 printed it as `34/7 nonces`. It now reads `✅ MuSig2: epoch 612379, nonces_complete, 34 nonces in, 0/7 sigs`. A state the monitor does not recognize stays ℹ️, and a parse failure stays ⚠️.
+**MuSig2.** `nonces_complete` and `signing` are normal phases of every signing round, so they now show ✅ like `complete`. During `nonces_complete` the nonce count covers every oracle that submitted one, before the 7 signers are chosen, so v2.11.0 printed it as `34/7 nonces`. It now reads `✅ MuSig2: epoch 612379, nonces_complete, 34 nonces in, 0/7 sigs`. A state the monitor does not recognize stays 🔵, and a parse failure stays ⚠️.
 
-**DD economy** now carries the node's own verdict when the daemon reports one (`health_status` and `minting_restricted_reason`, seen on DigiByte Core v9.26.7). When the node says `healthy` and minting is not restricted, the line is ✅ with `healthy` added. Anything else is ⚠️ and counts one warning, printed in the node's own words, `(245% collateralized, health: <status>, minting restricted: <reason>)`, so an unfamiliar value is shown rather than guessed at. The monitor sets no collateral threshold of its own. A daemon without those fields gets the plain ℹ️ line, as before. It stays summary only, with no alert card, because it is a network-wide condition rather than something wrong with your box.
+**DD economy** now carries the node's own verdict when the daemon reports one (`health_status` and `minting_restricted_reason`, seen on DigiByte Core v9.26.7). When the node says `healthy` and minting is not restricted, the line is ✅ with `healthy` added. Anything else is ⚠️ and counts one warning, printed in the node's own words, `(245% collateralized, health: <status>, minting restricted: <reason>)`, so an unfamiliar value is shown rather than guessed at. The monitor sets no collateral threshold of its own. A daemon without those fields gets the plain 🔵 line, as before. It stays summary only, with no alert card, because it is a network-wide condition rather than something wrong with your box. (v2.11.2: the routine wait at the start of each oracle epoch reads 🔵, see the [v2.11.2 section](#v2112-a-clearer-info-icon-and-no-secrets-on-a-command-line).)
 
 **Prices** print with six decimals, so a price of exactly 3,140 µUSD reads `$0.003140` instead of `$0.00314`.
 
 Two new settings on all three platforms: `PEER_VERSION_DETAIL` (default `yes`) and `PEER_VERSION_MAX` (default `6`). Shipped cross-platform as `2.11.1` / `2.11.1-win.1` / `2.11.1-macos.1`.
 
+### v2.11.2: a clearer info icon, and no secrets on a command line
+
+**🔵 replaces ℹ️ on every line where nothing was judged.** Bob (@vicos59) pointed out in #digidollar that in his twice-daily email summaries ℹ️ is hard to tell apart from ✅ at a glance, and suggested a circle. The meaning has not changed: a list, a check turned off in config, a field the daemon does not report, or a reading not confirmed yet. The icon is part of the line text, so Discord, email and the terminal all change together. 🔵 is double-width like ✅, so it takes one space where ℹ️ needed two (the v2.6.1 alignment fix), and the columns still line up. If you filter monitor output for ℹ️ anywhere, a mail rule or a log grep, switch it to 🔵. Older release sections above keep the icons those releases printed, except the v2.11.1 tables, which serve as the icon reference and now show 🔵.
+
+**The SMTP login and the Discord webhook URL no longer show in the process list** (Linux and macOS). curl used to receive both as arguments, `--user name:key` for email and the webhook URL for Discord, and any account on the machine can read a running process's arguments with `ps`. curl 8.5 on Linux blanks out a `--user` value once it has started, which still leaves a short window, but it does not hide a URL, so the webhook was readable for the whole send. Both now reach curl as a config line on standard input (`curl -K -`), written by the shell's built-in `printf`, so they appear on no command line and never touch the disk. Nothing changes in your config. The Windows port never had this exposure: it sends email through .NET's `SmtpClient` and posts to Discord with `Invoke-RestMethod`, both inside the PowerShell process.
+
+**`--test-email` points to [Email lands in spam or never arrives](#email-lands-in-spam-or-never-arrives) after a successful send** (`-TestEmail` on Windows). "Sent" only means your SMTP server accepted the message; whether it reaches your inbox is up to the receiving server.
+
+**The DD economy line no longer warns during the oracle's routine wait.** Every 40 blocks (about 10 minutes) a new oracle epoch starts, and no node can price the next block until that epoch's 7 signers have finished and their signed bundle has spread. For that minute or two (7 blocks, about 2 minutes, when I measured it on mainnet) DigiByte Core reports `minting_restricted_reason: health_state_not_ready`, and v2.11.1 turned it into a ⚠️ and a yellow card whenever a summary happened to land in it. My mainnet summary of 2026-11-05 23:05 UTC did exactly that, while its own MuSig2 line showed the round still at 6/7 signatures. v2.11.2 would have printed:
+
+```
+🔵 DD economy: $319,256.81 DD minted, 251,020,308 DGB locked (236% collateralized, healthy, minting paused: waiting for this epoch's signed oracle price, block 5 of 40)
+```
+
+That wait was measured on my node on 2026-11-06: the next block was not ready for blocks 1 through 7 of the epoch, every reading carried the epoch mismatch text, and minting reopened in the same reading where the round showed `complete` with 7 of 7 signatures. Blue counts no warning, so a healthy card stays green. Two things must both hold, and both come from the node itself:
+
+| Check | Source |
+|---|---|
+| The node's own detail is the wait: a `v0x03 bundle epoch mismatch` or `no valid oracle quote for the next block` | `getdigidollarstats` → `next_block_health.data_error` |
+| The MuSig2 round for that epoch has not completed or failed | `getdigidollardeploymentinfo` → `musig2_session.epoch` and `.state`, read before the stats call |
+
+Anything else stays ⚠️ and now prints the node's detail in its own words, for example `minting restricted: health_state_not_ready, detail: DigiDollar state not ready: restart to verify previously unchecked Thaw Day history`. That covers a round that finished but still left the node without a price, and faults on your own node. Two details point at your own node:
+
+| Detail on the ⚠️ line | What it means | What to do |
+|---|---|---|
+| `DigiDollar state not ready: restart to verify previously unchecked Thaw Day history` | The node's saved DigiDollar state has not had its Thaw Day history checked, and that check only runs at startup | Restart the DigiByte daemon. The oracle runs inside it and restarts with it |
+| `DigiDollar state not ready: restore required oracle quote block <hash>` | A recent block that should hold an oracle price can't be read from disk or fails its integrity check | Repair the block data on disk. A `-reindex` is the usual route |
+
+Until then that node cannot price the next block, so it won't accept or build DigiDollar mints and redeems. Other nodes are not affected. Neither is the routine wait, and a restart does nothing for the wait. The round state is the one the summary already reads at the start, so this adds no RPC call. If the round state cannot be read, the detail alone decides. The 40-block epoch is a DigiByte Core constant on mainnet, testnet and regtest; no RPC reports it.
+
+Shipped cross-platform as `2.11.2` / `2.11.2-win.1` / `2.11.2-macos.1`.
+
 ### Email alert examples
 
-**Testnet26 Health Summary, red status with an issue detected, and the instance flagged with `NETWORK_EMOJI`:**
-
-![Email alert, Testnet26 Health Summary red](email-alert-testnet.jpg)
-
-The subject reads `🚧 Testnet26 — 🔴 1 Issue Detected — Health Summary`. The label and its optional glyph are applied once, at the `send_email` chokepoint, so a dual-instance operator can sort testnet from mainnet in an inbox list without opening anything (v2.9.0, #41).
-
-**Mainnet Health Summary, green all-clear with live post-activation oracle data:**
+**Mainnet Health Summary, green all-clear:**
 
 ![Email alert, Mainnet Health Summary green](email-alert-mainnet.jpg)
 
-Mainnet is deliberately left without a `NETWORK_EMOJI`, so production subjects stay exactly as they have always looked. Both summaries carry the DD economy line under Price (v2.9.0, #40), and the two show entirely separate DigiDollar economies because they are two different chains.
+Every check reads ✅, and the one 🔵 line is the peer version list, which is a list rather than a check (v2.11.1, v2.11.2). Mainnet is deliberately left without a `NETWORK_EMOJI`, so production subjects stay exactly as they have always looked.
+
+**Testnet26 Health Summary, one warning, with the instance flagged by `NETWORK_EMOJI`:**
+
+![Email alert, Testnet26 Health Summary with one warning](email-alert-testnet.jpg)
+
+The subject reads `🚧 Testnet26 — ⚠️ 1 Warning — Health Summary`. The label and its optional glyph are applied once, at the `send_email` chokepoint, so a dual-instance operator can sort testnet from mainnet in an inbox list without opening anything (v2.9.0, #41). The warning is real: my testnet26 node runs with the `digidollar` and `net` debug categories on, so its `debug.log` grows about 370 MB a day, and the line names those categories (v2.7.0). The monitor rotates the file at 2048 MB. Both summaries carry the DD economy line under Price, and the two show entirely separate DigiDollar economies because they are two different chains.
 
 **Individual Low Disk alert, showing the severity tag and the datadir call-out:**
 
@@ -333,6 +367,46 @@ This is the shape of an individual alert rather than a summary, and it is where 
 
 All three carry the `NETWORK_LABEL` subject prefix and the same footer stamp as the Discord cards. When a newer version exists on GitHub main, the footer gains its second line automatically (the `⬆️ vX.Y.Z available — https://github.com/BaumerCrypto/digidollar-oracle-tools` line), no config change needed. The `https://` scheme is included so email clients auto-linkify the URL universally, including Outlook desktop and corporate gateways that only linkify explicit-scheme URLs (v2.6.1).
 
+### Email lands in spam or never arrives
+
+If `--test-email` reports success but the message lands in your spam folder, arrives with `*****SPAM*****` or `[SPAM]` in front of the subject, or never shows up at all, the cause is usually the **From address**, not the monitor. It happened to my own monitor mail in November 2026, after months of clean delivery.
+
+**Why.** A relay such as Brevo sends your mail from its own servers. If `SMTP_FROM` is an address at a mailbox provider (your ISP, Gmail, Yahoo and so on), that provider never authorized the relay to send for its domain. The receiving server checks this with DMARC: neither SPF nor DKIM lines up with the From domain, so DMARC fails, and the server applies the policy that domain publishes.
+
+| Policy the From domain publishes | What happens to a message that fails DMARC |
+|---|---|
+| `p=none` | No action requested; the message is usually delivered |
+| `p=quarantine` | Spam folder, or a spam tag on the subject |
+| `p=reject` | Refused by the receiving server. It never arrives, and `--test-email` still reports success because the relay had already accepted it. Yahoo and AOL publish this policy. |
+
+Marking the sender as trusted or "not spam" does not help, because it does not change the DMARC result. A provider can also tighten its policy at any time, which is one way a setup that worked for months can start landing in spam with no change on your side.
+
+**Confirm it.** Open the message's full headers (Gmail: ⋮ → Show original; most webmail has "view source" or "show headers") and find the `Authentication-Results` line. A From-address problem looks like this:
+
+```
+dkim=pass header.d=<the relay's own domain>
+dmarc=fail (policy=quarantine) header.from=<your mailbox provider's domain>
+```
+
+The relay did sign the message, just not as your From domain.
+
+**Fixes, best first.**
+
+1. **Send through your mailbox provider's own SMTP server**, with `SMTP_FROM` set to the address you log in with. For Gmail that is `smtp.gmail.com`, port 587 and an App Password (the config template walks through it). The provider signs its own mail, so DMARC passes. Caveat: some ISPs refuse SMTP logins from VPS address ranges, which is why many operators use a relay in the first place.
+2. **Keep the relay and send from a domain you control.** Authenticate the domain in the relay's dashboard and add the DNS records it gives you. For Brevo that was, in my case, one verification TXT record, two DKIM CNAME records and a DMARC TXT record (start the DMARC record at `p=none`). Verify the new sender address in the relay, then point the monitor at it:
+
+   ```
+   SMTP_FROM="Oracle Monitor <monitor@example.com>"
+   ```
+
+   Run `--test-email` again and check the headers: you want `dkim=pass` for your own domain and `dmarc=pass`. Tighten your own DMARC policy later, and only after every other service that sends as that domain is authenticated too.
+3. **An inbox rule** that pulls the monitor's mail out of spam is a band-aid. It does nothing under `p=reject`, where the mail never arrives.
+
+**Brevo notes.**
+
+- Your mail client may show an **Unsubscribe** button on monitor email, because Brevo adds an unsubscribe header to transactional mail too. Don't press it: Brevo tracks transactional unsubscribes separately, and an address that has unsubscribed can stop receiving transactional mail, your own alerts included. If it happens, unblock your address under Brevo's blocked transactional contacts.
+- Brevo delivers the message as HTML even though the monitor sends plain text. If your webmail says remote or inline content was blocked, the alert is still complete: the monitor's message contains no images, so anything blocked was added on the way.
+
 ### DigiDollar activation status handling
 
 **DigiDollar activated on mainnet at block 23,869,440 on 2026-07-17**, so a healthy mainnet monitor now shows full oracle data rather than standby lines. The guard below still matters: it's what keeps a monitor quiet on any chain where the deployment isn't live, a fresh testnet reset, or a node you're bringing up ahead of a future deployment.
@@ -341,9 +415,9 @@ Before DigiDollar BIP9 activates on a given chain, the oracle RPCs (`listoracle`
 
 The v2.5+ monitors solve this with a pre-flight check. A `check_digidollar_active` function runs first on every pass, reads `getdigidollardeploymentinfo` for the current deployment status, and sets a `DD_ACTIVE` global that the four oracle-dependent checks (`check_oracle`, `check_price`, `check_services`, `check_quorum`) consult before deciding whether to alert.
 
-When `DD_ACTIVE=false`, those four checks downgrade "no data" to a blue ℹ️ standby INFO line instead of a red alert, showing something like `ℹ️ Oracle: standby (DigiDollar deployment: started)` in the health summary. The other checks (daemon, chain, peers, disk, debug.log, memory, swap, service, NTP, version) continue to alert normally on real problems. Result: your Discord channel stays quiet until DigiDollar activates, then automatically switches to full oracle alerting once `DD_ACTIVE=true`.
+When `DD_ACTIVE=false`, those four checks downgrade "no data" to a blue 🔵 standby INFO line instead of a red alert, showing something like `🔵 Oracle: standby (DigiDollar deployment: started)` in the health summary. The other checks (daemon, chain, peers, disk, debug.log, memory, swap, service, NTP, version) continue to alert normally on real problems. Result: your Discord channel stays quiet until DigiDollar activates, then automatically switches to full oracle alerting once `DD_ACTIVE=true`.
 
-So an all-green health summary with four ℹ️ standby lines is correct pre-activation behavior, not a bug, it flips to full oracle data automatically the moment the deployment goes active.
+So an all-green health summary with four 🔵 standby lines is correct pre-activation behavior, not a bug, it flips to full oracle data automatically the moment the deployment goes active.
 
 **v9.26.5 note (v2.7.0).** That release buries the DigiDollar deployment (BIP90) and reshapes `getdigidollardeploymentinfo`: the BIP9 signaling fields give way to `{enabled, type:"buried", status, activation_height}`. v2.7.0 reads both shapes, the status field persists through the burial, and there's an explicit `{type:"buried", active:true}` fallback behind it, so the daemon and the monitor can be upgraded in either order.
 
@@ -354,7 +428,7 @@ Discord embeds and (v2.6.0+) plain-text emails, color-coded / severity-tagged:
 - 🔴 **Red** / `[ALERT]`, critical (daemon down, oracle stopped, chain stuck, quorum at edge or lost)
 - 🟡 **Yellow** / `[WARNING]`, warnings (low peers, low disk, disk over the warn band, debug.log growing large, stale price, degraded consensus, NTP desync, quorum getting thin, swap pressure, too few outbound peers on the minimum version)
 - 🟢 **Green** / `[RESOLVED]`, recovery confirmations (quorum healthy, margin improving, disk back under band, debug.log back under threshold, outbound peer versions recovered)
-- 🔵 **Blue** / `[INFO]`, 12-hour status summary, ℹ️ INFO lines for standby state, and **one card per debug.log rotation** (v2.7.0, rotations are never silent)
+- 🔵 **Blue** / `[INFO]`, 12-hour status summary, 🔵 INFO lines for standby state, and **one card per debug.log rotation** (v2.7.0, rotations are never silent)
 - **Card titles and email Subject lines** carry the `NETWORK_LABEL` from your config on *every* alert, health summaries (`Testnet26 Health Summary`), individual checks (`Mainnet — 🔴 Node Down`), and the `--test` alert, so dual-instance operators can tell which daemon fired an alert at a glance without opening the card (v2.5.3, mirrored into emails at the `send_email` chokepoint in v2.6.0)
 - **Footer** stamps the monitor version and your oracle identity on every card (e.g. `Oracle Monitor v2.7.1 — digibyte-maxi (ID 17)`). When an update is available, the footer gains a second line: `⬆️ v2.6.x available — https://github.com/BaumerCrypto/digidollar-oracle-tools` (v2.6.0)
 
@@ -364,13 +438,15 @@ All timestamps inside alerts are in UTC for unambiguous reading across timezones
 
 ### Discord alert examples
 
-**Dual-instance health summaries, testnet26 and mainnet, same Discord channel, one daemon each:**
+**Health summaries, mainnet and testnet26, same Discord channel, one daemon each:**
 
-![Dual-instance health summaries, Testnet26 and Mainnet](Discord_alert-HealthSummary-DualInstance.jpg)
+![Discord health summary, Mainnet](Discord_alert-HealthSummary-Mainnet.jpg)
 
-This is the day-to-day view, and it is the argument for `NETWORK_LABEL` in one picture: two daemons on one box, two cards in one channel, and no ambiguity about which fired. The testnet instance carries a `NETWORK_EMOJI` so it announces itself at a glance, while mainnet is deliberately left unmarked so production cards look exactly as they always have (v2.9.0, #41).
+![Discord health summary, Testnet26](Discord_alert-HealthSummary-Testnet.jpg)
 
-Beyond the title the cards diverge exactly where they should: `digibyted.service` versus `digibyted-mainnet.service`, testnet block height versus mainnet, quorum counts from two different rosters, and two entirely separate DigiDollar economies. That last one is the clearest tell, `$7,490.77 DD minted (758% collateralized)` on testnet against `$41,932.07 DD minted (332% collateralized)` on mainnet. Same box, same monitor, same five-minute cron, and every number that should differ does. Both footers stamp `v2.9.0`.
+This is the day-to-day view, and it is the argument for `NETWORK_LABEL`: two daemons on one box, two cards in one channel, and no ambiguity about which fired. The testnet instance carries a `NETWORK_EMOJI` so it announces itself at a glance, while mainnet is deliberately left unmarked so production cards look exactly as they always have (v2.9.0, #41).
+
+Beyond the title the cards diverge exactly where they should: `digibyted-mainnet.service` versus `digibyted.service`, mainnet block height versus testnet, quorum counts from two different rosters, and two entirely separate DigiDollar economies. That last one is the clearest tell, `$319,256.81 DD minted (236% collateralized)` on mainnet against `$19,940.77 DD minted (387% collateralized)` on testnet. Same box, same monitor, same five-minute cron, and every number that should differ does. Both footers stamp `v2.11.2`.
 
 **Quorum state transition alerts, red/yellow/green as oracle count changes:**
 
@@ -488,7 +564,7 @@ All thresholds are configurable in `~/.oracle-monitor/config`. The script uses b
 | `SMTP_PORT` | `587` | 587 for STARTTLS (Gmail/Outlook/Brevo default), 465 for implicit TLS (v2.6.0) |
 | `SMTP_USER` | *(empty)* | SMTP login, usually your full email address (v2.6.0) |
 | `SMTP_PASS` | *(empty)* | SMTP password. Gmail: **App Password**, not account password (v2.6.0) |
-| `SMTP_FROM` | *(empty)* | `"Display Name <you@example.com>"`, empty = use `SMTP_USER` (v2.6.0) |
+| `SMTP_FROM` | *(empty)* | `"Display Name <you@example.com>"`, empty = use `SMTP_USER` (v2.6.0). With a relay, use an address on a domain you authenticated there, or mail can land in spam ([why](#email-lands-in-spam-or-never-arrives)) |
 | `UPDATE_CHECK` | `yes` | Set to `no` to disable the daily GitHub version check (v2.6.0) |
 | `DD_ECONOMY_ENABLED` | `yes` | Set to `no` to skip the `getdigidollarstats` call and drop the DD economy line from the summary (v2.9.0, #40) |
 | `PEER_VERSION_CHECK` | `yes` | Peer version census (v2.11.0). `no` skips the `getpeerinfo` call and drops the summary lines |
@@ -595,7 +671,7 @@ Both scripts parse specific fields from DigiByte Core RPCs. If a future release 
 | `getoracles true` | `last_price_usd`, `status`, `heartbeat_status` *(v2.2: "fresh" = online within 30 min)*, `heartbeat_age_seconds`, `heartbeat_timestamp`, `software_version` *(used by oracle-network-status.sh)* |
 | `getblockchaininfo` | `chain` *(used by oracle-network-status.sh v1.4 for network label auto-detection)* |
 | `getpeerinfo` | `subver`, `connection_type`, `inbound`, `version` *(oracle-monitor v2.11.0 peer version census; `inbound` is the fallback when `connection_type` is absent)* |
-| `getdigidollarstats` | `total_dd_supply` *(cents)*, `total_collateral_dgb`, `health_percentage`; `health_status` and `minting_restricted_reason` are read when present *(oracle-monitor v2.11.1 DD economy verdict; also used by oracle-network-status.sh)* |
+| `getdigidollarstats` | `total_dd_supply` *(cents)*, `total_collateral_dgb`, `health_percentage`; `health_status` and `minting_restricted_reason` are read when present *(oracle-monitor v2.11.1 DD economy verdict; also used by oracle-network-status.sh)*; `next_block_health.data_error`, `next_block_health.candidate_height` and `mint_volatility.data_error` *(v2.11.2 epoch-wait check and the printed detail)* |
 | `getoraclesigners` | `bundle_count`, `bundles[].height`, `bundles[].signer_count`, `bundles[].signer_ids` *(used by oracle-network-status.sh)* |
 
 **RC45 new RPCs** (not used by these scripts yet but available):
@@ -866,9 +942,9 @@ The MIT license grants full rights to fork, modify, and redistribute. This coord
 | DigiByte Core | v9.26.7 (also compatible with v9.26.2 through v9.26.6, and RC44/RC45/RC46) |
 | Chain | mainnet (DigiDollar active since block 23,869,440) + testnet26 |
 | Oracle protocol | v0x03 MuSig2 bundle |
-| oracle-monitor.sh | v2.11.1 |
-| oracle-monitor.ps1 | v2.11.1-win.1 |
-| oracle-monitor-macos.sh | v2.11.1-macos.1 |
+| oracle-monitor.sh | v2.11.2 |
+| oracle-monitor.ps1 | v2.11.2-win.1 |
+| oracle-monitor-macos.sh | v2.11.2-macos.1 |
 | oracle-network-status.sh | v1.8.4 |
 
 Compatibility here means the scripts parse these releases' RPC output. It is not a statement about which daemon can follow the chain: Thaw Day activated at mainnet block 24,490,000 on 2026-11-02 UTC, and from that height every full node needs v9.26.6 or newer.

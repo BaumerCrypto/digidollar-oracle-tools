@@ -1,14 +1,14 @@
 #!/bin/bash
 ###############################################################################
 # oracle-monitor.sh — DGB Oracle Health Monitor with Discord + Email Alerts
-# Version: 2.11.1
+# Version: 2.11.2
 #
 # Monitors oracle node health and sends Discord webhook and email
 # notifications when issues are detected. Designed for cron job execution.
 #
 # Author & Oracle: digibyte-maxi (ID 17) — VPS | @BaumerCrypto2.0 | https://x.com/BaumerCrypto2_0 - July 2026
 # SPDX-License-Identifier: MIT
-readonly SCRIPT_VERSION="2.11.1"
+readonly SCRIPT_VERSION="2.11.2"
 #
 # SETUP:
 #   1. Copy this script to your VPS: ~/oracle-monitor.sh
@@ -36,6 +36,39 @@ readonly SCRIPT_VERSION="2.11.1"
 #   0 */12 = every 12 hours for a full status summary (always sends)
 #
 # CHANGELOG:
+#   v2.11.2 — A clearer info icon, and no secrets on a command line.
+#          (1) Lines where nothing was judged start with 🔵 instead of
+#          ℹ️. In an email summary ℹ️ is hard to tell from ✅ at a
+#          glance (Bob, @vicos59, #digidollar, 2026-11-03). Same meaning:
+#          a list, a check turned off in config, a field the daemon does
+#          not report, or a reading not confirmed yet. 🔵 is double-width
+#          like ✅, so it takes one space where ℹ️ took two (v2.6.1).
+#          (2) The SMTP login and the Discord webhook URL no longer
+#          reach curl as arguments, which other accounts on the box can
+#          read with ps. curl blanks a --user value once it starts (seen
+#          on curl 8.5), which still leaves a short window, and it never
+#          hides a URL, so the webhook was readable for the whole send.
+#          Both now reach curl as a config line on stdin (curl -K -),
+#          written by the printf builtin, so they sit on no command line
+#          and never touch the disk.
+#          (3) --test-email: after a successful send it points to the
+#          README section on mail that lands in spam or never arrives.
+#          (4) DD economy: the routine start-of-epoch wait reads 🔵, not
+#          ⚠️. When a new 40-block oracle epoch starts, no node can price
+#          the next block until that epoch's 7 signers finish, so the
+#          daemon reports minting_restricted_reason health_state_not_ready
+#          for a minute or two (7 blocks, about 2 minutes, measured on
+#          mainnet 2026-11-06), and a summary landing in that window turned
+#          the whole card yellow (first seen 2026-11-05 23:05 UTC). The
+#          line is now 🔵 "minting paused: waiting for this epoch's signed
+#          oracle price, block N of 40" and counts no warning when both
+#          hold: the node's own detail (next_block_health.data_error) is
+#          the epoch mismatch or no-quote text, and the MuSig2 round for
+#          that epoch has not completed. Any other detail (a restart or
+#          restore message), or a round that completed or failed and
+#          still left the node without a quote, stays ⚠️, now with the
+#          node's detail printed. The round state is the one
+#          check_digidollar_active already reads, so no extra RPC.
 #   v2.11.1 — The health summary reads green when the network is healthy.
 #          v2.11.0 added three blue info lines for the peer census, and a
 #          card that is always half blue teaches the reader to ignore
@@ -569,7 +602,7 @@ UPDATE_CHECK_TTL=86400
 # version against the latest DigiByte Core release on GitHub once per
 # DIGIBYTE_UPDATE_TTL seconds. The node-version line in the health summary
 # turns ✅ green when you're on the latest release (or newer) and stays
-# ℹ️ blue with a "vX.Y.Z available" note when a newer release exists.
+# 🔵 blue with a "vX.Y.Z available" note when a newer release exists.
 # Silent on any failure (blue line, no note). Set to "no" to disable.
 DIGIBYTE_UPDATE_CHECK="yes"
 DIGIBYTE_UPDATE_TTL=21600
@@ -865,7 +898,7 @@ build_footer() {
 # and caches it per instance (STATE_DIR) for DIGIBYTE_UPDATE_TTL seconds.
 # Same discipline as the self-update check above: memoized per run, silent
 # on every failure (returns empty → check_version falls back to the plain
-# ℹ️ line), and — because check_version runs during --dry-run — it never
+# 🔵 line), and — because check_version runs during --dry-run — it never
 # fetches or writes the cache in dry-run (serves any stale cache read-only).
 # Uses the releases/latest endpoint, which GitHub only points at a real
 # (non-prerelease) release, so operators are never nudged toward an RC.
@@ -927,6 +960,39 @@ get_latest_digibyte_release() {
 # NOTIFICATION FUNCTIONS — DISCORD + EMAIL
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# Secrets stay off the command line (v2.11.2). Every account on the box can
+# read a process's arguments (ps, /proc/<pid>/cmdline). curl blanks a --user
+# value only after it has started, and never hides a URL, so the Discord
+# webhook URL and the SMTP login reach curl as a config file on stdin
+# (curl -K -) instead. The config line is written by printf, a shell
+# builtin, so it has no command line of its own, and nothing touches disk.
+# ----------------------------------------------------------------------------
+
+# Quote a value for a curl config file: wrapped in double quotes, with
+# backslash and double quote escaped (the only two characters that need it
+# inside quotes). A plain character loop on purpose: the way
+# ${var//pattern/replacement} treats backslashes in the replacement differs
+# between bash 3.2 and 5.2.
+curl_cfg_quote() {
+    local raw="$1" out="" ch i
+    for (( i = 0; i < ${#raw}; i++ )); do
+        ch="${raw:i:1}"
+        case "$ch" in
+            \\|\") out="${out}\\${ch}" ;;
+            *)     out="${out}${ch}" ;;
+        esac
+    done
+    printf '"%s"' "$out"
+}
+
+# POST a JSON payload to the Discord webhook. The payload (card text) stays
+# an argument; the webhook URL arrives on stdin.
+discord_post() {
+    printf 'url = %s\n' "$(curl_cfg_quote "$DISCORD_WEBHOOK")" \
+        | curl -s -K - -H "Content-Type: application/json" -d "$1" > /dev/null 2>&1
+}
+
 send_discord() {
     local color="$1"    # red=16711680, green=65280, yellow=16776960, blue=3447003
     local title="$2"
@@ -964,7 +1030,7 @@ send_discord() {
         --arg footer "$(build_footer)" \
         --arg ts "$timestamp" \
         '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
-    curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
+    discord_post "$payload"
 }
 
 # ----------------------------------------------------------------------------
@@ -1039,13 +1105,15 @@ $(build_footer)"
         --url "$smtp_url"
         --mail-from "$from_addr"
         --mail-rcpt "$EMAIL_TO"
-        --user "${SMTP_USER}:${SMTP_PASS}"
         --upload-file "$tmpfile"
         --max-time 30
     )
     [ "${SMTP_PORT:-587}" != "465" ] && curl_opts+=(--ssl-reqd)
 
-    curl "${curl_opts[@]}" > /dev/null 2>&1
+    # v2.11.2: the login reaches curl on stdin (see curl_cfg_quote), never
+    # as --user on the command line.
+    printf 'user = %s\n' "$(curl_cfg_quote "${SMTP_USER}:${SMTP_PASS}")" \
+        | curl -K - "${curl_opts[@]}" > /dev/null 2>&1
     local exit_code=$?
     rm -f "$tmpfile"
     return $exit_code
@@ -1156,7 +1224,7 @@ check_oracle() {
 
     if [ $? -ne 0 ] || [ -z "$oracle_info" ]; then
         if [ "$DD_ACTIVE" = "false" ]; then
-            DETAILS+="ℹ️  Oracle: standby (DigiDollar deployment: $DD_STATUS)\n"
+            DETAILS+="🔵 Oracle: standby (DigiDollar deployment: $DD_STATUS)\n"
             return
         fi
         if should_alert "oracle_down"; then
@@ -1389,14 +1457,14 @@ peer_maxconnections() {
 #
 # Health summary (v2.11.1), two lines under Peers:
 #   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
-#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+#   🔵 Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
 # Outbound counts every counted outbound connection, the same peers the
 # alert watches. Inbound counts DigiByte nodes only; wallets and other
 # clients follow as "plus N wallets, N other". The census line is a
-# check: ✅ when it passes, ⚠️ while the alert is latched, ℹ️ when nothing
+# check: ✅ when it passes, ⚠️ while the alert is latched, 🔵 when nothing
 # was judged (alert off in config, no outbound yet, or below the threshold
 # but not yet confirmed by the debounce). The versions line is a list, not
-# a check, so it is always ℹ️: nodes in both directions, the
+# a check, so it is always 🔵: nodes in both directions, the
 # PEER_VERSION_MAX versions with the most peers (ties go to the newer
 # version), shown oldest to newest, then "+N more (M peers)". --dry-run
 # prints the full breakdown whatever the settings.
@@ -1492,7 +1560,7 @@ check_peer_versions() {
 
     if [ -z "$row" ]; then
         if [ "$SUMMARY_MODE" = true ]; then
-            DETAILS+="ℹ️  Peers on ${floor}+: could not query getpeerinfo\n"
+            DETAILS+="🔵 Peers on ${floor}+: could not query getpeerinfo\n"
         fi
         return
     fi
@@ -1589,16 +1657,16 @@ check_peer_versions() {
         DETAILS+="⚠️  ${line} (below ${thr}!)\n"
         WARNINGS=$((WARNINGS + 1))
     elif [ "$thr" -eq 0 ]; then
-        DETAILS+="ℹ️  ${line} (alert off in config)\n"
+        DETAILS+="🔵 ${line} (alert off in config)\n"
     elif [ "$out_total" -eq 0 ]; then
-        DETAILS+="ℹ️  ${line} (checking)\n"
+        DETAILS+="🔵 ${line} (checking)\n"
     elif [ "$oc" -lt "$thr" ]; then
-        DETAILS+="ℹ️  ${line} (checking, below ${thr})\n"
+        DETAILS+="🔵 ${line} (checking, below ${thr})\n"
     else
         DETAILS+="✅ ${line}\n"
     fi
 
-    # Versions line: a list, not a check, so always ℹ️.
+    # Versions line: a list, not a check, so always 🔵.
     case "${PEER_VERSION_DETAIL:-yes}" in
         no|NO|No|false|off|0) ;;
         *)
@@ -1609,7 +1677,7 @@ check_peer_versions() {
                     [ "$hp" = "1" ] && pw="peer"
                     more=" · +${hn} more (${hp} ${pw})"
                 fi
-                DETAILS+="ℹ️  Peer versions: ${vshow}${more}\n"
+                DETAILS+="🔵 Peer versions: ${vshow}${more}\n"
             fi
             ;;
     esac
@@ -1627,7 +1695,7 @@ check_price() {
 
     if [ $? -ne 0 ]; then
         if [ "$DD_ACTIVE" = "false" ]; then
-            DETAILS+="ℹ️  Price: pending (DigiDollar deployment: $DD_STATUS)\n"
+            DETAILS+="🔵 Price: pending (DigiDollar deployment: $DD_STATUS)\n"
             return
         fi
         DETAILS+="⚠️  Price: could not query\n"
@@ -1691,7 +1759,7 @@ check_price() {
 # ✅ for "healthy" with no restriction, ⚠️ plus one warning for anything
 # else, printed in the node's words so an unfamiliar value is shown rather
 # than guessed at. The monitor sets no collateral threshold of its own. A
-# daemon without those fields keeps the plain ℹ️ information line.
+# daemon without those fields keeps the plain 🔵 information line.
 # Worst case it appends nothing at all.
 #
 # COST (measured 2026-07-25, mainnet block 23,917,448, 129 open positions):
@@ -1730,13 +1798,61 @@ group_thousands() {
     printf '%s%s' "$n" "$out"
 }
 
+# v2.11.2: is health_state_not_ready the routine start-of-epoch wait?
+# Every 40 blocks a new oracle epoch starts, and no node can price the next
+# block until that epoch's 7 signers finish and the bundle spreads. The
+# daemon reports minting_restricted_reason health_state_not_ready for a
+# minute or two (DigiByte Core v9.26.7: GetCandidateHealthQuote needs
+# GetNextBlockOracleQuote, and ValidateMuSig2Bundle requires the bundle's
+# epoch to equal the next block's epoch). Prints a short note when the
+# restriction is that wait, and nothing when it is not.
+#   (a) The node's own detail, next_block_health.data_error, must be the
+#       epoch mismatch or the no-quote text. Anything else (restart,
+#       restore, coins-view messages) is a real fault and stays a warning.
+#   (b) The MuSig2 round for the next block's epoch must not have finished.
+#       A round already "complete" (or "failed") that still leaves the node
+#       without a quote is not the wait. The round state comes from the
+#       getdigidollardeploymentinfo call check_digidollar_active made before
+#       getdigidollarstats, so if the round completes between the two calls
+#       the stats call sees the quote and the line is green; the older read
+#       can only err toward a warning, never hide one. If the round state
+#       cannot be read, (a) decides alone.
+# The epoch length is 40 blocks on mainnet, testnet and regtest in v9.26.7
+# (nDDOracleEpochBlocks). No RPC reports it.
+DD_EPOCH_BLOCKS=40
+
+dd_epoch_wait() {
+    local stats="$1" err cand pos ce se st
+    err=$(echo "$stats" | jq -r '.next_block_health.data_error // empty' 2>/dev/null)
+    case "$err" in
+        "v0x03 bundle epoch mismatch"*|"no valid oracle quote for the next block") ;;
+        *) return 0 ;;
+    esac
+    cand=$(echo "$stats" | jq -r '.next_block_health.candidate_height // empty' 2>/dev/null)
+    if ! [[ "$cand" =~ ^[0-9]+$ ]]; then
+        printf '%s' "minting paused: waiting for this epoch's signed oracle price"
+        return 0
+    fi
+    pos=$((cand % DD_EPOCH_BLOCKS))
+    ce=$((cand / DD_EPOCH_BLOCKS))
+    se=$(echo "${DD_DEPLOY_INFO:-}" | jq -r '.musig2_session.epoch // empty' 2>/dev/null)
+    st=$(echo "${DD_DEPLOY_INFO:-}" | jq -r '.musig2_session.state // empty' 2>/dev/null)
+    if [[ "$se" =~ ^[0-9]+$ ]] && [ -n "$st" ]; then
+        [ "$se" -gt "$ce" ] && return 0
+        if [ "$se" -eq "$ce" ]; then
+            case "$st" in complete|failed) return 0 ;; esac
+        fi
+    fi
+    printf '%s, block %s of %s' "minting paused: waiting for this epoch's signed oracle price" "$((pos + 1))" "$DD_EPOCH_BLOCKS"
+}
+
 check_dd_economy() {
     [ "${DD_ECONOMY_ENABLED:-yes}" = "yes" ] || return 0
 
     # Pre-activation chains have no economy to report. Matches the standby
     # wording the oracle, price, and quorum checks already use.
     if [ "$DD_ACTIVE" = "false" ]; then
-        DETAILS+="ℹ️  DD economy: standby (DigiDollar deployment: $DD_STATUS)\n"
+        DETAILS+="🔵 DD economy: standby (DigiDollar deployment: $DD_STATUS)\n"
         return 0
     fi
 
@@ -1776,7 +1892,7 @@ check_dd_economy() {
     if [ -z "$health_status" ]; then
         ratio_display=""
         [ -n "$pct" ] && ratio_display=" (${pct})"
-        DETAILS+="ℹ️  ${base}${ratio_display}\n"
+        DETAILS+="🔵 ${base}${ratio_display}\n"
         return 0
     fi
 
@@ -1789,12 +1905,30 @@ check_dd_economy() {
         DETAILS+="✅ ${base} (${note}healthy)\n"
         return 0
     fi
+    # v2.11.2: the routine start-of-epoch wait is not judged (see dd_epoch_wait).
+    if [ "$health_status" = "healthy" ] && [ "$restrict_reason" = "health_state_not_ready" ]; then
+        local wait_note
+        wait_note=$(dd_epoch_wait "$stats")
+        if [ -n "$wait_note" ]; then
+            DETAILS+="🔵 ${base} (${note}healthy, ${wait_note})\n"
+            return 0
+        fi
+    fi
     if [ "$health_status" = "healthy" ]; then
         note+="healthy"
     else
         note+="health: ${health_status}"
     fi
     [ "$restricted" = true ] && note+=", minting restricted: ${restrict_reason}"
+    # v2.11.2: print the node's own detail with a real restriction, reduced
+    # to a safe character set and length like the other node values.
+    if [ "$restricted" = true ]; then
+        local detail
+        detail=$(echo "$stats" | jq -r '(.next_block_health.data_error // "") as $n
+            | if ($n | length) > 0 then $n else (.mint_volatility.data_error // "") end' 2>/dev/null \
+            | tr -cd 'A-Za-z0-9_.:,=() -' | cut -c1-160)
+        [ -n "$detail" ] && note+=", detail: ${detail}"
+    fi
     DETAILS+="⚠️  ${base} (${note})\n"
     WARNINGS=$((WARNINGS + 1))
 }
@@ -1879,7 +2013,7 @@ check_disk() {
 # rotate_debuglog() below bounds it.
 #
 # Mechanics:
-#   - Reads ${DATADIR}/debug.log size (missing file = quiet ℹ️ line —
+#   - Reads ${DATADIR}/debug.log size (missing file = quiet 🔵 line —
 #     custom datadirs, fresh installs).
 #   - Tracks growth-per-day via a rolling baseline in STATE_DIR (file:
 #     debuglog_growth, "epoch bytes"; baseline advances at most hourly;
@@ -1894,7 +2028,7 @@ check_debuglog() {
     local log_path="${DATADIR%/}/debug.log"
 
     if [ ! -f "$log_path" ]; then
-        DETAILS+="ℹ️  debug.log: not found at ${log_path} (custom datadir? set DATADIR in config)\n"
+        DETAILS+="🔵 debug.log: not found at ${log_path} (custom datadir? set DATADIR in config)\n"
         return
     fi
 
@@ -2118,7 +2252,7 @@ check_memory() {
 #       Linux 4.20+ gold standard: real stall time (%) in the last 10s.
 #   (2) RAM headroom — RAM usage >= SWAP_MEM_HEADROOM_PCT.
 #       Backstop for the (rare) kernel without PSI.
-# If both signals are quiet, the fill is stale: shown as an ℹ️ line, not a
+# If both signals are quiet, the fill is stale: shown as a 🔵 line, not a
 # warning, and any prior swap alert is cleared. If neither signal can be
 # measured we fail safe and alert exactly as v2.4 did. Companion to the
 # OOM protection in the hardening guide.
@@ -2129,7 +2263,7 @@ check_swap() {
 
     # No swap configured — skip silently in normal checks, note in summary
     if [ "$swap_total_mb" -eq 0 ] 2>/dev/null; then
-        DETAILS+="ℹ️  Swap: not configured\n"
+        DETAILS+="🔵 Swap: not configured\n"
         return
     fi
 
@@ -2188,7 +2322,7 @@ check_swap() {
         if clear_alert "swap_pressure"; then
             alert_green "✅ Swap Pressure Cleared" "Swap still at ${swap_used_mb}MB of ${swap_total_mb}MB but no active pressure (${stale_note}). Likely a stale fill from a past reindex/verify."
         fi
-        DETAILS+="ℹ️  Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (stale — ${stale_note})\n"
+        DETAILS+="🔵 Swap: ${swap_used_mb}MB / ${swap_total_mb}MB used (stale — ${stale_note})\n"
     fi
 }
 
@@ -2209,7 +2343,7 @@ check_services() {
     # unit lookup is suppressed.
     case "$service_name" in
         none|None|NONE|skip|Skip|SKIP|disabled|Disabled|DISABLED)
-            DETAILS+="ℹ️  Systemd: check disabled (SERVICE_NAME=\"none\")\n"
+            DETAILS+="🔵 Systemd: check disabled (SERVICE_NAME=\"none\")\n"
             ;;
         *)
             # v2.5.2: Skip systemd unit check when the Qt wallet is the
@@ -2217,7 +2351,7 @@ check_services() {
             # systemd, so `systemctl is-active` on the headless unit is a
             # misleading red.
             if [ "${DETECTED_DAEMON:-}" = "digibyte-qt" ]; then
-                DETAILS+="ℹ️  Systemd: n/a — Qt wallet is the running daemon\n"
+                DETAILS+="🔵 Systemd: n/a — Qt wallet is the running daemon\n"
             else
                 dgb_status=$(systemctl is-active "$service_name" 2>/dev/null)
                 if [ "$dgb_status" = "active" ]; then
@@ -2233,7 +2367,7 @@ check_services() {
     oracle_status=$($CLI $WALLET_FLAG listoracle 2>/dev/null | jq -r ".running // \"unknown\"" 2>/dev/null)
 
     if [ "$DD_ACTIVE" = "false" ]; then
-        DETAILS+="ℹ️  Oracle process: standby (DigiDollar deployment: $DD_STATUS)\n"
+        DETAILS+="🔵 Oracle process: standby (DigiDollar deployment: $DD_STATUS)\n"
     elif [ "$oracle_status" = "true" ]; then
         DETAILS+="✅ Oracle process: running\n"
     else
@@ -2250,8 +2384,8 @@ check_services() {
 # v2.6.3: compare the running version against the latest DigiByte Core
 # release on GitHub and colour the icon accordingly:
 #   ✅ green  — running the latest release (or newer, e.g. an RC ahead)
-#   ℹ️ blue   — a newer release exists ("... — vX.Y.Z available")
-#   ℹ️ blue   — can't determine latest (offline, API down, check disabled):
+#   🔵 blue   — a newer release exists ("... — vX.Y.Z available")
+#   🔵 blue   — can't determine latest (offline, API down, check disabled):
 #              falls back to the plain v2.6.2 info line, no note.
 check_version() {
     local version running_ver display_ver latest_ver
@@ -2276,11 +2410,11 @@ check_version() {
             DETAILS+="✅ $display_ver\n"
         else
             # a newer release is out
-            DETAILS+="ℹ️  $display_ver — v${latest_ver} available\n"
+            DETAILS+="🔵 $display_ver — v${latest_ver} available\n"
         fi
     else
         # can't determine latest — fail safe to the plain info line
-        DETAILS+="ℹ️  $display_ver\n"
+        DETAILS+="🔵 $display_ver\n"
     fi
 }
 
@@ -2394,14 +2528,14 @@ check_quorum() {
     musig_sigs=$(echo "$deploy_info" | jq -r '.musig2_session.partial_sig_count // "?"' 2>/dev/null)
 
     # v2.5.6: musig_detail now carries its own status icon so the line
-    # renders consistently alongside the other ✅/ℹ️/⚠️  health lines
+    # renders consistently alongside the other ✅/🔵/⚠️  health lines
     # instead of floating with a bare three-space indent. Icon captures
     # session state — no need for the trailing ✓ or "($state)" suffix.
     # v2.11.1: nonces_complete and signing are normal phases of every
     # epoch, so they are ✅ too. During nonces_complete the nonce count is
     # roster-wide (the signer set is not chosen yet), so dividing it by the
     # 7-signer threshold printed "34/7". It prints as a raw count instead.
-    # Any other state is not judged and stays ℹ️.
+    # Any other state is not judged and stays 🔵.
     if [ "$musig_state" = "complete" ]; then
         musig_detail="✅ MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_state" = "nonces_complete" ]; then
@@ -2409,7 +2543,7 @@ check_quorum() {
     elif [ "$musig_state" = "signing" ]; then
         musig_detail="✅ MuSig2: epoch $musig_epoch, signing, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs"
     elif [ "$musig_epoch" != "?" ]; then
-        musig_detail="ℹ️  MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
+        musig_detail="🔵 MuSig2: epoch $musig_epoch, ${musig_nonces}/${consensus_required} nonces, ${musig_sigs}/${consensus_required} sigs — $musig_state"
     else
         musig_detail="⚠️  MuSig2: could not parse session"
     fi
@@ -2420,7 +2554,7 @@ check_quorum() {
 
     if [ $? -ne 0 ] || [ -z "$oracles" ]; then
         if [ "$DD_ACTIVE" = "false" ]; then
-            DETAILS+="ℹ️  Quorum: standby (DigiDollar deployment: $DD_STATUS)\n"
+            DETAILS+="🔵 Quorum: standby (DigiDollar deployment: $DD_STATUS)\n"
             return
         fi
         DETAILS+="⚠️  Quorum: could not query oracles\n"
@@ -2663,7 +2797,7 @@ send_summary() {
         --arg footer "$(build_footer)" \
         --arg ts "$timestamp" \
         '{embeds: [{title: $title, description: $desc, color: $color, footer: {text: $footer}, timestamp: $ts}]}')
-    curl -s -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK" > /dev/null 2>&1
+    discord_post "$payload"
 }
 
 # ============================================================================
@@ -2680,6 +2814,9 @@ send_summary() {
 check_digidollar_active() {
     local deploy_info
     deploy_info=$($CLI getdigidollardeploymentinfo 2>/dev/null)
+    # v2.11.2: kept for the DD economy line, which needs the MuSig2 round
+    # state and must read it BEFORE getdigidollarstats (see dd_epoch_wait).
+    DD_DEPLOY_INFO="$deploy_info"
 
     if [ -z "$deploy_info" ]; then
         DD_STATUS="unknown"
@@ -2777,6 +2914,8 @@ case "$ACTION_FLAG" in
         echo "Sending test email to $EMAIL_TO via ${SMTP_SERVER}:${SMTP_PORT}..."
         if send_email "🔧 Test Email" "Oracle monitor email alerts are configured and working."; then
             echo "✓ Test email sent — check your inbox (and spam folder)."
+            echo "  Sent means your SMTP server accepted it. If it lands in spam or never"
+            echo "  arrives, see: https://github.com/BaumerCrypto/digidollar-oracle-tools#email-lands-in-spam-or-never-arrives"
         else
             echo "✗ Send failed. Check SMTP settings in: $CONFIG_FILE"
             echo "  Common issues:"

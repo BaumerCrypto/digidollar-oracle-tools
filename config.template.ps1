@@ -61,6 +61,7 @@ $SMTP_SERVER   = "smtp.gmail.com"
 $SMTP_PORT     = 587
 $SMTP_USER     = "your-address@gmail.com"
 $SMTP_PASS     = "xxxxxxxxxxxxxxxx"
+# Mail in spam or missing? See README: "Email lands in spam or never arrives".
 $SMTP_FROM     = "Oracle Monitor <your-address@gmail.com>"
 
 # ---- Update Check (oracle-monitor.ps1 v2.6.0-win.1+) ----
@@ -338,8 +339,10 @@ $NETWORK_EMOJI = ""
 # 5-minute checks, and it never sends an alert card. Since v2.11.1-win.1 it
 # carries the node's own verdict when the daemon reports one
 # (health_status, minting_restricted_reason): ✅ healthy, ⚠️ and one card
-# warning otherwise. An older daemon without those fields gets the plain
-# ℹ️ line. Silently omitted if the RPC is unavailable, and it shows a
+# warning otherwise. Since v2.11.2-win.1 the routine wait at the start of
+# each oracle epoch reads 🔵 ("minting paused: waiting for this epoch's
+# signed oracle price") and counts no warning. An older daemon without
+# those fields gets the plain 🔵 line. Silently omitted if the RPC is unavailable, and it shows a
 # standby line before DigiDollar activates on your chain.
 # Set to "no" to skip the getdigidollarstats call entirely.
 $DD_ECONOMY_ENABLED = "yes"
@@ -348,14 +351,14 @@ $DD_ECONOMY_ENABLED = "yes"
 # Never disconnects, never bans. Reads getpeerinfo only.
 # Summary card (v2.11.1): two lines under Peers, for example
 #   ✅ Peers on v9.26.6+: 16 of 20 outbound, 13 of 19 inbound, plus 2 wallets
-#   ℹ️  Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
+#   🔵 Peer versions: v9.26.4 (1) · v9.26.5 (9) · v9.26.6 (3) · v9.26.7 (26)
 # The first line is a check: ✅ when enough outbound peers are on the
-# minimum, ⚠️ while the alert below is latched, and ℹ️ when nothing was
+# minimum, ⚠️ while the alert below is latched, and 🔵 when nothing was
 # judged ("alert off in config", no outbound peers yet, or below the
 # threshold but not yet confirmed). Outbound counts every outbound
 # connection the alert watches; inbound counts DigiByte nodes only, with
 # wallets and other clients listed after them. The second line is a list,
-# not a check, so it is always ℹ️: nodes in both directions, oldest to
+# not a check, so it is always 🔵: nodes in both directions, oldest to
 # newest, capped by $PEER_VERSION_MAX (below).
 # Tiers are relative to the minimum: current (at or above it, release
 # candidates counted by their base number), below minimum (v9.26.x under
